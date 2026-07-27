@@ -2,12 +2,36 @@
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
+## Quick Start
+
+Run multiple prompts with shared context:
+
+    promptgrinder run --shared-context "docs/tasks/02[A-E]-*.md"
+
+Run every prompt in a folder:
+
+    promptgrinder run-folder docs/tasks/
+
+Validate without executing:
+
+    promptgrinder validate docs/tasks/
+
+Inspect available commands:
+
+    promptgrinder --help
+
+Most users only need these four commands to get started.
+
+![PromptGrinder executing five sequential work orders successfully](docs/images/sequential-workflow.png)
+
+## Overview
+
 PromptGrinder is a local-first macOS CLI for engineers who use the Codex CLI.
 It validates Markdown work orders, runs them individually or in a defined
 sequence, carries context between sequential tasks, and records worker state,
 logs, and events for review.
 
-## Core capabilities
+### Core capabilities
 
 - **Ordered execution:** run numbered work orders in a predictable sequence.
 - **Shared context:** continue sequential tasks in one resumed Codex session.
@@ -17,8 +41,6 @@ logs, and events for review.
 - **Local-first operation:** keep PromptGrinder orchestration state on your machine.
 - **Codex integration:** execute through the locally installed Codex CLI.
 - **macOS terminals:** use Terminal.app, iTerm2, or headless execution.
-
-![PromptGrinder executing five sequential work orders successfully](docs/images/sequential-workflow.png)
 
 ## Installation
 
@@ -65,7 +87,7 @@ promptgrinder --version
 Homebrew, Linux, Windows, and automatic updates are not supported by this
 release candidate.
 
-## Quick start
+## Running prompts
 
 The tracked smoke work order reads repository documentation but does not edit
 files. Run it from a PromptGrinder checkout:
