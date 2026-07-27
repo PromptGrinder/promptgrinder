@@ -12,6 +12,7 @@ import (
 	"promptgrinder/internal/execution"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/terminal"
+	"promptgrinder/internal/testsupport"
 )
 
 func TestLaunchCreatesAndPersistsWorker(t *testing.T) {
@@ -26,7 +27,7 @@ func TestLaunchCreatesAndPersistsWorker(t *testing.T) {
 		Engine:      codex.Engine{},
 		EngineName:  "codex",
 		Executable:  "promptgrinder",
-		BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+		BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 		NewExecutor: testExecutorFactory(store, terminal.DryRunAdapter{}),
 	}
 
@@ -81,7 +82,7 @@ func TestLaunchPersistsLaunchFailure(t *testing.T) {
 		Engine:      codex.Engine{},
 		EngineName:  "codex",
 		Executable:  "promptgrinder",
-		BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+		BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 		NewExecutor: testExecutorFactory(store, terminal.StaticFailure{Err: errors.New("boom")}),
 	}
 
@@ -111,7 +112,7 @@ func TestLaunchEngineOverrideIsPersistedInResolvedMetadata(t *testing.T) {
 		EngineName:     "codex",
 		EngineOverride: "codex",
 		Executable:     "promptgrinder",
-		BaseConfig:     config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+		BaseConfig:     config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 		NewExecutor:    testExecutorFactory(store, terminal.DryRunAdapter{}),
 	}
 
@@ -152,7 +153,7 @@ func TestLaunchSandboxOverrideWinsOverPromptMetadata(t *testing.T) {
 		EngineName:      "codex",
 		SandboxOverride: "danger-full-access",
 		Executable:      "promptgrinder",
-		BaseConfig:      config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+		BaseConfig:      config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 		NewExecutor:     testExecutorFactory(store, terminal.DryRunAdapter{}),
 	}
 
@@ -187,7 +188,7 @@ func TestValidateRejectsInvalidSandboxOverrideBeforeLaunch(t *testing.T) {
 		EngineName:      "codex",
 		SandboxOverride: "unrestricted-ish",
 		Executable:      "promptgrinder",
-		BaseConfig:      config.Config{Engine: "codex"},
+		BaseConfig:      config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t)},
 	}
 
 	_, err := manager.Validate(task)
@@ -214,7 +215,7 @@ func TestLaunchPersistsResolvedV2CodexMetadata(t *testing.T) {
 		Engine:      codex.Engine{},
 		EngineName:  "codex",
 		Executable:  "promptgrinder",
-		BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+		BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 		NewExecutor: testExecutorFactory(store, terminal.DryRunAdapter{}),
 	}
 
@@ -251,7 +252,7 @@ func TestLaunchPersistsLegacyCodexMetadata(t *testing.T) {
 		Engine:      codex.Engine{},
 		EngineName:  "codex",
 		Executable:  "promptgrinder",
-		BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+		BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 		NewExecutor: testExecutorFactory(store, terminal.DryRunAdapter{}),
 	}
 
@@ -284,7 +285,7 @@ func TestLaunchPrefersV2CodexMetadataOverLegacy(t *testing.T) {
 		Engine:      codex.Engine{},
 		EngineName:  "codex",
 		Executable:  "promptgrinder",
-		BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+		BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 		NewExecutor: testExecutorFactory(store, terminal.DryRunAdapter{}),
 	}
 
@@ -379,7 +380,7 @@ func TestValidateBuildsPlanWithoutCreatingWorker(t *testing.T) {
 		Store:      store,
 		Engine:     codex.Engine{},
 		EngineName: "codex",
-		BaseConfig: config.Config{Engine: "codex"},
+		BaseConfig: config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t)},
 		NewExecutor: func(config.Config) (execution.Executor, error) {
 			t.Fatal("validate must not create an executor")
 			return execution.Executor{}, nil
@@ -437,7 +438,7 @@ func TestValidateRedactsSecrets(t *testing.T) {
 	manager := Manager{
 		Engine:     codex.Engine{},
 		EngineName: "codex",
-		BaseConfig: config.Config{Engine: "codex"},
+		BaseConfig: config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t)},
 	}
 
 	plan, err := manager.Validate(task)
@@ -497,6 +498,24 @@ func TestValidateRejectsMalformedEngineMetadata(t *testing.T) {
 	if plan.Valid || len(plan.Errors) != 1 || !strings.Contains(plan.Errors[0], "engine metadata must be a string or map") {
 		t.Fatalf("plan = %#v", plan)
 	}
+}
+
+func TestResolveCodexExecutableFailuresAreDeterministic(t *testing.T) {
+	t.Run("missing from PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		_, err := resolveExecutable("", "codex")
+		if err == nil || !strings.Contains(err.Error(), "Codex executable was not found on PATH") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("invalid configured path", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "missing-codex")
+		_, err := resolveExecutable(missing, "codex")
+		if err == nil || !strings.Contains(err.Error(), "configured engine.codex.executable") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }
 
 func testExecutorFactory(store state.Store, adapter terminal.TerminalAdapter) ExecutorFactory {

@@ -26,19 +26,6 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Provide non-runnable Codex stub
-        run: |
-          mkdir -p "$RUNNER_TEMP/promptgrinder-ci-bin"
-
-          cat > "$RUNNER_TEMP/promptgrinder-ci-bin/codex" <<'EOF'
-          #!/bin/sh
-          echo "error: CI Codex stub must not be executed" >&2
-          exit 99
-          EOF
-
-          chmod +x "$RUNNER_TEMP/promptgrinder-ci-bin/codex"
-          echo "$RUNNER_TEMP/promptgrinder-ci-bin" >> "$GITHUB_PATH"
-
       - name: Public documentation and examples
         run: |
           mkdir -p "$RUNNER_TEMP/promptgrinder-ci-bin"
@@ -68,9 +55,9 @@ jobs:
       - name: Module integrity
         run: go mod verify
       - name: Tests
-        run: go test ./...
+        run: go test -count=1 ./...
       - name: Race tests
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
       - name: Cross-build supported artifacts
         run: |
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/promptgrinder-arm64 ./cmd/promptgrinder

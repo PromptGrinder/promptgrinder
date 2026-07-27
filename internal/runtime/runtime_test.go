@@ -14,6 +14,7 @@ import (
 	"promptgrinder/internal/execution"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/terminal"
+	"promptgrinder/internal/testsupport"
 	"promptgrinder/internal/worker"
 )
 
@@ -32,7 +33,7 @@ func TestRunFolderCreatesMultipleWorkers(t *testing.T) {
 			Engine:      codex.Engine{},
 			EngineName:  "codex",
 			Executable:  "promptgrinder",
-			BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+			BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 			NewExecutor: runtimeTestExecutorFactory(store, terminal.DryRunAdapter{}),
 		},
 	}
@@ -58,7 +59,7 @@ func TestRunPathsPreflightRejectsMissingPathBeforeCreatingWorkers(t *testing.T) 
 	valid := filepath.Join(root, "a-task.md")
 	writeTask(t, root, "a-task.md")
 	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
-	service := runtimeTestService(store)
+	service := Service{Store: store}
 
 	_, err := service.RunPathsWithOptions([]string{valid, filepath.Join(root, "missing.md")}, RunOptions{})
 	if err == nil || !strings.Contains(err.Error(), "task path does not exist") {
@@ -74,7 +75,7 @@ func TestRunPathsDryRunRejectsEmptyPromptWithoutCreatingWorkers(t *testing.T) {
 	writeTask(t, root, "a-task.md")
 	writeFile(t, root, "b-empty.md", "   \n")
 	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
-	service := runtimeTestService(store)
+	service := runtimeTestService(t, store)
 
 	_, err := service.RunPathsWithOptions([]string{filepath.Join(root, "*.md")}, RunOptions{DryRun: true})
 	if err == nil || !strings.Contains(err.Error(), "task prompt is empty") {
@@ -90,7 +91,7 @@ func TestRunPathsDryRunValidatesAndOrdersSharedPrompts(t *testing.T) {
 	writeTask(t, root, "02B-task.md")
 	writeTask(t, root, "02A-task.md")
 	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
-	service := runtimeTestService(store)
+	service := runtimeTestService(t, store)
 
 	summary, err := service.RunPathsWithOptions([]string{filepath.Join(root, "02[AB]-*.md")}, RunOptions{DryRun: true, SharedContext: true})
 	if err != nil {
@@ -105,7 +106,7 @@ func TestRunPathsDryRunValidatesAndOrdersSharedPrompts(t *testing.T) {
 }
 
 func TestRunPathsRejectsPatternContainingNewline(t *testing.T) {
-	service := runtimeTestService(state.NewStore(filepath.Join(t.TempDir(), "home")))
+	service := Service{Store: state.NewStore(filepath.Join(t.TempDir(), "home"))}
 	_, err := service.RunPathsWithOptions([]string{"docs/02A-[2-\n  6]-*.md"}, RunOptions{DryRun: true})
 	if err == nil || !strings.Contains(err.Error(), "contains a newline") {
 		t.Fatalf("err = %v", err)
@@ -220,7 +221,7 @@ func TestRunFileEngineOverrideTakesPrecedence(t *testing.T) {
 			Store:       store,
 			Engine:      codex.Engine{},
 			Executable:  "promptgrinder",
-			BaseConfig:  config.Config{Engine: "other-default", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+			BaseConfig:  config.Config{Engine: "other-default", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 			NewExecutor: runtimeTestExecutorFactory(store, terminal.DryRunAdapter{}),
 		},
 	}
@@ -253,7 +254,7 @@ func TestRunFolderEngineOverrideTakesPrecedenceForEveryTask(t *testing.T) {
 			Store:       store,
 			Engine:      codex.Engine{},
 			Executable:  "promptgrinder",
-			BaseConfig:  config.Config{Engine: "other-default", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+			BaseConfig:  config.Config{Engine: "other-default", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 			NewExecutor: runtimeTestExecutorFactory(store, terminal.DryRunAdapter{}),
 		},
 	}
@@ -320,7 +321,7 @@ func TestRunPromptFolderEngineOverrideTakesPrecedence(t *testing.T) {
 			Store:       store,
 			Engine:      codex.Engine{},
 			Executable:  "promptgrinder",
-			BaseConfig:  config.Config{Engine: "other-default", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+			BaseConfig:  config.Config{Engine: "other-default", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 			NewExecutor: runtimeTestExecutorFactory(store, terminal.DryRunAdapter{}),
 		},
 	}
@@ -355,7 +356,7 @@ func TestRunPromptFolderUsesRepoPathForWorkerRepository(t *testing.T) {
 			Store:       store,
 			Engine:      codex.Engine{},
 			Executable:  "promptgrinder",
-			BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+			BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 			NewExecutor: runtimeTestExecutorFactory(store, terminal.DryRunAdapter{}),
 		},
 	}
@@ -392,7 +393,7 @@ func TestRunFolderContinuesAfterLaunchFailure(t *testing.T) {
 			Engine:      codex.Engine{},
 			EngineName:  "codex",
 			Executable:  "promptgrinder",
-			BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+			BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 			NewExecutor: runtimeTestExecutorFactory(store, &failFirstTerminal{}),
 		},
 	}
@@ -771,7 +772,8 @@ func runtimeTestExecutorFactory(store state.Store, adapter terminal.TerminalAdap
 	}
 }
 
-func runtimeTestService(store state.Store) Service {
+func runtimeTestService(t *testing.T, store state.Store) Service {
+	t.Helper()
 	return Service{
 		Store: store,
 		Worker: worker.Manager{
@@ -779,7 +781,7 @@ func runtimeTestService(store state.Store) Service {
 			Engine:      codex.Engine{},
 			EngineName:  "codex",
 			Executable:  "promptgrinder",
-			BaseConfig:  config.Config{Engine: "codex", TerminalAdapter: "terminal", TerminalMode: "dry-run"},
+			BaseConfig:  config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"},
 			NewExecutor: runtimeTestExecutorFactory(store, terminal.DryRunAdapter{}),
 		},
 	}
