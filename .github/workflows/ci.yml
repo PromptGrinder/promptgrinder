@@ -25,6 +25,20 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
+
+      - name: Provide non-runnable Codex stub
+        run: |
+          mkdir -p "$RUNNER_TEMP/promptgrinder-ci-bin"
+
+          cat > "$RUNNER_TEMP/promptgrinder-ci-bin/codex" <<'EOF'
+          #!/bin/sh
+          echo "error: CI Codex stub must not be executed" >&2
+          exit 99
+          EOF
+
+          chmod +x "$RUNNER_TEMP/promptgrinder-ci-bin/codex"
+          echo "$RUNNER_TEMP/promptgrinder-ci-bin" >> "$GITHUB_PATH"
+
       - name: Public documentation and examples
         run: |
           test ! -e docs/features
