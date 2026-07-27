@@ -41,6 +41,18 @@ jobs:
 
       - name: Public documentation and examples
         run: |
+          mkdir -p "$RUNNER_TEMP/promptgrinder-ci-bin"
+
+          cat > "$RUNNER_TEMP/promptgrinder-ci-bin/codex" <<'EOF'
+          #!/bin/sh
+          echo "error: CI Codex stub must not be executed" >&2
+          exit 99
+          EOF
+
+          chmod +x "$RUNNER_TEMP/promptgrinder-ci-bin/codex"
+          export PATH="$RUNNER_TEMP/promptgrinder-ci-bin:$PATH"
+
+          test -x "$(command -v codex)"
           test ! -e docs/features
           test -s README.md
           test -s AUTHORS.md
