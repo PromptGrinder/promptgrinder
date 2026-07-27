@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use PromptGrinder in published work, please cite it using this metadata."
+title: "PromptGrinder"
+type: software
+authors:
+  - family-names: "Nyberg"
+    given-names: "Andreas"
+abstract: "A local macOS Markdown task runner for Codex with observable workers and durable execution state."
+repository-code: "https://github.com/PromptGrinder/promptgrinder"
+url: "https://github.com/PromptGrinder/promptgrinder"
+license: "MIT"
+keywords:
+  - "Codex"
+  - "AI agents"
+  - "task runner"
+  - "developer tools"

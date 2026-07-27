@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose an improvement to a supported PromptGrinder workflow
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: "Describe the user problem and desired result. Do not include secrets, credentials, or private prompts."
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem or limitation are you encountering?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What result would solve the problem?
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow
+      description: Show the commands and task flow you would expect to use.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or alternatives have you tried?
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility considerations
+      description: Note any effect on commands, JSON, configuration, task files, state, macOS, Codex, or terminal adapters.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add any other redacted details that would help evaluate the request.

@@ -1,0 +1,40 @@
+# Build and release output.
+/promptgrinder
+/dist/
+/build/
+/bin/
+/tmp/
+/temp/
+*.tmp
+*.test
+*.out
+coverage.out
+coverage.html
+*.prof
+checksums.txt
+*.dmg
+
+# PromptGrinder-generated state, wherever a fixture repository is used.
+/.promptgrinder/
+**/.promptgrinder/
+
+# Private/local prompt material. Public examples and test fixtures are tracked.
+/prompts/
+/private-prompts/
+/local-tasks/
+
+# Local configuration and secrets.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local.yaml
+
+# Editors and operating-system state.
+.DS_Store
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*.xcf
+*~

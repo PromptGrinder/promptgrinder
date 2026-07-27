@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible PromptGrinder defect
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not report vulnerabilities or paste credentials/private prompts. Use private vulnerability reporting for security issues."
+  - type: input
+    id: version
+    attributes:
+      label: PromptGrinder version
+      placeholder: "promptgrinder v1.0.0-rc.1 (revision)"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: macOS version, architecture, terminal adapter, and Codex version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Exact redacted commands and minimal task; do not include secrets
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Relevant doctor, status, logs, or events output after reviewing it for sensitive data
