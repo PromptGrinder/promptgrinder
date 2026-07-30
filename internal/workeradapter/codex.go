@@ -16,6 +16,10 @@ type Codex struct {
 	Manager worker.Manager
 }
 
+func (Codex) Capabilities() workerlaunch.Capabilities {
+	return workerlaunch.Capabilities{SessionResume: false}
+}
+
 func (c Codex) Preflight(_ context.Context, request workerlaunch.LaunchRequest) error {
 	if request.Runtime.Name != "codex" {
 		return fmt.Errorf("Codex adapter cannot launch runtime %q", request.Runtime.Name)

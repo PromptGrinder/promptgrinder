@@ -20,6 +20,22 @@ type Launcher interface {
 	Launch(context.Context, LaunchRequest) (LaunchResult, error)
 }
 
+// Capabilities are explicitly advertised by an adapter. A missing capability
+// must never be inferred from the presence of a runtime session identifier.
+type Capabilities struct {
+	SessionResume bool `json:"session_resume"`
+}
+
+type CapabilityProvider interface {
+	Capabilities() Capabilities
+}
+
+// Resumer continues a runtime-owned session. Core orchestration calls it only
+// when CapabilityProvider explicitly advertises SessionResume.
+type Resumer interface {
+	Resume(context.Context, LaunchRequest, string) (LaunchResult, error)
+}
+
 // Preflighter validates a launch without creating records or processes.
 type Preflighter interface {
 	Preflight(context.Context, LaunchRequest) error

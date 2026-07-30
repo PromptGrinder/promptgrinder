@@ -4,6 +4,7 @@ package workerstart
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/taskstore"
@@ -138,6 +139,25 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 		return Result{}, err
 	}
 	launch, launchErr := launcher.Launch(ctx, request)
+	disposition := "executing"
+	if launchErr != nil {
+		disposition = "launch_failed"
+	}
+	_, attemptErr := taskstore.New(s.Home).UpdateControl(task.ProjectID, task.ID, func(current *workerdomain.Task) error {
+		if launchErr != nil {
+			current.Status = workerdomain.TaskStatusFailed
+		}
+		current.AttemptCount++
+		current.Attempts = append(current.Attempts, workerdomain.TaskAttempt{
+			Number: len(current.Attempts) + 1, RunID: launch.RunID, Runtime: request.Runtime.Name,
+			SessionID: launch.Session.ID, ProcessID: launch.Process.PID, StartedAt: attemptStarted(launch),
+			FinishedAt: launch.Process.FinishedAt, Disposition: disposition,
+		})
+		return nil
+	})
+	if attemptErr != nil {
+		return Result{Request: request, Launch: launch, State: workerState}, fmt.Errorf("persist attempt evidence: %w", attemptErr)
+	}
 	workerState.ActiveRunID = launch.RunID
 	if launch.Session.ID != "" {
 		workerState.RuntimeSession = &workerdomain.SessionRef{Runtime: request.Runtime.Name, SessionID: launch.Session.ID}
@@ -202,4 +222,11 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 		}
 	}
 	return Result{Request: request, Launch: launch, State: executing}, nil
+}
+
+func attemptStarted(launch workerlaunch.LaunchResult) time.Time {
+	if launch.Process.StartedAt != nil {
+		return launch.Process.StartedAt.UTC()
+	}
+	return time.Now().UTC()
 }

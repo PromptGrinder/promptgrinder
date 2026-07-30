@@ -67,6 +67,7 @@ const (
 	LifecycleIdle           Lifecycle = "idle"
 	LifecycleStarting       Lifecycle = "starting"
 	LifecycleExecuting      Lifecycle = "executing"
+	LifecyclePaused         Lifecycle = "paused"
 	LifecycleBlocked        Lifecycle = "blocked"
 	LifecycleAwaitingReview Lifecycle = "awaiting_review"
 	LifecycleFailed         Lifecycle = "failed"
@@ -105,22 +106,47 @@ type SessionRef struct {
 // Task is the versioned locally persisted assigned-task identity. Task
 // lifecycle and snapshots are introduced by the task-assignment slice.
 type Task struct {
-	Version         int        `json:"version" yaml:"version"`
-	ID              string     `json:"id" yaml:"id"`
-	ProjectID       string     `json:"project_id" yaml:"project_id"`
-	WorkerID        string     `json:"worker_id" yaml:"worker_id"`
-	Instructions    string     `json:"instructions" yaml:"instructions"`
-	ContentSnapshot string     `json:"content_snapshot" yaml:"content_snapshot"`
-	SourceReference string     `json:"source_reference" yaml:"source_reference"`
-	Status          TaskStatus `json:"status" yaml:"status"`
-	AttemptCount    int        `json:"attempt_count" yaml:"attempt_count"`
-	CreatedAt       time.Time  `json:"created_at" yaml:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at" yaml:"updated_at"`
-	Worktree        string     `json:"worktree,omitempty" yaml:"worktree,omitempty"`
-	Branch          string     `json:"branch,omitempty" yaml:"branch,omitempty"`
-	BaseBranch      string     `json:"base_branch,omitempty" yaml:"base_branch,omitempty"`
-	BaseRevision    string     `json:"base_revision,omitempty" yaml:"base_revision,omitempty"`
-	LaunchSetup     string     `json:"launch_setup,omitempty" yaml:"launch_setup,omitempty"`
+	Version         int              `json:"version" yaml:"version"`
+	ID              string           `json:"id" yaml:"id"`
+	ProjectID       string           `json:"project_id" yaml:"project_id"`
+	WorkerID        string           `json:"worker_id" yaml:"worker_id"`
+	Instructions    string           `json:"instructions" yaml:"instructions"`
+	ContentSnapshot string           `json:"content_snapshot" yaml:"content_snapshot"`
+	SourceReference string           `json:"source_reference" yaml:"source_reference"`
+	Status          TaskStatus       `json:"status" yaml:"status"`
+	AttemptCount    int              `json:"attempt_count" yaml:"attempt_count"`
+	CreatedAt       time.Time        `json:"created_at" yaml:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at" yaml:"updated_at"`
+	Worktree        string           `json:"worktree,omitempty" yaml:"worktree,omitempty"`
+	Branch          string           `json:"branch,omitempty" yaml:"branch,omitempty"`
+	BaseBranch      string           `json:"base_branch,omitempty" yaml:"base_branch,omitempty"`
+	BaseRevision    string           `json:"base_revision,omitempty" yaml:"base_revision,omitempty"`
+	LaunchSetup     string           `json:"launch_setup,omitempty" yaml:"launch_setup,omitempty"`
+	Attempts        []TaskAttempt    `json:"attempts,omitempty" yaml:"attempts,omitempty"`
+	ControlRequests []ControlRequest `json:"control_requests,omitempty" yaml:"control_requests,omitempty"`
+}
+
+// TaskAttempt is immutable evidence for one runtime invocation. Later attempts
+// append records; they never replace earlier logs, sessions, or process facts.
+type TaskAttempt struct {
+	Number      int        `json:"number" yaml:"number"`
+	RunID       string     `json:"run_id,omitempty" yaml:"run_id,omitempty"`
+	Runtime     string     `json:"runtime" yaml:"runtime"`
+	SessionID   string     `json:"session_id,omitempty" yaml:"session_id,omitempty"`
+	ProcessID   int        `json:"process_id,omitempty" yaml:"process_id,omitempty"`
+	StartedAt   time.Time  `json:"started_at" yaml:"started_at"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty" yaml:"finished_at,omitempty"`
+	Disposition string     `json:"disposition" yaml:"disposition"`
+	Resumed     bool       `json:"resumed,omitempty" yaml:"resumed,omitempty"`
+}
+
+// ControlRequest is an append-only audit record for a user control operation.
+type ControlRequest struct {
+	ID          string    `json:"id" yaml:"id"`
+	Operation   string    `json:"operation" yaml:"operation"`
+	RequestedAt time.Time `json:"requested_at" yaml:"requested_at"`
+	CompletedAt time.Time `json:"completed_at,omitempty" yaml:"completed_at,omitempty"`
+	Result      string    `json:"result" yaml:"result"`
 }
 
 type TaskStatus string
@@ -128,10 +154,13 @@ type TaskStatus string
 const (
 	TaskStatusPending  TaskStatus = "pending"
 	TaskStatusAssigned TaskStatus = "assigned"
+	TaskStatusPaused   TaskStatus = "paused"
+	TaskStatusFailed   TaskStatus = "failed"
+	TaskStatusCanceled TaskStatus = "canceled"
 )
 
 func (s TaskStatus) Valid() bool {
-	return s == TaskStatusPending || s == TaskStatusAssigned
+	return s == TaskStatusPending || s == TaskStatusAssigned || s == TaskStatusPaused || s == TaskStatusFailed || s == TaskStatusCanceled
 }
 
 func ValidateSlug(kind, value string) error {
@@ -311,6 +340,11 @@ func (t Task) Validate() error {
 	}
 	if t.CreatedAt.IsZero() || t.UpdatedAt.IsZero() {
 		return fmt.Errorf("task timestamps are required")
+	}
+	for i, attempt := range t.Attempts {
+		if attempt.Number != i+1 || attempt.StartedAt.IsZero() || attempt.Runtime == "" || attempt.Disposition == "" {
+			return fmt.Errorf("task attempt %d is invalid", i+1)
+		}
 	}
 	return nil
 }

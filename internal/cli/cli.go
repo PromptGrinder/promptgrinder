@@ -27,6 +27,7 @@ import (
 	"promptgrinder/internal/ui"
 	"promptgrinder/internal/worker"
 	"promptgrinder/internal/workeradapter"
+	"promptgrinder/internal/workercontrol"
 	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerlaunch"
 	"promptgrinder/internal/workerregistry"
@@ -911,6 +912,8 @@ Examples:
 	var workerStartRuntime string
 	var workerStatusJSON bool
 	var workerResetJSON bool
+	var workerControlJSON bool
+	var workerPauseTimeout time.Duration
 	workerCmd := &cobra.Command{
 		Use:   "worker",
 		Short: "Inspect project-owned named worker definitions.",
@@ -1084,7 +1087,62 @@ Examples:
 		},
 	}
 	workerResetCmd.Flags().BoolVar(&workerResetJSON, "json", false, "print machine-readable JSON")
-	workerCmd.AddCommand(workerListCmd, workerShowCmd, workerStartCmd, workerStatusCmd, workerResetCmd)
+	workerPauseCmd := &cobra.Command{
+		Use: "pause <worker-id>", Short: "Gracefully stop and pause a running named worker.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir, Timeout: workerPauseTimeout}).Pause(cmd.Context(), state)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			if workerControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Worker %s paused (forced: %t, idempotent: %t).\n", registry.Project.ID+"/"+definition.ID, result.Forced, result.Idempotent)
+			return nil
+		},
+	}
+	workerPauseCmd.Flags().DurationVar(&workerPauseTimeout, "timeout", 10*time.Second, "graceful stop timeout before forced termination")
+	workerPauseCmd.Flags().BoolVar(&workerControlJSON, "json", false, "print machine-readable JSON")
+	workerResumeCmd := &cobra.Command{
+		Use: "resume <worker-id>", Short: "Resume a paused named worker.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			runtimeService := pgruntime.NewService(cfg)
+			launchers := map[string]workerlaunch.Launcher{"codex": workeradapter.Codex{Manager: runtimeService.Worker}}
+			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: launchers}
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir, Launchers: launchers, StartNew: func(ctx context.Context, id string) error {
+				_, startErr := starter.Start(ctx, ".", id, "")
+				return startErr
+			}}).Resume(cmd.Context(), state)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			if workerControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Worker %s resumed (session: %t, idempotent: %t).\n", definition.ID, result.Resumed, result.Idempotent)
+			return nil
+		},
+	}
+	workerResumeCmd.Flags().BoolVar(&workerControlJSON, "json", false, "print machine-readable JSON")
+	workerCmd.AddCommand(workerListCmd, workerShowCmd, workerStartCmd, workerStatusCmd, workerResetCmd, workerPauseCmd, workerResumeCmd)
 	root.AddCommand(workerCmd)
 
 	var taskAssignJSON bool
@@ -1092,6 +1150,7 @@ Examples:
 	var taskListWorker string
 	var taskShowJSON bool
 	var taskQueueJSON bool
+	var taskControlJSON bool
 	taskCmd := &cobra.Command{Use: "task", Short: "Assign and inspect project-owned tasks."}
 	taskAssignCmd := &cobra.Command{
 		Use:   "assign <worker-id> <task.md>",
@@ -1270,7 +1329,77 @@ Examples:
 	queueReorderCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
 	queueRemoveCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
 	queueCmd.AddCommand(queueListCmd, queueReorderCmd, queueRemoveCmd)
-	taskCmd.AddCommand(taskAssignCmd, taskEnqueueCmd, taskListCmd, taskShowCmd, queueCmd)
+	taskRetryCmd := &cobra.Command{
+		Use: "retry <task-id>", Short: "Start a new attempt without replacing prior evidence.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			task, err := taskstore.New(cfg.HomeDir).Load(registry.Project.ID, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			definition, err := registry.Get(task.WorkerID)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			runtimeService := pgruntime.NewService(cfg)
+			launchers := map[string]workerlaunch.Launcher{"codex": workeradapter.Codex{Manager: runtimeService.Worker}}
+			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: launchers}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir, StartNew: func(ctx context.Context, id string) error {
+				_, startErr := starter.Start(ctx, registry.Root, id, "")
+				return startErr
+			}}).Retry(cmd.Context(), state, task)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			if taskControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Retry requested for task %s; prior attempts retained.\n", task.ID)
+			return nil
+		},
+	}
+	taskCancelCmd := &cobra.Command{
+		Use: "cancel <task-id>", Short: "Cancel active or queued work without deleting evidence.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			task, err := taskstore.New(cfg.HomeDir).Load(registry.Project.ID, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			definition, err := registry.Get(task.WorkerID)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir}).Cancel(cmd.Context(), state, task)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			if taskControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Task %s canceled (idempotent: %t); evidence retained.\n", task.ID, result.Idempotent)
+			return nil
+		},
+	}
+	taskRetryCmd.Flags().BoolVar(&taskControlJSON, "json", false, "print machine-readable JSON")
+	taskCancelCmd.Flags().BoolVar(&taskControlJSON, "json", false, "print machine-readable JSON")
+	taskCmd.AddCommand(taskAssignCmd, taskEnqueueCmd, taskListCmd, taskShowCmd, taskRetryCmd, taskCancelCmd, queueCmd)
 	root.AddCommand(taskCmd)
 
 	var schedulerOnce bool

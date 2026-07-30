@@ -123,8 +123,31 @@ func (s *Store) SetStatus(projectID, taskID string, status workerdomain.TaskStat
 		return workerdomain.Task{}, fmt.Errorf("task %q is not pending", taskID)
 	}
 	task.Status = status
-	task.AttemptCount++
 	task.UpdatedAt = s.now().UTC()
+	if err := s.writeAtomic(task); err != nil {
+		return workerdomain.Task{}, err
+	}
+	return task, nil
+}
+
+// UpdateControl atomically persists Slice 9 task control metadata.
+func (s *Store) UpdateControl(projectID, taskID string, mutate func(*workerdomain.Task) error) (workerdomain.Task, error) {
+	unlock, err := s.lock(projectID, "task-"+taskID)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	defer unlock()
+	task, err := s.Load(projectID, taskID)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	if err := mutate(&task); err != nil {
+		return workerdomain.Task{}, err
+	}
+	task.UpdatedAt = s.now().UTC()
+	if err := task.Validate(); err != nil {
+		return workerdomain.Task{}, err
+	}
 	if err := s.writeAtomic(task); err != nil {
 		return workerdomain.Task{}, err
 	}

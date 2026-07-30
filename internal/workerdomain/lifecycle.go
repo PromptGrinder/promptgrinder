@@ -12,12 +12,17 @@ var lifecycleTransitions = map[Lifecycle]map[Lifecycle]struct{}{
 	},
 	LifecycleExecuting: {
 		LifecycleIdle:           {},
+		LifecyclePaused:         {},
 		LifecycleBlocked:        {},
 		LifecycleAwaitingReview: {},
 		LifecycleFailed:         {},
 	},
 	LifecycleBlocked: {
 		LifecycleExecuting: {},
+	},
+	LifecyclePaused: {
+		LifecycleStarting: {},
+		LifecycleIdle:     {},
 	},
 	LifecycleAwaitingReview: {
 		LifecycleIdle: {},
