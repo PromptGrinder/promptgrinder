@@ -20,7 +20,9 @@ import (
 	"promptgrinder/internal/firstuse"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
+	pgscheduler "promptgrinder/internal/scheduler"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/taskqueue"
 	"promptgrinder/internal/taskstore"
 	"promptgrinder/internal/ui"
 	"promptgrinder/internal/worker"
@@ -1089,6 +1091,7 @@ Examples:
 	var taskListJSON bool
 	var taskListWorker string
 	var taskShowJSON bool
+	var taskQueueJSON bool
 	taskCmd := &cobra.Command{Use: "task", Short: "Assign and inspect project-owned tasks."}
 	taskAssignCmd := &cobra.Command{
 		Use:   "assign <worker-id> <task.md>",
@@ -1114,6 +1117,27 @@ Examples:
 		},
 	}
 	taskAssignCmd.Flags().BoolVar(&taskAssignJSON, "json", false, "print machine-readable JSON")
+	taskEnqueueCmd := &cobra.Command{
+		Use:   "enqueue <worker-id> <task.md>",
+		Short: "Append an immutable task snapshot to a worker FIFO.",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			task, err := taskstore.New(service.Defaults().Config.HomeDir).Enqueue(registry.Root, definition, args[1])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, taskJSONOutput{Project: registry.Project, Task: task}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Enqueued task %s for worker %s.\n", task.ID, task.WorkerID)
+			return nil
+		},
+	}
+	taskEnqueueCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
 	taskListCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List tasks owned by the current project.",
@@ -1172,8 +1196,128 @@ Examples:
 		},
 	}
 	taskShowCmd.Flags().BoolVar(&taskShowJSON, "json", false, "print machine-readable JSON")
-	taskCmd.AddCommand(taskAssignCmd, taskListCmd, taskShowCmd)
+	queueCmd := &cobra.Command{Use: "queue", Short: "Inspect and edit pending worker task queues."}
+	queueListCmd := &cobra.Command{
+		Use: "list <worker-id>", Args: cobra.ExactArgs(1), Short: "List a worker queue in FIFO order.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			queue, err := taskqueue.New(service.Defaults().Config.HomeDir).List(registry.Project.ID, definition.ID)
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, queue, compactJSON)
+			}
+			if len(queue.Entries) == 0 {
+				fmt.Fprintln(stdout, "Queue is empty.")
+				return nil
+			}
+			fmt.Fprintln(stdout, "POSITION\tTASK ID\tENQUEUED AT\tLEASE")
+			for i, entry := range queue.Entries {
+				lease := "-"
+				if entry.Lease != nil {
+					lease = entry.Lease.ExpiresAt.Format(time.RFC3339)
+				}
+				fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\n", i+1, entry.TaskID, entry.EnqueuedAt.Format(time.RFC3339), lease)
+			}
+			return nil
+		},
+	}
+	queueReorderCmd := &cobra.Command{
+		Use: "reorder <worker-id> <task-id> <position>", Args: cobra.ExactArgs(3), Short: "Move a pending task to a one-based queue position.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			position, err := strconv.Atoi(args[2])
+			if err != nil || position < 1 {
+				return taskCommandError(stdout, fmt.Errorf("position must be a positive integer"), taskQueueJSON, compactJSON)
+			}
+			queue, err := taskqueue.New(service.Defaults().Config.HomeDir).Reorder(registry.Project.ID, definition.ID, args[1], position-1)
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, queue, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Moved task %s to position %d.\n", args[1], position)
+			return nil
+		},
+	}
+	queueRemoveCmd := &cobra.Command{
+		Use: "remove <worker-id> <task-id>", Args: cobra.ExactArgs(2), Short: "Remove a pending task from a worker queue.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			queue, err := taskqueue.New(service.Defaults().Config.HomeDir).Remove(registry.Project.ID, definition.ID, args[1])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, queue, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Removed pending task %s from worker %s.\n", args[1], definition.ID)
+			return nil
+		},
+	}
+	queueListCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
+	queueReorderCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
+	queueRemoveCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
+	queueCmd.AddCommand(queueListCmd, queueReorderCmd, queueRemoveCmd)
+	taskCmd.AddCommand(taskAssignCmd, taskEnqueueCmd, taskListCmd, taskShowCmd, queueCmd)
 	root.AddCommand(taskCmd)
+
+	var schedulerOnce bool
+	var schedulerInterval time.Duration
+	schedulerCmd := &cobra.Command{Use: "scheduler", Short: "Dispatch eligible idle named workers."}
+	schedulerRunCmd := &cobra.Command{
+		Use: "run", Args: cobra.NoArgs, Short: "Run the local FIFO scheduler.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return err
+			}
+			cfg := service.Defaults().Config
+			runtimeService := pgruntime.NewService(cfg)
+			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: map[string]workerlaunch.Launcher{
+				"codex": workeradapter.Codex{Manager: runtimeService.Worker},
+			}}
+			schedulerService := pgscheduler.Service{
+				Home: cfg.HomeDir, Config: cfg,
+				Dispatch: func(ctx context.Context, dispatch pgscheduler.Dispatch) error {
+					_, err := starter.Start(ctx, registry.Root, dispatch.Worker.ID, "")
+					return err
+				},
+			}
+			for {
+				dispatched, err := schedulerService.RunOnce(cmd.Context(), registry)
+				if err != nil {
+					return err
+				}
+				if dispatched != nil {
+					fmt.Fprintf(stdout, "Dispatched task %s to worker %s.\n", dispatched.Task.ID, dispatched.Worker.ID)
+				}
+				if schedulerOnce {
+					return nil
+				}
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(schedulerInterval):
+				}
+			}
+		},
+	}
+	schedulerRunCmd.Flags().BoolVar(&schedulerOnce, "once", false, "perform one scheduling decision and exit")
+	schedulerRunCmd.Flags().DurationVar(&schedulerInterval, "interval", time.Second, "poll interval")
+	schedulerCmd.AddCommand(schedulerRunCmd)
+	root.AddCommand(schedulerCmd)
 
 	var eventTail int
 	var eventType string

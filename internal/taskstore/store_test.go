@@ -70,7 +70,7 @@ func TestAssignmentSnapshotsMarkdownAndUpdatesWorkerState(t *testing.T) {
 	}
 }
 
-func TestDuplicateAssignmentAndMissingSourceLeaveAssignmentUnchanged(t *testing.T) {
+func TestAdditionalAssignmentQueuesAndMissingSourceLeavesAssignmentUnchanged(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.WriteFile(filepath.Join(root, "one.md"), []byte("one"), 0o644); err != nil {
@@ -89,8 +89,12 @@ func TestDuplicateAssignmentAndMissingSourceLeaveAssignmentUnchanged(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Assign(root, def, "two.md"); !errors.Is(err, ErrActiveAssignment) {
-		t.Fatalf("duplicate assignment error = %v", err)
+	second, err := store.Assign(root, def, "two.md")
+	if err != nil {
+		t.Fatalf("additional assignment: %v", err)
+	}
+	if second.Status != workerdomain.TaskStatusPending {
+		t.Fatalf("additional task status = %q, want pending", second.Status)
 	}
 	if _, err := store.Assign(root, definition("example", "frontend"), "missing.md"); err == nil {
 		t.Fatal("missing source assignment succeeded")
@@ -100,10 +104,10 @@ func TestDuplicateAssignmentAndMissingSourceLeaveAssignmentUnchanged(t *testing.
 		t.Fatal(err)
 	}
 	if after.Revision != before.Revision || after.ActiveTaskID != first.ID {
-		t.Fatalf("state changed on rejected assignment: before=%#v after=%#v", before, after)
+		t.Fatalf("active assignment changed: before=%#v after=%#v", before, after)
 	}
-	if _, err := os.Stat(store.Path("example", "two")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rejected task snapshot exists: %v", err)
+	if _, err := os.Stat(store.Path("example", "two")); err != nil {
+		t.Fatalf("queued task snapshot missing: %v", err)
 	}
 }
 

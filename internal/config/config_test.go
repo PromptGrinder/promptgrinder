@@ -46,6 +46,24 @@ func TestLoadRepositoryOverride(t *testing.T) {
 	}
 }
 
+func TestLoadSchedulerConcurrencyLimits(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := "scheduler:\n  project_concurrency: 3\n  lease_ttl: 45s\n  runtime_concurrency:\n    codex: 2\n"
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "config.yaml"), []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithHome(repo, filepath.Join(t.TempDir(), "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SchedulerProjectConcurrency != 3 || cfg.SchedulerRuntimeConcurrency["codex"] != 2 || cfg.SchedulerLeaseTTL != 45*time.Second {
+		t.Fatalf("scheduler config = %#v", cfg)
+	}
+}
+
 func TestLoadKeepsRuntimeConfigurationNamespacedAndOpaque(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {

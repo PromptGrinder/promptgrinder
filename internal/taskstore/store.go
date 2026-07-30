@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"promptgrinder/internal/markdown"
+	"promptgrinder/internal/taskqueue"
 	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerstate"
 )
@@ -41,6 +42,15 @@ func (s *Store) Path(projectID, taskID string) string {
 }
 
 func (s *Store) Assign(root string, definition workerdomain.WorkerDefinition, source string) (workerdomain.Task, error) {
+	return s.enqueue(root, definition, source, true)
+}
+
+// Enqueue always appends a task to the worker's pending FIFO.
+func (s *Store) Enqueue(root string, definition workerdomain.WorkerDefinition, source string) (workerdomain.Task, error) {
+	return s.enqueue(root, definition, source, false)
+}
+
+func (s *Store) enqueue(root string, definition workerdomain.WorkerDefinition, source string, assignIfIdle bool) (workerdomain.Task, error) {
 	if err := definition.Validate(); err != nil {
 		return workerdomain.Task{}, fmt.Errorf("invalid worker definition: %w", err)
 	}
@@ -59,7 +69,7 @@ func (s *Store) Assign(root string, definition workerdomain.WorkerDefinition, so
 		ProjectID: definition.ProjectID, WorkerID: definition.ID,
 		Instructions: parsed.Body, ContentSnapshot: content,
 		SourceReference: filepath.ToSlash(sourceReference),
-		Status:          workerdomain.TaskStatusAssigned, CreatedAt: now, UpdatedAt: now,
+		Status:          workerdomain.TaskStatusPending, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := task.Validate(); err != nil {
 		return workerdomain.Task{}, err
@@ -77,11 +87,18 @@ func (s *Store) Assign(root string, definition workerdomain.WorkerDefinition, so
 	if state.ProjectID != task.ProjectID || state.WorkerID != task.WorkerID {
 		return workerdomain.Task{}, fmt.Errorf("task project/worker identity does not match worker state")
 	}
-	if state.ActiveTaskID != "" {
-		return workerdomain.Task{}, fmt.Errorf("%w: worker %q has task %q", ErrActiveAssignment, definition.ID, state.ActiveTaskID)
+	if assignIfIdle && state.ActiveTaskID == "" {
+		task.Status = workerdomain.TaskStatusAssigned
 	}
 	if err := s.create(task); err != nil {
 		return workerdomain.Task{}, err
+	}
+	if task.Status == workerdomain.TaskStatusPending {
+		if _, err := taskqueue.New(s.home).Enqueue(task.ProjectID, task.WorkerID, task.ID); err != nil {
+			_ = os.Remove(s.Path(task.ProjectID, task.ID))
+			return workerdomain.Task{}, fmt.Errorf("enqueue task: %w", err)
+		}
+		return task, nil
 	}
 	state.ActiveTaskID = task.ID
 	if _, err := s.workerState.Save(state, state.Revision); err != nil {
@@ -89,6 +106,27 @@ func (s *Store) Assign(root string, definition workerdomain.WorkerDefinition, so
 			return workerdomain.Task{}, fmt.Errorf("update worker assignment: %v; rollback task snapshot: %w", err, removeErr)
 		}
 		return workerdomain.Task{}, fmt.Errorf("update worker assignment: %w", err)
+	}
+	return task, nil
+}
+
+// SetStatus atomically updates only scheduler-owned task dispatch metadata.
+func (s *Store) SetStatus(projectID, taskID string, status workerdomain.TaskStatus) (workerdomain.Task, error) {
+	task, err := s.Load(projectID, taskID)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	if status != workerdomain.TaskStatusAssigned {
+		return workerdomain.Task{}, fmt.Errorf("unsupported scheduler task status %q", status)
+	}
+	if task.Status != workerdomain.TaskStatusPending {
+		return workerdomain.Task{}, fmt.Errorf("task %q is not pending", taskID)
+	}
+	task.Status = status
+	task.AttemptCount++
+	task.UpdatedAt = s.now().UTC()
+	if err := s.writeAtomic(task); err != nil {
+		return workerdomain.Task{}, err
 	}
 	return task, nil
 }

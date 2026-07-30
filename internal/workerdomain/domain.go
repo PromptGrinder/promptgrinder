@@ -125,9 +125,14 @@ type Task struct {
 
 type TaskStatus string
 
-const TaskStatusAssigned TaskStatus = "assigned"
+const (
+	TaskStatusPending  TaskStatus = "pending"
+	TaskStatusAssigned TaskStatus = "assigned"
+)
 
-func (s TaskStatus) Valid() bool { return s == TaskStatusAssigned }
+func (s TaskStatus) Valid() bool {
+	return s == TaskStatusPending || s == TaskStatusAssigned
+}
 
 func ValidateSlug(kind, value string) error {
 	if len(value) > 63 || !slugPattern.MatchString(value) {

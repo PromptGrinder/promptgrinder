@@ -72,7 +72,7 @@ func TestV1PublicRootCommandContract(t *testing.T) {
 	sort.Strings(got)
 	want := []string{
 		"cancel", "complete", "defaults", "doctor", "engines", "events", "fail", "list",
-		"logs", "prune", "reconcile", "run", "run-folder", "sequence",
+		"logs", "prune", "reconcile", "run", "run-folder", "scheduler", "sequence",
 		"sequences", "setup", "status", "task", "terminals", "validate", "worker", "workers",
 	}
 	if !reflect.DeepEqual(got, want) {
