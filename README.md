@@ -254,6 +254,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) before submitting a change.
 
 ## Documentation and support
 
+- [Worker runtime use cases](docs/product/worker-runtime-use-cases.md)
 - [Release policy](docs/RELEASE_POLICY.md)
 - [Release qualification](docs/release/qualification.md)
 - [Release-candidate notes](docs/release/v1.0.0-rc.1-release-notes.md)
