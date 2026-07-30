@@ -100,12 +100,24 @@ type SessionRef struct {
 // Task is the versioned locally persisted assigned-task identity. Task
 // lifecycle and snapshots are introduced by the task-assignment slice.
 type Task struct {
-	Version   int    `json:"version" yaml:"version"`
-	ID        string `json:"id" yaml:"id"`
-	ProjectID string `json:"project_id" yaml:"project_id"`
-	WorkerID  string `json:"worker_id" yaml:"worker_id"`
-	Source    string `json:"source" yaml:"source"`
+	Version         int        `json:"version" yaml:"version"`
+	ID              string     `json:"id" yaml:"id"`
+	ProjectID       string     `json:"project_id" yaml:"project_id"`
+	WorkerID        string     `json:"worker_id" yaml:"worker_id"`
+	Instructions    string     `json:"instructions" yaml:"instructions"`
+	ContentSnapshot string     `json:"content_snapshot" yaml:"content_snapshot"`
+	SourceReference string     `json:"source_reference" yaml:"source_reference"`
+	Status          TaskStatus `json:"status" yaml:"status"`
+	AttemptCount    int        `json:"attempt_count" yaml:"attempt_count"`
+	CreatedAt       time.Time  `json:"created_at" yaml:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at" yaml:"updated_at"`
 }
+
+type TaskStatus string
+
+const TaskStatusAssigned TaskStatus = "assigned"
+
+func (s TaskStatus) Valid() bool { return s == TaskStatusAssigned }
 
 func ValidateSlug(kind, value string) error {
 	if len(value) > 63 || !slugPattern.MatchString(value) {
@@ -267,8 +279,23 @@ func (t Task) Validate() error {
 	if err := ValidateSlug("worker id", t.WorkerID); err != nil {
 		return err
 	}
-	if err := validateRepositoryPath("task source", t.Source, false); err != nil {
+	if strings.TrimSpace(t.Instructions) == "" {
+		return fmt.Errorf("task instructions are required")
+	}
+	if strings.TrimSpace(t.ContentSnapshot) == "" {
+		return fmt.Errorf("task content snapshot is required")
+	}
+	if err := validateRepositoryPath("task source reference", t.SourceReference, false); err != nil {
 		return err
+	}
+	if !t.Status.Valid() {
+		return fmt.Errorf("unknown task status %q", t.Status)
+	}
+	if t.AttemptCount < 0 {
+		return fmt.Errorf("task attempt count must not be negative")
+	}
+	if t.CreatedAt.IsZero() || t.UpdatedAt.IsZero() {
+		return fmt.Errorf("task timestamps are required")
 	}
 	return nil
 }

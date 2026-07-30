@@ -21,6 +21,7 @@ import (
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/taskstore"
 	"promptgrinder/internal/ui"
 	"promptgrinder/internal/worker"
 	"promptgrinder/internal/workerdomain"
@@ -130,6 +131,16 @@ type workerDefinitionJSONOutput struct {
 type namedWorkerStateJSONOutput struct {
 	Project workerdomain.Project     `json:"project"`
 	State   workerdomain.WorkerState `json:"state"`
+}
+
+type tasksJSONOutput struct {
+	Project workerdomain.Project `json:"project"`
+	Tasks   []workerdomain.Task  `json:"tasks"`
+}
+
+type taskJSONOutput struct {
+	Project workerdomain.Project `json:"project"`
+	Task    workerdomain.Task    `json:"task"`
 }
 
 type statusJSONOutput struct {
@@ -1053,6 +1064,96 @@ Examples:
 	workerCmd.AddCommand(workerListCmd, workerShowCmd, workerStartCmd, workerStatusCmd, workerResetCmd)
 	root.AddCommand(workerCmd)
 
+	var taskAssignJSON bool
+	var taskListJSON bool
+	var taskListWorker string
+	var taskShowJSON bool
+	taskCmd := &cobra.Command{Use: "task", Short: "Assign and inspect project-owned tasks."}
+	taskAssignCmd := &cobra.Command{
+		Use:   "assign <worker-id> <task.md>",
+		Short: "Assign an immutable task snapshot to a named worker.",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskAssignJSON, compactJSON)
+			}
+			store := taskstore.New(service.Defaults().Config.HomeDir)
+			task, err := store.Assign(registry.Root, definition, args[1])
+			if err != nil {
+				return taskCommandError(stdout, err, taskAssignJSON, compactJSON)
+			}
+			if taskAssignJSON {
+				return writeJSON(stdout, taskJSONOutput{Project: registry.Project, Task: task}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Assigned task %s to worker %s.\n", task.ID, task.WorkerID)
+			fmt.Fprintf(stdout, "Source: %s\n", task.SourceReference)
+			fmt.Fprintf(stdout, "Status: %s\n", task.Status)
+			return nil
+		},
+	}
+	taskAssignCmd.Flags().BoolVar(&taskAssignJSON, "json", false, "print machine-readable JSON")
+	taskListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List tasks owned by the current project.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskListJSON, compactJSON)
+			}
+			if taskListWorker != "" {
+				if _, err := registry.Get(taskListWorker); err != nil {
+					return taskCommandError(stdout, err, taskListJSON, compactJSON)
+				}
+			}
+			tasks, err := taskstore.New(service.Defaults().Config.HomeDir).List(registry.Project.ID, taskListWorker)
+			if err != nil {
+				return taskCommandError(stdout, err, taskListJSON, compactJSON)
+			}
+			if taskListJSON {
+				return writeJSON(stdout, tasksJSONOutput{Project: registry.Project, Tasks: tasks}, compactJSON)
+			}
+			if len(tasks) == 0 {
+				fmt.Fprintln(stdout, "No tasks found.")
+				return nil
+			}
+			fmt.Fprintln(stdout, "TASK ID\tWORKER ID\tSTATUS\tATTEMPTS\tSOURCE")
+			for _, task := range tasks {
+				fmt.Fprintf(stdout, "%s\t%s\t%s\t%d\t%s\n", task.ID, task.WorkerID, task.Status, task.AttemptCount, task.SourceReference)
+			}
+			return nil
+		},
+	}
+	taskListCmd.Flags().StringVar(&taskListWorker, "worker", "", "show tasks assigned to this worker")
+	taskListCmd.Flags().BoolVar(&taskListJSON, "json", false, "print machine-readable JSON")
+	taskShowCmd := &cobra.Command{
+		Use:   "show <task-id>",
+		Short: "Show one immutable task snapshot.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskShowJSON, compactJSON)
+			}
+			task, err := taskstore.New(service.Defaults().Config.HomeDir).Load(registry.Project.ID, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskShowJSON, compactJSON)
+			}
+			if _, err := registry.Get(task.WorkerID); err != nil {
+				return taskCommandError(stdout, fmt.Errorf("persisted task worker mismatch: %w", err), taskShowJSON, compactJSON)
+			}
+			if taskShowJSON {
+				return writeJSON(stdout, taskJSONOutput{Project: registry.Project, Task: task}, compactJSON)
+			}
+			printTask(stdout, task)
+			return nil
+		},
+	}
+	taskShowCmd.Flags().BoolVar(&taskShowJSON, "json", false, "print machine-readable JSON")
+	taskCmd.AddCommand(taskAssignCmd, taskListCmd, taskShowCmd)
+	root.AddCommand(taskCmd)
+
 	var eventTail int
 	var eventType string
 	var eventSeverity string
@@ -1396,6 +1497,38 @@ func namedWorkerCommandError(stdout io.Writer, err error, jsonOutput, compact bo
 		return writeJSONCommandError(stdout, code, err, compact)
 	}
 	return StructuredError{Err: err, Code: errorExitCode(code)}
+}
+
+func taskCommandError(stdout io.Writer, err error, jsonOutput, compact bool) error {
+	code := classifyError(err)
+	switch {
+	case errors.Is(err, workerregistry.ErrWorkerNotFound):
+		code = "worker_not_found"
+	case errors.Is(err, taskstore.ErrNotFound):
+		code = "task_not_found"
+	case errors.Is(err, taskstore.ErrActiveAssignment), errors.Is(err, taskstore.ErrTaskExists):
+		code = "invalid_transition"
+	}
+	if jsonOutput {
+		return writeJSONCommandError(stdout, code, err, compact)
+	}
+	return StructuredError{Err: err, Code: errorExitCode(code)}
+}
+
+func printTask(stdout io.Writer, task workerdomain.Task) {
+	fmt.Fprintf(stdout, "Task: %s\n", task.ID)
+	fmt.Fprintf(stdout, "Project: %s\n", task.ProjectID)
+	fmt.Fprintf(stdout, "Worker: %s\n", task.WorkerID)
+	fmt.Fprintf(stdout, "Status: %s\n", task.Status)
+	fmt.Fprintf(stdout, "Attempts: %d\n", task.AttemptCount)
+	fmt.Fprintf(stdout, "Source: %s\n", task.SourceReference)
+	fmt.Fprintf(stdout, "Created: %s\n", formatTime(&task.CreatedAt))
+	fmt.Fprintf(stdout, "Updated: %s\n", formatTime(&task.UpdatedAt))
+	fmt.Fprintln(stdout, "Instructions:")
+	fmt.Fprint(stdout, task.Instructions)
+	if !strings.HasSuffix(task.Instructions, "\n") {
+		fmt.Fprintln(stdout)
+	}
 }
 
 func printNamedWorkerState(stdout io.Writer, project workerdomain.Project, state workerdomain.WorkerState) {

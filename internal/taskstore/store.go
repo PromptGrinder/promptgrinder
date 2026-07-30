@@ -1,0 +1,280 @@
+// Package taskstore persists immutable task snapshots and coordinates their
+// assignment with PromptGrinder-owned named-worker state.
+package taskstore
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
+
+	"promptgrinder/internal/markdown"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerstate"
+)
+
+var (
+	ErrNotFound         = errors.New("task not found")
+	ErrActiveAssignment = errors.New("worker already has an active task")
+	ErrTaskExists       = errors.New("task already exists")
+)
+
+type Store struct {
+	home        string
+	now         func() time.Time
+	workerState *workerstate.Store
+}
+
+func New(home string) *Store {
+	return &Store{home: home, now: time.Now, workerState: workerstate.New(home)}
+}
+
+func (s *Store) Path(projectID, taskID string) string {
+	return filepath.Join(s.home, "projects", projectID, "tasks", taskID+".json")
+}
+
+func (s *Store) Assign(root string, definition workerdomain.WorkerDefinition, source string) (workerdomain.Task, error) {
+	if err := definition.Validate(); err != nil {
+		return workerdomain.Task{}, fmt.Errorf("invalid worker definition: %w", err)
+	}
+	sourceReference, content, err := readSource(root, source)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	parsed, err := markdown.Parse(content)
+	if err != nil {
+		return workerdomain.Task{}, fmt.Errorf("parse task source %s: %w", sourceReference, err)
+	}
+	taskID := strings.TrimSuffix(filepath.Base(sourceReference), filepath.Ext(sourceReference))
+	now := s.now().UTC()
+	task := workerdomain.Task{
+		Version: workerdomain.SchemaVersion, ID: taskID,
+		ProjectID: definition.ProjectID, WorkerID: definition.ID,
+		Instructions: parsed.Body, ContentSnapshot: content,
+		SourceReference: filepath.ToSlash(sourceReference),
+		Status:          workerdomain.TaskStatusAssigned, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := task.Validate(); err != nil {
+		return workerdomain.Task{}, err
+	}
+
+	unlock, err := s.lock(definition.ProjectID, definition.ID)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	defer unlock()
+	state, err := s.workerState.Ensure(definition)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	if state.ProjectID != task.ProjectID || state.WorkerID != task.WorkerID {
+		return workerdomain.Task{}, fmt.Errorf("task project/worker identity does not match worker state")
+	}
+	if state.ActiveTaskID != "" {
+		return workerdomain.Task{}, fmt.Errorf("%w: worker %q has task %q", ErrActiveAssignment, definition.ID, state.ActiveTaskID)
+	}
+	if err := s.create(task); err != nil {
+		return workerdomain.Task{}, err
+	}
+	state.ActiveTaskID = task.ID
+	if _, err := s.workerState.Save(state, state.Revision); err != nil {
+		if removeErr := os.Remove(s.Path(task.ProjectID, task.ID)); removeErr != nil {
+			return workerdomain.Task{}, fmt.Errorf("update worker assignment: %v; rollback task snapshot: %w", err, removeErr)
+		}
+		return workerdomain.Task{}, fmt.Errorf("update worker assignment: %w", err)
+	}
+	return task, nil
+}
+
+func (s *Store) Load(projectID, taskID string) (workerdomain.Task, error) {
+	if err := workerdomain.ValidateSlug("project id", projectID); err != nil {
+		return workerdomain.Task{}, err
+	}
+	if err := workerdomain.ValidateSlug("task id", taskID); err != nil {
+		return workerdomain.Task{}, err
+	}
+	path := s.Path(projectID, taskID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return workerdomain.Task{}, fmt.Errorf("%w: %q", ErrNotFound, taskID)
+		}
+		return workerdomain.Task{}, fmt.Errorf("read task %s: %w", path, err)
+	}
+	var task workerdomain.Task
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&task); err != nil {
+		return workerdomain.Task{}, fmt.Errorf("corrupt task %s: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return workerdomain.Task{}, fmt.Errorf("corrupt task %s: trailing JSON", path)
+	}
+	if task.ProjectID != projectID || task.ID != taskID {
+		return workerdomain.Task{}, fmt.Errorf("corrupt task %s: identity does not match its path", path)
+	}
+	if err := task.Validate(); err != nil {
+		return workerdomain.Task{}, fmt.Errorf("corrupt task %s: %w", path, err)
+	}
+	return task, nil
+}
+
+func (s *Store) List(projectID, workerID string) ([]workerdomain.Task, error) {
+	if err := workerdomain.ValidateSlug("project id", projectID); err != nil {
+		return nil, err
+	}
+	if workerID != "" {
+		if err := workerdomain.ValidateSlug("worker id", workerID); err != nil {
+			return nil, err
+		}
+	}
+	dir := filepath.Dir(s.Path(projectID, "placeholder"))
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []workerdomain.Task{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	tasks := make([]workerdomain.Task, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		task, err := s.Load(projectID, strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return nil, err
+		}
+		if workerID == "" || task.WorkerID == workerID {
+			tasks = append(tasks, task)
+		}
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+	return tasks, nil
+}
+
+func readSource(root, source string) (string, string, error) {
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	absoluteRoot, err = filepath.EvalSymlinks(absoluteRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve repository root %s: %w", root, err)
+	}
+	candidate := source
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(absoluteRoot, candidate)
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", "", fmt.Errorf("read task source %s: %w", source, err)
+	}
+	relative, err := filepath.Rel(absoluteRoot, resolved)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("task source %q escapes repository %s", source, absoluteRoot)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", "", fmt.Errorf("read task source %s: %w", source, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", "", fmt.Errorf("task source %q is not a regular file", source)
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", "", fmt.Errorf("read task source %s: %w", source, err)
+	}
+	return relative, string(data), nil
+}
+
+func (s *Store) create(task workerdomain.Task) error {
+	dir := filepath.Dir(s.Path(task.ProjectID, task.ID))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create task directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	file, err := os.CreateTemp(dir, ".task-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary task snapshot: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		_ = os.Remove(file.Name())
+		return err
+	}
+	cleanup := func() {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+	}
+	if _, err := file.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	path := s.Path(task.ProjectID, task.ID)
+	if err := os.Link(file.Name(), path); err != nil {
+		_ = os.Remove(file.Name())
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%w: %q", ErrTaskExists, task.ID)
+		}
+		return fmt.Errorf("publish task snapshot: %w", err)
+	}
+	if err := os.Remove(file.Name()); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	defer dirHandle.Close()
+	if err := dirHandle.Sync(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+func (s *Store) lock(projectID, workerID string) (func(), error) {
+	dir := filepath.Join(s.home, "projects", projectID, "workers", workerID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, ".assignment.lock")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}

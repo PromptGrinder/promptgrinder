@@ -42,11 +42,11 @@ func TestPersistedSchemasRoundTripJSONAndYAML(t *testing.T) {
 			EffectivePolicy:    validRegistry().Workers[0].Policy,
 		},
 		Task{
-			Version:   SchemaVersion,
-			ID:        "sonar-001",
-			ProjectID: "footybadger",
-			WorkerID:  "backend-sonar",
-			Source:    "tasks/sonar-001.md",
+			Version: SchemaVersion, ID: "sonar-001",
+			ProjectID: "footybadger", WorkerID: "backend-sonar",
+			Instructions: "Fix sonar.", ContentSnapshot: "# Fix sonar.\n",
+			SourceReference: "tasks/sonar-001.md", Status: TaskStatusAssigned,
+			CreatedAt: time.Unix(1, 0).UTC(), UpdatedAt: time.Unix(1, 0).UTC(),
 		},
 	}
 
@@ -194,16 +194,16 @@ func TestStateAndTaskValidation(t *testing.T) {
 	}
 
 	task := Task{
-		Version:   SchemaVersion,
-		ID:        "sonar-001",
-		ProjectID: "footybadger",
-		WorkerID:  "backend-sonar",
-		Source:    "tasks/sonar-001.md",
+		Version: SchemaVersion, ID: "sonar-001",
+		ProjectID: "footybadger", WorkerID: "backend-sonar",
+		Instructions: "Fix sonar.", ContentSnapshot: "# Fix sonar.\n",
+		SourceReference: "tasks/sonar-001.md", Status: TaskStatusAssigned,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	if err := task.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	task.Source = "../../outside.md"
+	task.SourceReference = "../../outside.md"
 	if err := task.Validate(); err == nil || !strings.Contains(err.Error(), "escapes") {
 		t.Fatalf("task error = %v", err)
 	}
