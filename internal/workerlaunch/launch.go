@@ -20,6 +20,11 @@ type Launcher interface {
 	Launch(context.Context, LaunchRequest) (LaunchResult, error)
 }
 
+// Preflighter validates a launch without creating records or processes.
+type Preflighter interface {
+	Preflight(context.Context, LaunchRequest) error
+}
+
 // TaskContext describes the task assigned by PromptGrinder. It is empty until
 // the task-assignment slice provides persisted assignments.
 type TaskContext struct {
@@ -51,6 +56,7 @@ type LaunchRequest struct {
 // named-worker lifecycle.
 type LaunchResult struct {
 	RuntimeName string               `json:"runtime_name"`
+	RunID       string               `json:"run_id"`
 	Session     RuntimeSessionResult `json:"session"`
 	Process     RuntimeProcessResult `json:"process"`
 }

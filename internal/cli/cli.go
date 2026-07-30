@@ -24,9 +24,11 @@ import (
 	"promptgrinder/internal/taskstore"
 	"promptgrinder/internal/ui"
 	"promptgrinder/internal/worker"
+	"promptgrinder/internal/workeradapter"
 	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerlaunch"
 	"promptgrinder/internal/workerregistry"
+	"promptgrinder/internal/workerstart"
 	"promptgrinder/internal/workerstate"
 
 	"github.com/spf13/cobra"
@@ -131,6 +133,11 @@ type workerDefinitionJSONOutput struct {
 type namedWorkerStateJSONOutput struct {
 	Project workerdomain.Project     `json:"project"`
 	State   workerdomain.WorkerState `json:"state"`
+}
+
+type namedWorkerStartJSONOutput struct {
+	State  workerdomain.WorkerState  `json:"state"`
+	Launch workerlaunch.LaunchResult `json:"launch"`
 }
 
 type tasksJSONOutput struct {
@@ -968,16 +975,9 @@ Examples:
 	workerShowCmd.Flags().BoolVar(&workerShowJSON, "json", false, "print machine-readable JSON")
 	workerStartCmd := &cobra.Command{
 		Use:   "start <worker-id>",
-		Short: "Build a launch plan for a project-owned named worker.",
+		Short: "Start a project-owned named worker.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !workerStartDryRun {
-				err := fmt.Errorf("named-worker execution is not available yet; use --dry-run to review the launch plan")
-				if workerStartJSON {
-					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
-				}
-				return StructuredError{Err: err, Code: ExitInvalidInput}
-			}
 			registry, err := workerregistry.Load(".")
 			if err != nil {
 				if workerStartJSON {
@@ -993,21 +993,42 @@ Examples:
 				return StructuredError{Err: err, Code: ExitWorkerNotFound}
 			}
 			cfg := service.Defaults().Config
-			request, err := workerlaunch.Build(workerlaunch.BuildOptions{
-				Project: registry.Project, Worker: definition, Repository: registry.Root,
-				RuntimeOverride: workerStartRuntime, RuntimeDefault: cfg.WorkerRuntime,
-				RuntimeOptions: cfg.RuntimeOptions,
-			})
+			if workerStartDryRun {
+				request, err := workerlaunch.Build(workerlaunch.BuildOptions{
+					Project: registry.Project, Worker: definition, Repository: registry.Root,
+					RuntimeOverride: workerStartRuntime, RuntimeDefault: cfg.WorkerRuntime,
+					RuntimeOptions: cfg.RuntimeOptions,
+				})
+				if err != nil {
+					if workerStartJSON {
+						return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+					}
+					return StructuredError{Err: err, Code: ExitInvalidInput}
+				}
+				if workerStartJSON {
+					return writeJSON(stdout, workerlaunch.Redacted(request), compactJSON)
+				}
+				fmt.Fprint(stdout, workerlaunch.PlanDocument(request))
+				return nil
+			}
+			runtimeService := pgruntime.NewService(cfg)
+			starter := workerstart.Service{
+				Home: cfg.HomeDir, Config: cfg,
+				Launchers: map[string]workerlaunch.Launcher{
+					"codex": workeradapter.Codex{Manager: runtimeService.Worker},
+				},
+			}
+			result, err := starter.Start(cmd.Context(), registry.Root, definition.ID, workerStartRuntime)
 			if err != nil {
 				if workerStartJSON {
-					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+					return writeJSONCommandError(stdout, "launch_error", err, compactJSON)
 				}
-				return StructuredError{Err: err, Code: ExitInvalidInput}
+				return StructuredError{Err: err, Code: ExitExecutionFailed}
 			}
 			if workerStartJSON {
-				return writeJSON(stdout, workerlaunch.Redacted(request), compactJSON)
+				return writeJSON(stdout, namedWorkerStartJSONOutput{State: result.State, Launch: result.Launch}, compactJSON)
 			}
-			fmt.Fprint(stdout, workerlaunch.PlanDocument(request))
+			fmt.Fprintf(stdout, "Worker %s started run %s with runtime %s (lifecycle %s).\n", result.State.WorkerID, result.Launch.RunID, result.Launch.RuntimeName, result.State.Lifecycle)
 			return nil
 		},
 	}

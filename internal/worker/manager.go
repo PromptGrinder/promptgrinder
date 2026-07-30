@@ -50,7 +50,7 @@ func (m Manager) Launch(taskPath string) LaunchResult {
 	if err != nil {
 		return LaunchResult{Err: err}
 	}
-	return m.launchData(absTask, data)
+	return m.launchData(absTask, data, nil)
 }
 
 func (m Manager) LaunchContent(taskPath, content string) LaunchResult {
@@ -58,7 +58,60 @@ func (m Manager) LaunchContent(taskPath, content string) LaunchResult {
 	if err != nil {
 		return LaunchResult{Err: err}
 	}
-	return m.launchData(absTask, []byte(content))
+	return m.launchData(absTask, []byte(content), nil)
+}
+
+// LaunchContentWithMetadata launches a persisted prompt with
+// orchestration-owned metadata instead of Markdown frontmatter.
+func (m Manager) LaunchContentWithMetadata(taskPath, content string, metadata map[string]any) LaunchResult {
+	absTask, err := filepath.Abs(taskPath)
+	if err != nil {
+		return LaunchResult{Err: err}
+	}
+	return m.launchData(absTask, []byte(content), metadata)
+}
+
+// ValidateContentWithMetadata performs launch preflight without creating a run
+// record or starting a process.
+func (m Manager) ValidateContentWithMetadata(taskPath, content string, metadata map[string]any) error {
+	absTask, err := filepath.Abs(taskPath)
+	if err != nil {
+		return err
+	}
+	task, err := markdown.Parse(content)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(task.Body) == "" {
+		return fmt.Errorf("task prompt is empty: %s", absTask)
+	}
+	if metadata == nil {
+		metadata = task.Metadata
+	}
+	repoRootPath := absTask
+	if m.RepositoryOverride != "" {
+		repoRootPath = m.RepositoryOverride
+	}
+	repoRoot, err := repository.DetectRoot(repoRootPath)
+	if err != nil {
+		return err
+	}
+	if err := validateCommonMetadata(metadata); err != nil {
+		return err
+	}
+	cfg, engineName, resolved, adapter, err := m.resolveLaunchInputs(repoRoot, absTask, metadata)
+	if err != nil {
+		return err
+	}
+	ctx, err := validationContext(repoRoot, absTask, engineName, resolved, cfg)
+	if err != nil {
+		return err
+	}
+	if err := adapter.Validate(ctx); err != nil {
+		return err
+	}
+	_, err = m.executor(cfg)
+	return err
 }
 
 type ValidationPlan struct {
@@ -133,7 +186,7 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 	}, nil
 }
 
-func (m Manager) launchData(absTask string, data []byte) LaunchResult {
+func (m Manager) launchData(absTask string, data []byte, suppliedMetadata map[string]any) LaunchResult {
 	task, err := markdown.Parse(string(data))
 	if err != nil {
 		return LaunchResult{Err: err}
@@ -149,10 +202,14 @@ func (m Manager) launchData(absTask string, data []byte) LaunchResult {
 	if err != nil {
 		return LaunchResult{Err: err}
 	}
-	if err := validateCommonMetadata(task.Metadata); err != nil {
+	taskMetadata := task.Metadata
+	if suppliedMetadata != nil {
+		taskMetadata = suppliedMetadata
+	}
+	if err := validateCommonMetadata(taskMetadata); err != nil {
 		return LaunchResult{Err: err}
 	}
-	cfg, engineName, metadata, adapter, err := m.resolveLaunchInputs(repoRoot, absTask, task.Metadata)
+	cfg, engineName, metadata, adapter, err := m.resolveLaunchInputs(repoRoot, absTask, taskMetadata)
 	if err != nil {
 		return LaunchResult{Err: err}
 	}
@@ -174,7 +231,7 @@ func (m Manager) launchData(absTask string, data []byte) LaunchResult {
 		return LaunchResult{Err: err}
 	}
 
-	worker, err := m.createWorker(repoRoot, absTask, engineName, engineNameFromMetadata(task.Metadata), task.Metadata, metadata, adapter.Describe().Capabilities, cfg)
+	worker, err := m.createWorker(repoRoot, absTask, engineName, engineNameFromMetadata(taskMetadata), taskMetadata, metadata, adapter.Describe().Capabilities, cfg)
 	if err != nil {
 		return LaunchResult{Err: err}
 	}
