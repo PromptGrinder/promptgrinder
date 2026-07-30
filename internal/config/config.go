@@ -10,36 +10,40 @@ import (
 	"strings"
 	"time"
 
+	"promptgrinder/internal/workerdomain"
+
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	HomeDir                       string        `json:"home_dir"`
-	Engine                        string        `json:"engine"`
-	TerminalAdapter               string        `json:"terminal_adapter"`
-	TerminalMode                  string        `json:"terminal_mode"`
-	TerminalCloseOnFinish         bool          `json:"terminal_close_on_finish"`
-	TerminalCloseOnFailure        bool          `json:"terminal_close_on_failure"`
-	WorkerHeartbeatInterval       time.Duration `json:"worker_heartbeat_interval"`
-	WorkerTimeout                 time.Duration `json:"worker_timeout"`
-	CodexSandbox                  string        `json:"codex_sandbox"`
-	CodexApproval                 string        `json:"codex_approval"`
-	CodexExecutable               string        `json:"codex_executable,omitempty"`
-	RunEngine                     string        `json:"run_engine"`
-	RunFolderRepo                 string        `json:"run_folder_repo"`
-	RunFolderTemplate             string        `json:"run_folder_template"`
-	RunFolderEngine               string        `json:"run_folder_engine"`
-	RunFolderResume               bool          `json:"run_folder_resume"`
-	RunFolderFresh                bool          `json:"run_folder_fresh"`
-	RunFolderRestart              bool          `json:"run_folder_restart"`
-	RunFolderNoResume             bool          `json:"run_folder_no_resume"`
-	RunFolderCheckpoint           bool          `json:"run_folder_checkpoint"`
-	RunFolderCommitEach           bool          `json:"run_folder_commit_each"`
-	RunFolderRequireCleanGit      bool          `json:"run_folder_require_clean_git"`
-	RunFolderIncludeSpecification bool          `json:"run_folder_include_specification"`
-	RunFolderDetach               bool          `json:"run_folder_detach"`
-	Warnings                      []string      `json:"warnings,omitempty"`
+	HomeDir                       string                    `json:"home_dir"`
+	Engine                        string                    `json:"engine"`
+	TerminalAdapter               string                    `json:"terminal_adapter"`
+	TerminalMode                  string                    `json:"terminal_mode"`
+	TerminalCloseOnFinish         bool                      `json:"terminal_close_on_finish"`
+	TerminalCloseOnFailure        bool                      `json:"terminal_close_on_failure"`
+	WorkerHeartbeatInterval       time.Duration             `json:"worker_heartbeat_interval"`
+	WorkerTimeout                 time.Duration             `json:"worker_timeout"`
+	CodexSandbox                  string                    `json:"codex_sandbox"`
+	CodexApproval                 string                    `json:"codex_approval"`
+	CodexExecutable               string                    `json:"codex_executable,omitempty"`
+	RunEngine                     string                    `json:"run_engine"`
+	RunFolderRepo                 string                    `json:"run_folder_repo"`
+	RunFolderTemplate             string                    `json:"run_folder_template"`
+	RunFolderEngine               string                    `json:"run_folder_engine"`
+	RunFolderResume               bool                      `json:"run_folder_resume"`
+	RunFolderFresh                bool                      `json:"run_folder_fresh"`
+	RunFolderRestart              bool                      `json:"run_folder_restart"`
+	RunFolderNoResume             bool                      `json:"run_folder_no_resume"`
+	RunFolderCheckpoint           bool                      `json:"run_folder_checkpoint"`
+	RunFolderCommitEach           bool                      `json:"run_folder_commit_each"`
+	RunFolderRequireCleanGit      bool                      `json:"run_folder_require_clean_git"`
+	RunFolderIncludeSpecification bool                      `json:"run_folder_include_specification"`
+	RunFolderDetach               bool                      `json:"run_folder_detach"`
+	WorkerRuntime                 string                    `json:"worker_runtime,omitempty"`
+	RuntimeOptions                map[string]map[string]any `json:"runtime_options,omitempty"`
+	Warnings                      []string                  `json:"warnings,omitempty"`
 }
 
 type DefaultsReport struct {
@@ -148,12 +152,30 @@ func LoadWithHome(repoRoot, homeOverride string) (Config, error) {
 		RunFolderRequireCleanGit:      v.GetBool("run_folder.require_clean_git"),
 		RunFolderIncludeSpecification: v.GetBool("run_folder.include_specification"),
 		RunFolderDetach:               v.GetBool("run_folder.detach"),
+		WorkerRuntime:                 v.GetString("runtime.default"),
+		RuntimeOptions:                runtimeOptions(v.GetStringMap("runtime")),
 		Warnings:                      warnings,
 	}
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func runtimeOptions(values map[string]any) map[string]map[string]any {
+	result := map[string]map[string]any{}
+	for name, value := range values {
+		if name == "default" {
+			continue
+		}
+		if options, ok := value.(map[string]any); ok {
+			result[name] = options
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func ResolveHomeDir(homeOverride string) (string, error) {
@@ -301,6 +323,7 @@ var configSchema = map[string]any{
 	},
 	"terminal": map[string]any{"adapter": nil, "mode": nil, "close_on_finish": nil, "close_on_failure": nil},
 	"worker":   map[string]any{"heartbeat_interval": nil, "timeout": nil},
+	"runtime":  map[string]any{"default": nil},
 	"run":      map[string]any{"engine": nil},
 	"run_folder": map[string]any{
 		"repo": nil, "template": nil, "engine": nil, "resume": nil, "fresh": nil,
@@ -313,6 +336,40 @@ func validateConfigKeys(source string, values map[string]any, warnings *[]string
 	if legacy, ok := values["engine"].(string); ok {
 		*warnings = append(*warnings, fmt.Sprintf("%s: key engine is deprecated; migrate to engine.default", source))
 		values["engine"] = map[string]any{"default": legacy}
+	}
+	valuesForSchema := values
+	if runtimeValue, ok := values["runtime"]; ok {
+		runtimes, ok := runtimeValue.(map[string]any)
+		if !ok {
+			return fmt.Errorf("configuration %s: key runtime must be a map", source)
+		}
+		runtimeSchemaValue := map[string]any{}
+		if fallback, ok := runtimes["default"]; ok {
+			name, ok := fallback.(string)
+			if !ok {
+				return fmt.Errorf("configuration %s: runtime.default must be a string", source)
+			}
+			if err := (workerdomain.RuntimeRef{Name: name}).Validate(); err != nil {
+				return fmt.Errorf("configuration %s: runtime.default: %w", source, err)
+			}
+			runtimeSchemaValue["default"] = fallback
+		}
+		for name, options := range runtimes {
+			if name == "default" {
+				continue
+			}
+			if err := (workerdomain.RuntimeRef{Name: name}).Validate(); err != nil {
+				return fmt.Errorf("configuration %s: runtime namespace: %w", source, err)
+			}
+			if _, ok := options.(map[string]any); !ok {
+				return fmt.Errorf("configuration %s: runtime.%s must be a map", source, name)
+			}
+		}
+		valuesForSchema = make(map[string]any, len(values))
+		for key, value := range values {
+			valuesForSchema[key] = value
+		}
+		valuesForSchema["runtime"] = runtimeSchemaValue
 	}
 	var walk func(map[string]any, map[string]any, string) error
 	walk = func(input, schema map[string]any, prefix string) error {
@@ -344,7 +401,7 @@ func validateConfigKeys(source string, values map[string]any, warnings *[]string
 		}
 		return nil
 	}
-	if err := walk(values, configSchema, ""); err != nil {
+	if err := walk(valuesForSchema, configSchema, ""); err != nil {
 		return err
 	}
 	return validateSourceValues(source, values)

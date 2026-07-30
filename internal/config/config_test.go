@@ -46,6 +46,38 @@ func TestLoadRepositoryOverride(t *testing.T) {
 	}
 }
 
+func TestLoadKeepsRuntimeConfigurationNamespacedAndOpaque(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `runtime:
+  default: local
+  claude:
+    model: sonnet
+    authentication:
+      api_token: secret
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "config.yaml"), []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithHome(repo, filepath.Join(t.TempDir(), "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkerRuntime != "local" {
+		t.Fatalf("worker runtime = %q", cfg.WorkerRuntime)
+	}
+	claude := cfg.RuntimeOptions["claude"]
+	if claude["model"] != "sonnet" {
+		t.Fatalf("runtime options = %#v", cfg.RuntimeOptions)
+	}
+	authentication, ok := claude["authentication"].(map[string]any)
+	if !ok || authentication["api_token"] != "secret" {
+		t.Fatalf("nested runtime options = %#v", claude["authentication"])
+	}
+}
+
 func TestLoadConfigurationPrecedence(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {

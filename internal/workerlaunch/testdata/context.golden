@@ -1,0 +1,12 @@
+# PromptGrinder Worker Context
+
+Project: Example (example)
+Worker: Backend Sonar (backend-sonar)
+Responsibility: Resolve backend findings safely.
+Repository: /repo
+Worktree: /repo
+Allowed paths: backend/**, services/**
+Forbidden paths: infrastructure/production/**, secrets/**
+Assigned task: sonar-001
+Task source: tasks/sonar-001.md
+Task instructions: Fix the reported finding.

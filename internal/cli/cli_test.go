@@ -142,6 +142,66 @@ workers:
 	}
 }
 
+func TestCLIWorkerStartDryRunCreatesNoStateOrProcess(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "promptgrinder-home")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := `version: 1
+project: {id: example, name: Example}
+workers:
+  backend:
+    display_name: Backend Engineer
+    role: Build APIs.
+    runtime: claude
+    branch: {prefix: worker/backend}
+    worktree: {default: .}
+    paths:
+      allowed: [backend/**]
+      forbidden: [backend/secrets/**]
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "workers.yaml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{
+		HomeDir: home,
+		RuntimeOptions: map[string]map[string]any{
+			"codex": {"api_key": "must-not-leak", "model": "test-model"},
+		},
+	}}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "start", "backend", "--dry-run", "--runtime", "codex"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	for _, want := range []string{"Launch plan (dry run)", "Runtime: codex", "api_key: \"[redacted]\"", "No process started. No mutable state created."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q: %s", want, output)
+		}
+	}
+	if strings.Contains(output, "must-not-leak") {
+		t.Fatalf("output leaked secret: %s", output)
+	}
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatalf("dry-run touched state home %s: %v", home, err)
+	}
+}
+
 func TestV1InternalCommandsAreHiddenFromHelp(t *testing.T) {
 	out := &bytes.Buffer{}
 	cmd := NewRootCommand(&fakeService{}, out, &bytes.Buffer{})
