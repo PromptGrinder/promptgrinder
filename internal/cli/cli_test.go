@@ -19,6 +19,8 @@ import (
 	pgruntime "promptgrinder/internal/runtime"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/worker"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerstate"
 )
 
 func TestCLIVersion(t *testing.T) {
@@ -199,6 +201,109 @@ workers:
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatalf("dry-run touched state home %s: %v", home, err)
+	}
+}
+
+func TestCLIWorkerStatusAndResetTextAndJSON(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "promptgrinder-home")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryFile := `version: 1
+project: {id: example, name: Example}
+workers:
+  backend:
+    display_name: Backend Engineer
+    role: Build APIs.
+    runtime: codex
+    branch: {prefix: worker/backend}
+    worktree: {default: .}
+    paths:
+      allowed: [backend/**]
+      forbidden: [backend/secrets/**]
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "workers.yaml"), []byte(registryFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: home}}}
+
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "status", "backend"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Project: Example (example)", "Worker: backend", "Lifecycle: idle", "Revision: 1"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status output %q missing %q", out.String(), want)
+		}
+	}
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "status", "backend", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var statusDecoded namedWorkerStateJSONOutput
+	if err := json.Unmarshal(out.Bytes(), &statusDecoded); err != nil || statusDecoded.State.Lifecycle != workerdomain.LifecycleIdle {
+		t.Fatalf("status JSON = %q, decoded %#v, error %v", out.String(), statusDecoded, err)
+	}
+
+	store := workerstate.New(home)
+	stateValue, err := store.Load("example", "backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateValue.Lifecycle = workerdomain.LifecycleFailed
+	stateValue.FailureReason = "runtime exited"
+	if _, err := store.Save(stateValue, stateValue.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "reset", "backend", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decoded namedWorkerStateJSONOutput
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("invalid reset JSON %q: %v", out.String(), err)
+	}
+	if decoded.State.Lifecycle != workerdomain.LifecycleIdle || decoded.State.FailureReason != "" {
+		t.Fatalf("reset JSON state = %#v", decoded.State)
+	}
+	revision := decoded.State.Revision
+
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "reset", "backend", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil || decoded.State.Revision != revision {
+		t.Fatalf("repeated reset changed revision: %s, %v", out.String(), err)
+	}
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "reset", "backend"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Worker backend is idle (revision") {
+		t.Fatalf("reset text output = %q", out.String())
 	}
 }
 

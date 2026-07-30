@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const SchemaVersion = 1
@@ -71,12 +72,29 @@ const (
 )
 
 // WorkerState is the versioned locally persisted named-worker state contract.
-// Later slices add persistence behavior and additional state context.
 type WorkerState struct {
-	Version   int       `json:"version" yaml:"version"`
-	ProjectID string    `json:"project_id" yaml:"project_id"`
-	WorkerID  string    `json:"worker_id" yaml:"worker_id"`
-	Lifecycle Lifecycle `json:"lifecycle" yaml:"lifecycle"`
+	Version             int          `json:"version" yaml:"version"`
+	Revision            uint64       `json:"revision" yaml:"revision"`
+	ProjectID           string       `json:"project_id" yaml:"project_id"`
+	WorkerID            string       `json:"worker_id" yaml:"worker_id"`
+	Lifecycle           Lifecycle    `json:"lifecycle" yaml:"lifecycle"`
+	ActiveTaskID        string       `json:"active_task_id,omitempty" yaml:"active_task_id,omitempty"`
+	ActiveRunID         string       `json:"active_run_id,omitempty" yaml:"active_run_id,omitempty"`
+	RuntimeSession      *SessionRef  `json:"runtime_session,omitempty" yaml:"runtime_session,omitempty"`
+	CreatedAt           time.Time    `json:"created_at" yaml:"created_at"`
+	UpdatedAt           time.Time    `json:"updated_at" yaml:"updated_at"`
+	LifecycleChangedAt  time.Time    `json:"lifecycle_changed_at" yaml:"lifecycle_changed_at"`
+	FailureReason       string       `json:"failure_reason,omitempty" yaml:"failure_reason,omitempty"`
+	BlockReason         string       `json:"block_reason,omitempty" yaml:"block_reason,omitempty"`
+	LastCompletedTaskID string       `json:"last_completed_task_id,omitempty" yaml:"last_completed_task_id,omitempty"`
+	EffectivePolicy     WorkerPolicy `json:"effective_policy" yaml:"effective_policy"`
+}
+
+// SessionRef identifies a runtime-owned session without granting the runtime
+// authority over PromptGrinder's lifecycle state.
+type SessionRef struct {
+	Runtime   string `json:"runtime" yaml:"runtime"`
+	SessionID string `json:"session_id" yaml:"session_id"`
 }
 
 // Task is the versioned locally persisted assigned-task identity. Task
@@ -215,6 +233,23 @@ func (s WorkerState) Validate() error {
 	}
 	if !s.Lifecycle.Valid() {
 		return fmt.Errorf("unknown worker lifecycle %q", s.Lifecycle)
+	}
+	if s.Revision == 0 {
+		return fmt.Errorf("worker state revision must be positive")
+	}
+	if s.CreatedAt.IsZero() || s.UpdatedAt.IsZero() || s.LifecycleChangedAt.IsZero() {
+		return fmt.Errorf("worker state timestamps are required")
+	}
+	if s.RuntimeSession != nil {
+		if err := ValidateSlug("runtime name", s.RuntimeSession.Runtime); err != nil {
+			return err
+		}
+		if strings.TrimSpace(s.RuntimeSession.SessionID) == "" {
+			return fmt.Errorf("runtime session id is required")
+		}
+	}
+	if err := s.EffectivePolicy.Validate(); err != nil {
+		return fmt.Errorf("effective worker policy: %w", err)
 	}
 	return nil
 }

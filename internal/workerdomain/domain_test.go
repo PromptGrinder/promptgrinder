@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,10 +34,12 @@ func TestPersistedSchemasRoundTripJSONAndYAML(t *testing.T) {
 	values := []any{
 		validRegistry(),
 		WorkerState{
-			Version:   SchemaVersion,
-			ProjectID: "footybadger",
-			WorkerID:  "backend-sonar",
+			Version: SchemaVersion, Revision: 1,
+			ProjectID: "footybadger", WorkerID: "backend-sonar",
 			Lifecycle: LifecycleExecuting,
+			CreatedAt: time.Unix(1, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(),
+			LifecycleChangedAt: time.Unix(2, 0).UTC(),
+			EffectivePolicy:    validRegistry().Workers[0].Policy,
 		},
 		Task{
 			Version:   SchemaVersion,
@@ -176,10 +179,11 @@ func TestWorkerRegistryValid(t *testing.T) {
 
 func TestStateAndTaskValidation(t *testing.T) {
 	state := WorkerState{
-		Version:   SchemaVersion,
-		ProjectID: "footybadger",
-		WorkerID:  "backend-sonar",
+		Version: SchemaVersion, Revision: 1,
+		ProjectID: "footybadger", WorkerID: "backend-sonar",
 		Lifecycle: LifecycleIdle,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), LifecycleChangedAt: time.Now(),
+		EffectivePolicy: validRegistry().Workers[0].Policy,
 	}
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)

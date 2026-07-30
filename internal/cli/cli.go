@@ -26,6 +26,7 @@ import (
 	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerlaunch"
 	"promptgrinder/internal/workerregistry"
+	"promptgrinder/internal/workerstate"
 
 	"github.com/spf13/cobra"
 )
@@ -124,6 +125,11 @@ type workerDefinitionsJSONOutput struct {
 type workerDefinitionJSONOutput struct {
 	Project workerdomain.Project          `json:"project"`
 	Worker  workerdomain.WorkerDefinition `json:"worker"`
+}
+
+type namedWorkerStateJSONOutput struct {
+	Project workerdomain.Project     `json:"project"`
+	State   workerdomain.WorkerState `json:"state"`
 }
 
 type statusJSONOutput struct {
@@ -883,6 +889,8 @@ Examples:
 	var workerStartDryRun bool
 	var workerStartJSON bool
 	var workerStartRuntime string
+	var workerStatusJSON bool
+	var workerResetJSON bool
 	workerCmd := &cobra.Command{
 		Use:   "worker",
 		Short: "Inspect project-owned named worker definitions.",
@@ -995,7 +1003,54 @@ Examples:
 	workerStartCmd.Flags().BoolVar(&workerStartDryRun, "dry-run", false, "resolve and validate the launch without starting a process or creating state")
 	workerStartCmd.Flags().BoolVar(&workerStartJSON, "json", false, "print the redacted launch request as machine-readable JSON")
 	workerStartCmd.Flags().StringVar(&workerStartRuntime, "runtime", "", "override the worker runtime for this launch")
-	workerCmd.AddCommand(workerListCmd, workerShowCmd, workerStartCmd)
+	workerStatusCmd := &cobra.Command{
+		Use:   "status <worker-id>",
+		Short: "Show PromptGrinder-owned lifecycle state for a named worker.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerStatusJSON, compactJSON)
+			}
+			store := workerstate.New(service.Defaults().Config.HomeDir)
+			workerState, err := store.Ensure(definition)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerStatusJSON, compactJSON)
+			}
+			if workerStatusJSON {
+				return writeJSON(stdout, namedWorkerStateJSONOutput{Project: registry.Project, State: workerState}, compactJSON)
+			}
+			printNamedWorkerState(stdout, registry.Project, workerState)
+			return nil
+		},
+	}
+	workerStatusCmd.Flags().BoolVar(&workerStatusJSON, "json", false, "print machine-readable JSON")
+	workerResetCmd := &cobra.Command{
+		Use:   "reset <worker-id>",
+		Short: "Reset a safely terminal named worker to idle.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerResetJSON, compactJSON)
+			}
+			store := workerstate.New(service.Defaults().Config.HomeDir)
+			workerState, err := store.Ensure(definition)
+			if err == nil {
+				workerState, err = store.Reset(workerState)
+			}
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerResetJSON, compactJSON)
+			}
+			if workerResetJSON {
+				return writeJSON(stdout, namedWorkerStateJSONOutput{Project: registry.Project, State: workerState}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Worker %s is idle (revision %d).\n", workerState.WorkerID, workerState.Revision)
+			return nil
+		},
+	}
+	workerResetCmd.Flags().BoolVar(&workerResetJSON, "json", false, "print machine-readable JSON")
+	workerCmd.AddCommand(workerListCmd, workerShowCmd, workerStartCmd, workerStatusCmd, workerResetCmd)
 	root.AddCommand(workerCmd)
 
 	var eventTail int
@@ -1319,6 +1374,48 @@ Examples:
 	root.AddCommand(engineCodex)
 
 	return root
+}
+
+func loadNamedWorker(id string) (*workerregistry.Registry, workerdomain.WorkerDefinition, error) {
+	registry, err := workerregistry.Load(".")
+	if err != nil {
+		return nil, workerdomain.WorkerDefinition{}, err
+	}
+	definition, err := registry.Get(id)
+	return registry, definition, err
+}
+
+func namedWorkerCommandError(stdout io.Writer, err error, jsonOutput, compact bool) error {
+	code := classifyError(err)
+	if errors.Is(err, workerregistry.ErrWorkerNotFound) {
+		code = "worker_not_found"
+	} else if errors.Is(err, workerstate.ErrUnsafeReset) || strings.Contains(err.Error(), "lifecycle transition") {
+		code = "invalid_transition"
+	}
+	if jsonOutput {
+		return writeJSONCommandError(stdout, code, err, compact)
+	}
+	return StructuredError{Err: err, Code: errorExitCode(code)}
+}
+
+func printNamedWorkerState(stdout io.Writer, project workerdomain.Project, state workerdomain.WorkerState) {
+	fmt.Fprintf(stdout, "Project: %s (%s)\n", project.Name, project.ID)
+	fmt.Fprintf(stdout, "Worker: %s\n", state.WorkerID)
+	fmt.Fprintf(stdout, "Lifecycle: %s\n", state.Lifecycle)
+	fmt.Fprintf(stdout, "Revision: %d\n", state.Revision)
+	fmt.Fprintf(stdout, "Active task: %s\n", valueOrDash(state.ActiveTaskID))
+	fmt.Fprintf(stdout, "Active run: %s\n", valueOrDash(state.ActiveRunID))
+	if state.RuntimeSession == nil {
+		fmt.Fprintln(stdout, "Runtime session: -")
+	} else {
+		fmt.Fprintf(stdout, "Runtime session: %s/%s\n", state.RuntimeSession.Runtime, state.RuntimeSession.SessionID)
+	}
+	fmt.Fprintf(stdout, "Last completed task: %s\n", valueOrDash(state.LastCompletedTaskID))
+	fmt.Fprintf(stdout, "Failure reason: %s\n", valueOrDash(state.FailureReason))
+	fmt.Fprintf(stdout, "Block reason: %s\n", valueOrDash(state.BlockReason))
+	fmt.Fprintf(stdout, "Created: %s\n", formatTime(&state.CreatedAt))
+	fmt.Fprintf(stdout, "Updated: %s\n", formatTime(&state.UpdatedAt))
+	fmt.Fprintf(stdout, "Lifecycle changed: %s\n", formatTime(&state.LifecycleChangedAt))
 }
 
 func printStatus(stdout io.Writer, summary pgruntime.StatusSummary) {
