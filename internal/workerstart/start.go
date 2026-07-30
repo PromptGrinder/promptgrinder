@@ -11,6 +11,8 @@ import (
 	"promptgrinder/internal/workerlaunch"
 	"promptgrinder/internal/workerregistry"
 	"promptgrinder/internal/workerstate"
+	"promptgrinder/internal/workerworktree"
+	"promptgrinder/internal/worktree"
 )
 
 type Service struct {
@@ -55,6 +57,49 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 
 	// PromptGrinder-owned reconciled policy is authoritative at launch time.
 	definition.Policy = workerState.EffectivePolicy
+	selection, err := workerworktree.Plan(registry.Root, definition.Policy, task.ID)
+	if err != nil {
+		return Result{}, fmt.Errorf("plan Git location for project %q worker %q task %q: %w", registry.Project.ID, definition.ID, task.ID, err)
+	}
+	if task.LaunchSetup != "preparing" && task.LaunchSetup != "prepared" {
+		if err := workerworktree.ValidateAvailable(registry.Root, selection); err != nil {
+			return Result{}, err
+		}
+		task.Worktree, task.Branch = selection.Worktree, selection.Branch
+		task.BaseBranch, task.BaseRevision = selection.BaseBranch, selection.BaseRevision
+		task.LaunchSetup = "preparing"
+		task, err = taskstore.New(s.Home).SaveLaunchLocation(task)
+		if err != nil {
+			return Result{}, fmt.Errorf("persist launch setup: %w", err)
+		}
+	}
+	lease, err := worktree.Acquire(s.Home, selection.Worktree, registry.Project.ID+"/"+definition.ID+"/"+task.ID, false)
+	if err != nil {
+		return Result{}, err
+	}
+	releaseClaim := true
+	defer func() {
+		if releaseClaim {
+			_ = lease.Release()
+		}
+	}()
+	selection, err = workerworktree.Prepare(registry.Root, definition.Policy, task)
+	if err != nil {
+		return Result{}, fmt.Errorf("prepare Git location for project %q worker %q task %q: %w", registry.Project.ID, definition.ID, task.ID, err)
+	}
+	task.Worktree, task.Branch = selection.Worktree, selection.Branch
+	task.BaseBranch, task.BaseRevision = selection.BaseBranch, selection.BaseRevision
+	task.LaunchSetup = "prepared"
+	task, err = taskstore.New(s.Home).SaveLaunchLocation(task)
+	if err != nil {
+		return Result{}, fmt.Errorf("persist prepared Git location: %w", err)
+	}
+	workerState.Worktree, workerState.Branch = selection.Worktree, selection.Branch
+	workerState.BaseBranch, workerState.BaseRevision = selection.BaseBranch, selection.BaseRevision
+	workerState, err = stateStore.Save(workerState, workerState.Revision)
+	if err != nil {
+		return Result{}, fmt.Errorf("persist worker Git location: %w", err)
+	}
 	request, err := workerlaunch.Build(workerlaunch.BuildOptions{
 		Project: registry.Project, Worker: definition, Repository: registry.Root,
 		Task: workerlaunch.TaskContext{
@@ -62,6 +107,7 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 		},
 		RuntimeOverride: runtimeOverride, RuntimeDefault: s.Config.WorkerRuntime,
 		RuntimeOptions: s.Config.RuntimeOptions,
+		Branch:         selection.Branch, BaseBranch: selection.BaseBranch, BaseRevision: selection.BaseRevision,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("build launch for project %q worker %q task %q: %w", registry.Project.ID, definition.ID, task.ID, err)
@@ -100,6 +146,17 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 			return Result{Request: request, Launch: launch, State: workerState}, fmt.Errorf("%s; persist failed lifecycle: %w", reason, transitionErr)
 		}
 		return Result{Request: request, Launch: launch, State: failed}, fmt.Errorf("%s", reason)
+	}
+	if launch.Process.PID > 0 {
+		if err := lease.TransferPID(launch.Process.PID); err != nil {
+			reason := fmt.Sprintf("persist worktree claim for project %q worker %q task %q: %v", registry.Project.ID, definition.ID, task.ID, err)
+			failed, transitionErr := stateStore.Transition(workerState, workerdomain.LifecycleFailed, reason)
+			if transitionErr != nil {
+				return Result{Request: request, Launch: launch, State: workerState}, fmt.Errorf("%s; persist failed lifecycle: %w", reason, transitionErr)
+			}
+			return Result{Request: request, Launch: launch, State: failed}, fmt.Errorf("%s", reason)
+		}
+		releaseClaim = false
 	}
 	executing, err := stateStore.Transition(workerState, workerdomain.LifecycleExecuting, "")
 	if err != nil {

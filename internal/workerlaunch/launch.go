@@ -42,14 +42,17 @@ type RuntimeConfig struct {
 
 // LaunchRequest contains all PromptGrinder-owned context needed by a runtime.
 type LaunchRequest struct {
-	Project    workerdomain.Project          `json:"project"`
-	Worker     workerdomain.WorkerDefinition `json:"worker"`
-	Repository string                        `json:"repository"`
-	Worktree   string                        `json:"worktree"`
-	Task       TaskContext                   `json:"task"`
-	Policy     workerdomain.WorkerPolicy     `json:"policy"`
-	Runtime    RuntimeConfig                 `json:"runtime"`
-	Context    string                        `json:"context"`
+	Project      workerdomain.Project          `json:"project"`
+	Worker       workerdomain.WorkerDefinition `json:"worker"`
+	Repository   string                        `json:"repository"`
+	Worktree     string                        `json:"worktree"`
+	Branch       string                        `json:"branch,omitempty"`
+	BaseBranch   string                        `json:"base_branch,omitempty"`
+	BaseRevision string                        `json:"base_revision,omitempty"`
+	Task         TaskContext                   `json:"task"`
+	Policy       workerdomain.WorkerPolicy     `json:"policy"`
+	Runtime      RuntimeConfig                 `json:"runtime"`
+	Context      string                        `json:"context"`
 }
 
 // LaunchResult reports runtime facts without granting the runtime ownership of
@@ -84,6 +87,9 @@ type BuildOptions struct {
 	RuntimeOverride string
 	RuntimeDefault  string
 	RuntimeOptions  map[string]map[string]any
+	Branch          string
+	BaseBranch      string
+	BaseRevision    string
 }
 
 // Build resolves and validates a deterministic launch request.
@@ -121,6 +127,7 @@ func Build(options BuildOptions) (LaunchRequest, error) {
 	request := LaunchRequest{
 		Project: options.Project, Worker: options.Worker,
 		Repository: repository, Worktree: worktree, Task: options.Task,
+		Branch: options.Branch, BaseBranch: options.BaseBranch, BaseRevision: options.BaseRevision,
 		Policy:  options.Worker.Policy,
 		Runtime: RuntimeConfig{Name: runtimeName, Options: cloneMap(options.RuntimeOptions[runtimeName])},
 	}
@@ -147,6 +154,11 @@ func ContextDocument(request LaunchRequest) string {
 	fmt.Fprintf(&b, "Responsibility: %s\n", request.Worker.Role)
 	fmt.Fprintf(&b, "Repository: %s\n", request.Repository)
 	fmt.Fprintf(&b, "Worktree: %s\n", request.Worktree)
+	if request.Branch != "" {
+		fmt.Fprintf(&b, "Branch: %s\n", request.Branch)
+		fmt.Fprintf(&b, "Base branch: %s\n", request.BaseBranch)
+		fmt.Fprintf(&b, "Base revision: %s\n", request.BaseRevision)
+	}
 	fmt.Fprintf(&b, "Allowed paths: %s\n", pathList(request.Policy.AllowedPaths))
 	fmt.Fprintf(&b, "Forbidden paths: %s\n", pathList(request.Policy.ForbiddenPaths))
 	if request.Task.ID == "" && request.Task.Source == "" && request.Task.Instructions == "" {

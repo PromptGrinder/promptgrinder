@@ -127,6 +127,29 @@ func (s *Store) Load(projectID, taskID string) (workerdomain.Task, error) {
 	return task, nil
 }
 
+// SaveLaunchLocation atomically records the Git location selected for a task.
+// It is intentionally narrow so task identity and its immutable content
+// snapshot cannot be changed by launch setup.
+func (s *Store) SaveLaunchLocation(task workerdomain.Task) (workerdomain.Task, error) {
+	current, err := s.Load(task.ProjectID, task.ID)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	current.Worktree = task.Worktree
+	current.Branch = task.Branch
+	current.BaseBranch = task.BaseBranch
+	current.BaseRevision = task.BaseRevision
+	current.LaunchSetup = task.LaunchSetup
+	current.UpdatedAt = s.now().UTC()
+	if err := current.Validate(); err != nil {
+		return workerdomain.Task{}, err
+	}
+	if err := s.writeAtomic(current); err != nil {
+		return workerdomain.Task{}, err
+	}
+	return current, nil
+}
+
 func (s *Store) List(projectID, workerID string) ([]workerdomain.Task, error) {
 	if err := workerdomain.ValidateSlug("project id", projectID); err != nil {
 		return nil, err
@@ -257,6 +280,45 @@ func (s *Store) create(task workerdomain.Task) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) writeAtomic(task workerdomain.Task) error {
+	path := s.Path(task.ProjectID, task.ID)
+	dir := filepath.Dir(path)
+	data, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(dir, ".task-update-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(append(data, '\n')); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	return handle.Sync()
 }
 
 func (s *Store) lock(projectID, workerID string) (func(), error) {

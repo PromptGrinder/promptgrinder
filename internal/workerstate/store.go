@@ -296,6 +296,7 @@ func reconcilePolicy(old, current workerdomain.WorkerPolicy) workerdomain.Worker
 	// existing values when a definition changes rather than silently moving.
 	result.BranchPrefix = old.BranchPrefix
 	result.DefaultWorktree = old.DefaultWorktree
+	result.RequireClean = old.RequireClean
 	return result
 }
 
@@ -322,6 +323,7 @@ func union(a, b []string) []string {
 func policiesEqual(a, b workerdomain.WorkerPolicy) bool {
 	return a.BranchPrefix == b.BranchPrefix &&
 		a.DefaultWorktree == b.DefaultWorktree &&
+		a.RequireClean == b.RequireClean &&
 		slices.Equal(a.AllowedPaths, b.AllowedPaths) &&
 		slices.Equal(a.ForbiddenPaths, b.ForbiddenPaths)
 }

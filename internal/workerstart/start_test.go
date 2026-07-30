@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,7 +55,19 @@ func TestStartRestoresExactContextAndPersistsReferences(t *testing.T) {
 	if result.State.ActiveRunID != "wrk_run-one" || result.State.RuntimeSession == nil || result.State.RuntimeSession.SessionID != "session-one" {
 		t.Fatalf("references not persisted: %#v", result.State)
 	}
-	want := "# PromptGrinder Worker Context\n\nProject: Example (example)\nWorker: Backend Sonar (backend-sonar)\nResponsibility: Fix backend findings.\nRepository: " + repo + "\nWorktree: " + repo + "\nAllowed paths: backend/**\nForbidden paths: secrets/**\nAssigned task: sonar-001\nTask source: tasks/sonar-001.md\nTask instructions: # Fix sonar\n\nDo the exact fix.\n\n"
+	if result.State.Worktree != repo || result.State.Branch != "worker/backend-sonar/sonar-001" ||
+		result.State.BaseBranch != "main" || result.State.BaseRevision == "" {
+		t.Fatalf("worker Git selection not persisted: %#v", result.State)
+	}
+	task, err := taskstore.New(home).Load("example", "sonar-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.LaunchSetup != "prepared" || task.Worktree != repo || task.Branch != result.State.Branch ||
+		task.BaseBranch != result.State.BaseBranch || task.BaseRevision != result.State.BaseRevision {
+		t.Fatalf("task Git selection not persisted: %#v", task)
+	}
+	want := "# PromptGrinder Worker Context\n\nProject: Example (example)\nWorker: Backend Sonar (backend-sonar)\nResponsibility: Fix backend findings.\nRepository: " + repo + "\nWorktree: " + repo + "\nBranch: worker/backend-sonar/sonar-001\nBase branch: main\nBase revision: " + result.Request.BaseRevision + "\nAllowed paths: backend/**\nForbidden paths: secrets/**\nAssigned task: sonar-001\nTask source: tasks/sonar-001.md\nTask instructions: # Fix sonar\n\nDo the exact fix.\n\n"
 	if launcher.request.Context != want {
 		t.Fatalf("injected context mismatch\nwant:\n%s\ngot:\n%s", want, launcher.request.Context)
 	}
@@ -111,7 +124,7 @@ func assignedProject(t *testing.T) (string, string) {
 	t.Helper()
 	repo := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
-	for _, dir := range []string{".git", ".ai", "backend", "tasks"} {
+	for _, dir := range []string{".ai", "backend", "tasks"} {
 		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -135,6 +148,16 @@ workers:
 	taskData := "# Fix sonar\n\nDo the exact fix.\n"
 	if err := os.WriteFile(filepath.Join(repo, "tasks", "sonar-001.md"), []byte(taskData), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-b", "main"}, {"config", "user.email", "test@example.com"},
+		{"config", "user.name", "PromptGrinder Test"}, {"add", "."},
+		{"commit", "-m", "initial"},
+	} {
+		command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
 	}
 	registry, err := workerregistry.Load(repo)
 	if err != nil {

@@ -49,7 +49,8 @@ type branchFile struct {
 }
 
 type worktreeFile struct {
-	Default string `yaml:"default"`
+	Default      string `yaml:"default"`
+	RequireClean bool   `yaml:"require_clean"`
 }
 
 type pathsFile struct {
@@ -100,6 +101,7 @@ func Load(start string) (*Registry, error) {
 			Policy: workerdomain.WorkerPolicy{
 				BranchPrefix:    item.Branch.Prefix,
 				DefaultWorktree: item.Worktree.Default,
+				RequireClean:    item.Worktree.RequireClean,
 				AllowedPaths:    normalizedPaths(item.Paths.Allowed),
 				ForbiddenPaths:  normalizedPaths(item.Paths.Forbidden),
 			},

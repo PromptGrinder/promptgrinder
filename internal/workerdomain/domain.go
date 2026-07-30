@@ -36,6 +36,7 @@ type RuntimeRef struct {
 type WorkerPolicy struct {
 	BranchPrefix    string   `json:"branch_prefix" yaml:"branch_prefix"`
 	DefaultWorktree string   `json:"default_worktree" yaml:"default_worktree"`
+	RequireClean    bool     `json:"require_clean" yaml:"require_clean"`
 	AllowedPaths    []string `json:"allowed_paths,omitempty" yaml:"allowed_paths,omitempty"`
 	ForbiddenPaths  []string `json:"forbidden_paths,omitempty" yaml:"forbidden_paths,omitempty"`
 }
@@ -88,6 +89,10 @@ type WorkerState struct {
 	BlockReason         string       `json:"block_reason,omitempty" yaml:"block_reason,omitempty"`
 	LastCompletedTaskID string       `json:"last_completed_task_id,omitempty" yaml:"last_completed_task_id,omitempty"`
 	EffectivePolicy     WorkerPolicy `json:"effective_policy" yaml:"effective_policy"`
+	Worktree            string       `json:"worktree,omitempty" yaml:"worktree,omitempty"`
+	Branch              string       `json:"branch,omitempty" yaml:"branch,omitempty"`
+	BaseBranch          string       `json:"base_branch,omitempty" yaml:"base_branch,omitempty"`
+	BaseRevision        string       `json:"base_revision,omitempty" yaml:"base_revision,omitempty"`
 }
 
 // SessionRef identifies a runtime-owned session without granting the runtime
@@ -111,6 +116,11 @@ type Task struct {
 	AttemptCount    int        `json:"attempt_count" yaml:"attempt_count"`
 	CreatedAt       time.Time  `json:"created_at" yaml:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at" yaml:"updated_at"`
+	Worktree        string     `json:"worktree,omitempty" yaml:"worktree,omitempty"`
+	Branch          string     `json:"branch,omitempty" yaml:"branch,omitempty"`
+	BaseBranch      string     `json:"base_branch,omitempty" yaml:"base_branch,omitempty"`
+	BaseRevision    string     `json:"base_revision,omitempty" yaml:"base_revision,omitempty"`
+	LaunchSetup     string     `json:"launch_setup,omitempty" yaml:"launch_setup,omitempty"`
 }
 
 type TaskStatus string

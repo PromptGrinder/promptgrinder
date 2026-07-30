@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,6 +51,40 @@ func TestAcquireAllowsDifferentWorktreesAndExplicitOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := override.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAcquireRejectsConcurrentClaimInDisposableGitWorktree(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	command := exec.Command("git", "-C", repo, "init", "-b", "main")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	first, err := Acquire(home, repo, "backend-sonar/task-one", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
+	if _, err := Acquire(home, repo, "frontend/task-two", false); err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("concurrent claim error = %v", err)
+	}
+}
+
+func TestTransferPIDPreservesClaimForRuntimeProcess(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	lease, err := Acquire(home, repo, "named worker", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.TransferPID(os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Acquire(home, repo, "other worker", false); err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("transferred claim error = %v", err)
+	}
+	if err := lease.Release(); err != nil {
 		t.Fatal(err)
 	}
 }

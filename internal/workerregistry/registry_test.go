@@ -33,6 +33,7 @@ workers:
       prefix: worker/backend-sonar
     worktree:
       default: worktrees/backend
+      require_clean: true
     paths:
       allowed: [backend/**]
       forbidden: [infrastructure/production/**]
@@ -71,6 +72,9 @@ func TestLoadDiscoversRootFromRootAndNestedDirectory(t *testing.T) {
 		}
 		if got := []string{registry.List()[0].ID, registry.List()[1].ID}; !reflect.DeepEqual(got, []string{"backend-sonar", "frontend"}) {
 			t.Fatalf("worker IDs = %v", got)
+		}
+		if !registry.Workers["backend-sonar"].Policy.RequireClean {
+			t.Fatal("backend-sonar clean-worktree policy was not loaded")
 		}
 	}
 }
