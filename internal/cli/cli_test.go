@@ -71,10 +71,74 @@ func TestV1PublicRootCommandContract(t *testing.T) {
 	want := []string{
 		"cancel", "complete", "defaults", "doctor", "engines", "events", "fail", "list",
 		"logs", "prune", "reconcile", "run", "run-folder", "sequence",
-		"sequences", "setup", "status", "terminals", "validate", "workers",
+		"sequences", "setup", "status", "terminals", "validate", "worker", "workers",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("public root commands changed\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestCLIWorkerListAndShowTextAndJSON(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := `version: 1
+project: {id: example, name: Example}
+workers:
+  backend:
+    display_name: Backend Engineer
+    role: Build APIs.
+    runtime: codex
+    branch: {prefix: worker/backend}
+    worktree: {default: .}
+    paths:
+      allowed: [backend/**]
+      forbidden: [backend/secrets/**]
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "workers.yaml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+
+	tests := []struct {
+		name string
+		args []string
+		want []string
+		json bool
+	}{
+		{name: "list text", args: []string{"worker", "list"}, want: []string{"PROJECT\texample\tExample", "backend\tBackend Engineer\tcodex\t."}},
+		{name: "show text", args: []string{"worker", "show", "backend"}, want: []string{"Worker: backend", "Allowed paths: backend/**"}},
+		{name: "list JSON", args: []string{"worker", "list", "--json"}, want: []string{`"project"`, `"workers"`}, json: true},
+		{name: "show JSON", args: []string{"worker", "show", "backend", "--json"}, want: []string{`"project"`, `"worker"`, `"backend"`}, json: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			out := &bytes.Buffer{}
+			cmd := NewRootCommand(&fakeService{}, out, &bytes.Buffer{})
+			cmd.SetArgs(test.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if test.json && !json.Valid(out.Bytes()) {
+				t.Fatalf("invalid JSON: %s", out.String())
+			}
+			for _, want := range test.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("output %q does not contain %q", out.String(), want)
+				}
+			}
+		})
 	}
 }
 

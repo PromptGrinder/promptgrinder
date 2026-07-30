@@ -23,6 +23,8 @@ import (
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/ui"
 	"promptgrinder/internal/worker"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerregistry"
 
 	"github.com/spf13/cobra"
 )
@@ -111,6 +113,16 @@ func ExitCode(err error) (int, bool) {
 
 type listJSONOutput struct {
 	Workers []state.Worker `json:"workers"`
+}
+
+type workerDefinitionsJSONOutput struct {
+	Project workerdomain.Project            `json:"project"`
+	Workers []workerdomain.WorkerDefinition `json:"workers"`
+}
+
+type workerDefinitionJSONOutput struct {
+	Project workerdomain.Project          `json:"project"`
+	Worker  workerdomain.WorkerDefinition `json:"worker"`
 }
 
 type statusJSONOutput struct {
@@ -865,6 +877,75 @@ Examples:
 	workersCmd.Flags().BoolVar(&workersJSON, "json", false, "print machine-readable JSON")
 	root.AddCommand(workersCmd)
 
+	var workerListJSON bool
+	var workerShowJSON bool
+	workerCmd := &cobra.Command{
+		Use:   "worker",
+		Short: "Inspect project-owned named worker definitions.",
+	}
+	workerListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List project-owned named worker definitions.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				if workerListJSON {
+					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+				}
+				return err
+			}
+			definitions := registry.List()
+			if workerListJSON {
+				return writeJSON(stdout, workerDefinitionsJSONOutput{Project: registry.Project, Workers: definitions}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "PROJECT\t%s\t%s\n", registry.Project.ID, registry.Project.Name)
+			fmt.Fprintln(stdout, "WORKER ID\tDISPLAY NAME\tRUNTIME\tWORKTREE")
+			for _, definition := range definitions {
+				fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", definition.ID, definition.DisplayName, definition.Runtime.Name, definition.Policy.DefaultWorktree)
+			}
+			return nil
+		},
+	}
+	workerListCmd.Flags().BoolVar(&workerListJSON, "json", false, "print machine-readable JSON")
+	workerShowCmd := &cobra.Command{
+		Use:   "show <worker-id>",
+		Short: "Show one project-owned named worker definition.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				if workerShowJSON {
+					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+				}
+				return err
+			}
+			definition, err := registry.Get(args[0])
+			if err != nil {
+				if workerShowJSON {
+					return writeJSONCommandError(stdout, "worker_not_found", err, compactJSON)
+				}
+				return StructuredError{Err: err, Code: ExitWorkerNotFound}
+			}
+			if workerShowJSON {
+				return writeJSON(stdout, workerDefinitionJSONOutput{Project: registry.Project, Worker: definition}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Project: %s (%s)\n", registry.Project.Name, registry.Project.ID)
+			fmt.Fprintf(stdout, "Worker: %s\n", definition.ID)
+			fmt.Fprintf(stdout, "Display name: %s\n", definition.DisplayName)
+			fmt.Fprintf(stdout, "Role: %s\n", definition.Role)
+			fmt.Fprintf(stdout, "Runtime: %s\n", definition.Runtime.Name)
+			fmt.Fprintf(stdout, "Branch prefix: %s\n", definition.Policy.BranchPrefix)
+			fmt.Fprintf(stdout, "Default worktree: %s\n", definition.Policy.DefaultWorktree)
+			fmt.Fprintf(stdout, "Allowed paths: %s\n", displayPaths(definition.Policy.AllowedPaths))
+			fmt.Fprintf(stdout, "Forbidden paths: %s\n", displayPaths(definition.Policy.ForbiddenPaths))
+			return nil
+		},
+	}
+	workerShowCmd.Flags().BoolVar(&workerShowJSON, "json", false, "print machine-readable JSON")
+	workerCmd.AddCommand(workerListCmd, workerShowCmd)
+	root.AddCommand(workerCmd)
+
 	var eventTail int
 	var eventType string
 	var eventSeverity string
@@ -1397,6 +1478,13 @@ func printWorkers(stdout io.Writer, service Service, workers []state.Worker, inc
 		}
 	}
 	return nil
+}
+
+func displayPaths(paths []string) string {
+	if len(paths) == 0 {
+		return "(none)"
+	}
+	return strings.Join(paths, ", ")
 }
 
 func sequencePromptLabel(item runfolder.SequenceItem) string {

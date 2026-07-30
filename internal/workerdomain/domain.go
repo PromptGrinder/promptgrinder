@@ -117,7 +117,7 @@ func (p WorkerPolicy) Validate() error {
 	if p.BranchPrefix == "" {
 		return fmt.Errorf("branch prefix is required")
 	}
-	if err := validateRepositoryPath("branch prefix", p.BranchPrefix, false); err != nil {
+	if err := validateBranchPrefix(p.BranchPrefix); err != nil {
 		return err
 	}
 	if p.DefaultWorktree == "" {
@@ -134,6 +134,25 @@ func (p WorkerPolicy) Validate() error {
 	for _, value := range p.ForbiddenPaths {
 		if err := validateRepositoryPath("forbidden path", value, true); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateBranchPrefix(value string) error {
+	if err := validateRepositoryPath("branch prefix", value, false); err != nil {
+		return err
+	}
+	if value == "." || strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") ||
+		strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") ||
+		strings.Contains(value, "//") || strings.Contains(value, "..") ||
+		strings.Contains(value, "@{") || strings.HasSuffix(value, ".lock") ||
+		strings.ContainsAny(value, `\ ~^:?*[]`) {
+		return fmt.Errorf("branch prefix %q is invalid", value)
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("branch prefix %q is invalid", value)
 		}
 	}
 	return nil
