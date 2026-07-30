@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/taskstore"
@@ -117,6 +118,45 @@ func TestStartRejectsRestartWhileExecuting(t *testing.T) {
 		Start(context.Background(), repo, "backend-sonar", "")
 	if err == nil || !strings.Contains(err.Error(), `lifecycle "executing"`) || launcher.calls != 0 {
 		t.Fatalf("err/calls = %v/%d", err, launcher.calls)
+	}
+}
+
+type violatingLauncher struct{}
+
+func (violatingLauncher) Launch(_ context.Context, request workerlaunch.LaunchRequest) (workerlaunch.LaunchResult, error) {
+	if err := os.MkdirAll(filepath.Join(request.Worktree, "secrets"), 0o755); err != nil {
+		return workerlaunch.LaunchResult{}, err
+	}
+	if err := os.WriteFile(filepath.Join(request.Worktree, "secrets", "key.txt"), []byte("retain me"), 0o600); err != nil {
+		return workerlaunch.LaunchResult{}, err
+	}
+	now := time.Now().UTC()
+	exit := 0
+	return workerlaunch.LaunchResult{
+		RuntimeName: "codex", RunID: "wrk_violation",
+		Process: workerlaunch.RuntimeProcessResult{FinishedAt: &now, ExitCode: &exit},
+	}, nil
+}
+
+func TestStartCompletionViolationBlocksEmitsEventAndRetainsChanges(t *testing.T) {
+	repo, home := assignedProject(t)
+	result, err := (Service{Home: home, Launchers: map[string]workerlaunch.Launcher{"codex": violatingLauncher{}}}).
+		Start(context.Background(), repo, "backend-sonar", "")
+	if err == nil || result.State.Lifecycle != workerdomain.LifecycleBlocked {
+		t.Fatalf("result/error = %#v / %v", result, err)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(repo, "secrets", "key.txt")); readErr != nil || string(data) != "retain me" {
+		t.Fatalf("violating change not retained: %q, %v", data, readErr)
+	}
+	eventData, readErr := os.ReadFile(filepath.Join(home, "projects", "example", "workers", "backend-sonar", "events.jsonl"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	event := string(eventData)
+	for _, want := range []string{`"type":"worker.path_policy_violated"`, `"checkpoint":"completion"`, `"path":"secrets/key.txt"`, `"rule":"secrets/**"`} {
+		if !strings.Contains(event, want) {
+			t.Fatalf("event missing %s: %s", want, event)
+		}
 	}
 }
 

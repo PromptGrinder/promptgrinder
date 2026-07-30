@@ -9,6 +9,7 @@ import (
 	"promptgrinder/internal/taskstore"
 	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerlaunch"
+	"promptgrinder/internal/workerpathpolicy"
 	"promptgrinder/internal/workerregistry"
 	"promptgrinder/internal/workerstate"
 	"promptgrinder/internal/workerworktree"
@@ -121,6 +122,16 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 			return Result{}, fmt.Errorf("preflight project %q worker %q task %q runtime %q: %w", registry.Project.ID, definition.ID, task.ID, request.Runtime.Name, err)
 		}
 	}
+	if err := workerpathpolicy.Validate(definition.Policy); err != nil {
+		return Result{}, fmt.Errorf("validate path policy for project %q worker %q: %w", registry.Project.ID, definition.ID, err)
+	}
+	baseline, err := workerpathpolicy.Capture(request.Worktree)
+	if err != nil {
+		return Result{}, fmt.Errorf("snapshot Git state for project %q worker %q task %q: %w", registry.Project.ID, definition.ID, task.ID, err)
+	}
+	if err := workerpathpolicy.SaveSnapshot(s.Home, registry.Project.ID, definition.ID, baseline); err != nil {
+		return Result{}, fmt.Errorf("persist path-policy snapshot for project %q worker %q task %q: %w", registry.Project.ID, definition.ID, task.ID, err)
+	}
 
 	workerState, err = stateStore.Transition(workerState, workerdomain.LifecycleStarting, "")
 	if err != nil {
@@ -161,6 +172,34 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 	executing, err := stateStore.Transition(workerState, workerdomain.LifecycleExecuting, "")
 	if err != nil {
 		return Result{Request: request, Launch: launch, State: workerState}, err
+	}
+	// A launcher that returns a finished process provides the existing safe
+	// completion checkpoint. Asynchronous launchers retain the persisted
+	// baseline for their completion supervisor to check.
+	if launch.Process.FinishedAt != nil {
+		paths, checkErr := workerpathpolicy.AttributedChanges(request.Worktree, baseline)
+		if checkErr != nil {
+			return Result{Request: request, Launch: launch, State: executing}, fmt.Errorf("check completed worker path policy: %w", checkErr)
+		}
+		violations, checkErr := workerpathpolicy.Violations(definition.Policy, paths)
+		if checkErr != nil {
+			return Result{Request: request, Launch: launch, State: executing}, fmt.Errorf("evaluate completed worker path policy: %w", checkErr)
+		}
+		if len(violations) > 0 {
+			reason := fmt.Sprintf("path policy violation at completion: %d path(s); changes retained for review", len(violations))
+			blocked, transitionErr := stateStore.Transition(executing, workerdomain.LifecycleBlocked, reason)
+			eventErr := workerpathpolicy.AppendViolationEvent(s.Home, workerpathpolicy.Event{
+				ProjectID: registry.Project.ID, WorkerID: definition.ID, TaskID: task.ID,
+				RunID: launch.RunID, Checkpoint: "completion", Violations: violations, Message: reason,
+			})
+			if transitionErr != nil {
+				return Result{Request: request, Launch: launch, State: executing}, fmt.Errorf("%s; persist blocked lifecycle: %w", reason, transitionErr)
+			}
+			if eventErr != nil {
+				return Result{Request: request, Launch: launch, State: blocked}, fmt.Errorf("%s; persist violation event: %w", reason, eventErr)
+			}
+			return Result{Request: request, Launch: launch, State: blocked}, fmt.Errorf("%s", reason)
+		}
 	}
 	return Result{Request: request, Launch: launch, State: executing}, nil
 }

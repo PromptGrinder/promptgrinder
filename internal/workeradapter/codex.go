@@ -61,7 +61,7 @@ func taskPath(request workerlaunch.LaunchRequest) string {
 }
 
 func metadata(request workerlaunch.LaunchRequest) map[string]any {
-	out := make(map[string]any, len(request.Runtime.Options)+6)
+	out := make(map[string]any, len(request.Runtime.Options)+10)
 	engine := make(map[string]any, len(request.Runtime.Options)+1)
 	engine["name"] = request.Runtime.Name
 	for key, value := range request.Runtime.Options {
@@ -72,6 +72,10 @@ func metadata(request workerlaunch.LaunchRequest) map[string]any {
 	out["selected_branch"] = request.Branch
 	out["base_branch"] = request.BaseBranch
 	out["base_revision"] = request.BaseRevision
+	out["named_project_id"] = request.Project.ID
+	out["named_worker_id"] = request.Worker.ID
+	out["named_task_id"] = request.Task.ID
+	out["named_path_policy"] = true
 	if relative, err := filepath.Rel(request.Repository, request.Worktree); err == nil && relative != "." {
 		out["working_directory"] = relative
 	}

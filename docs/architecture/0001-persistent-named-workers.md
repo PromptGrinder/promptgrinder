@@ -31,3 +31,16 @@ failed -> idle
 Runtime adapters may report facts, but PromptGrinder validates and owns these
 transitions. Core project, worker, policy, task, and lifecycle contracts remain
 runtime-neutral and must not import a runtime-specific adapter.
+
+Path policy is an orchestration guardrail. PromptGrinder snapshots the Git
+working tree before a named runtime starts, attributes subsequent changes
+without claiming unchanged pre-existing user edits, and blocks progression
+when changed paths fall outside allowed rules or match a forbidden rule.
+Forbidden rules take precedence. Violating changes remain available for human
+inspection and recovery; PromptGrinder does not revert, stash, delete, commit,
+or otherwise overwrite them.
+
+This enforcement complements runtime sandboxing. It does not replace a runtime
+sandbox and is not a complete security boundary: it detects repository changes
+at safe checkpoints rather than preventing arbitrary process or filesystem
+access.
