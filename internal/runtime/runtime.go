@@ -21,6 +21,9 @@ import (
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/terminal"
 	"promptgrinder/internal/worker"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerpathpolicy"
+	"promptgrinder/internal/workerstate"
 	"promptgrinder/internal/worktree"
 )
 
@@ -872,6 +875,9 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 	if err := s.Store.MarkFinished(recordPath, exitCode); err != nil {
 		return err
 	}
+	if err := s.enforceNamedWorkerPathPolicy(worker); err != nil {
+		return err
+	}
 	if !resultParsed {
 		if malformedSuccess {
 			return fmt.Errorf("Codex exited successfully but produced no parseable final message; inspect with promptgrinder logs %s, then retry the task", worker.ID)
@@ -907,6 +913,48 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 		return fmt.Errorf("Codex exited successfully but produced no parseable final message; inspect with promptgrinder logs %s, then retry the task", worker.ID)
 	}
 	return nil
+}
+
+func (s Service) enforceNamedWorkerPathPolicy(worker state.Worker) error {
+	projectID, _ := worker.Metadata["named_project_id"].(string)
+	workerID, _ := worker.Metadata["named_worker_id"].(string)
+	taskID, _ := worker.Metadata["named_task_id"].(string)
+	enabled, _ := worker.Metadata["named_path_policy"].(bool)
+	worktreePath, _ := worker.Metadata["selected_worktree"].(string)
+	if !enabled || projectID == "" || workerID == "" || taskID == "" || worktreePath == "" {
+		return nil
+	}
+	baseline, err := workerpathpolicy.LoadSnapshot(s.Config.HomeDir, projectID, workerID)
+	if err != nil {
+		return fmt.Errorf("load named-worker path-policy snapshot: %w", err)
+	}
+	paths, err := workerpathpolicy.AttributedChanges(worktreePath, baseline)
+	if err != nil {
+		return fmt.Errorf("check named-worker path policy at completion: %w", err)
+	}
+	store := workerstate.New(s.Config.HomeDir)
+	namedState, err := store.Load(projectID, workerID)
+	if err != nil {
+		return err
+	}
+	violations, err := workerpathpolicy.Violations(namedState.EffectivePolicy, paths)
+	if err != nil || len(violations) == 0 {
+		return err
+	}
+	reason := fmt.Sprintf("path policy violation at completion: %d path(s); changes retained for review", len(violations))
+	if namedState.Lifecycle == workerdomain.LifecycleExecuting {
+		namedState, err = store.Transition(namedState, workerdomain.LifecycleBlocked, reason)
+		if err != nil {
+			return err
+		}
+	}
+	if err := workerpathpolicy.AppendViolationEvent(s.Config.HomeDir, workerpathpolicy.Event{
+		ProjectID: projectID, WorkerID: workerID, TaskID: taskID, RunID: worker.ID,
+		Checkpoint: "completion", Violations: violations, Message: reason,
+	}); err != nil {
+		return err
+	}
+	return fmt.Errorf("%s", reason)
 }
 
 func valueOrUnknown(value string) string {

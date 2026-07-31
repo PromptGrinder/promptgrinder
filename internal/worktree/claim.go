@@ -40,7 +40,10 @@ func Acquire(homeDir, repoRoot, owner string, allowConcurrent bool) (*Lease, err
 	}
 	claim := Claim{Worktree: worktree, Owner: owner, PID: os.Getpid(), Token: token, Started: time.Now().UTC()}
 	root := filepath.Join(homeDir, "state", "worktree-claims")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256([]byte(worktree))
@@ -50,7 +53,7 @@ func Acquire(homeDir, repoRoot, owner string, allowConcurrent bool) (*Lease, err
 		if err != nil {
 			return nil, err
 		}
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			if _, writeErr := file.Write(append(data, '\n')); writeErr != nil {
 				_ = file.Close()
@@ -97,6 +100,49 @@ func (l *Lease) Release() error {
 	return os.Remove(l.path)
 }
 
+// TransferPID keeps a claim active after a detached launch by assigning it to
+// the runtime process. The token check prevents an old lease from overwriting
+// a newer owner.
+func (l *Lease) TransferPID(pid int) error {
+	if l == nil || l.path == "" || pid <= 0 {
+		return fmt.Errorf("cannot transfer worktree claim to invalid pid %d", pid)
+	}
+	existing, err := load(l.path)
+	if err != nil {
+		return err
+	}
+	if existing.Token != l.claim.Token {
+		return fmt.Errorf("worktree claim ownership changed before pid transfer")
+	}
+	l.claim.PID = pid
+	data, err := json.MarshalIndent(l.claim, "", "  ")
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(l.path), ".claim-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(append(data, '\n')); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, l.path); err != nil {
+		return err
+	}
+	l.claim.PID = pid
+	return nil
+}
+
 func load(path string) (Claim, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -118,6 +164,9 @@ func canonicalPath(path string) (string, error) {
 		return "", err
 	}
 	resolved, err := filepath.EvalSymlinks(abs)
+	if errors.Is(err, os.ErrNotExist) {
+		return filepath.Clean(abs), nil
+	}
 	if err != nil {
 		return "", err
 	}

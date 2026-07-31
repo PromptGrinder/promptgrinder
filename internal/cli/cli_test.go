@@ -19,6 +19,9 @@ import (
 	pgruntime "promptgrinder/internal/runtime"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/worker"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerlaunch"
+	"promptgrinder/internal/workerstate"
 )
 
 func TestCLIVersion(t *testing.T) {
@@ -58,6 +61,20 @@ func TestCLIHelpUsesPromptGrinder(t *testing.T) {
 	}
 }
 
+func TestNamedWorkerLaunchersRegisterRuntimeAdapters(t *testing.T) {
+	launchers := namedWorkerLaunchers(pgruntime.Service{})
+	for _, name := range []string{"codex", "antigravity"} {
+		launcher, ok := launchers[name]
+		if !ok {
+			t.Fatalf("runtime %q is not registered", name)
+		}
+		provider, ok := launcher.(workerlaunch.CapabilityProvider)
+		if !ok || !provider.Capabilities().Headless {
+			t.Fatalf("runtime %q capabilities are unavailable", name)
+		}
+	}
+}
+
 func TestV1PublicRootCommandContract(t *testing.T) {
 	cmd := NewRootCommand(&fakeService{}, &bytes.Buffer{}, &bytes.Buffer{})
 	var got []string
@@ -70,11 +87,316 @@ func TestV1PublicRootCommandContract(t *testing.T) {
 	sort.Strings(got)
 	want := []string{
 		"cancel", "complete", "defaults", "doctor", "engines", "events", "fail", "list",
-		"logs", "prune", "reconcile", "run", "run-folder", "sequence",
-		"sequences", "setup", "status", "terminals", "validate", "workers",
+		"logs", "prune", "reconcile", "review", "run", "run-folder", "scheduler", "sequence",
+		"sequences", "setup", "status", "task", "terminals", "validate", "worker", "workers",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("public root commands changed\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestCLIWorkerListAndShowTextAndJSON(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := `version: 1
+project: {id: example, name: Example}
+workers:
+  backend:
+    display_name: Backend Engineer
+    role: Build APIs.
+    runtime: codex
+    branch: {prefix: worker/backend}
+    worktree: {default: .}
+    paths:
+      allowed: [backend/**]
+      forbidden: [backend/secrets/**]
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "workers.yaml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+
+	tests := []struct {
+		name string
+		args []string
+		want []string
+		json bool
+	}{
+		{name: "list text", args: []string{"worker", "list"}, want: []string{"PROJECT\texample\tExample", "backend\tBackend Engineer\tcodex\t."}},
+		{name: "show text", args: []string{"worker", "show", "backend"}, want: []string{"Worker: backend", "Allowed paths: backend/**"}},
+		{name: "list JSON", args: []string{"worker", "list", "--json"}, want: []string{`"project"`, `"workers"`}, json: true},
+		{name: "show JSON", args: []string{"worker", "show", "backend", "--json"}, want: []string{`"project"`, `"worker"`, `"backend"`}, json: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			out := &bytes.Buffer{}
+			cmd := NewRootCommand(&fakeService{}, out, &bytes.Buffer{})
+			cmd.SetArgs(test.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if test.json && !json.Valid(out.Bytes()) {
+				t.Fatalf("invalid JSON: %s", out.String())
+			}
+			for _, want := range test.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("output %q does not contain %q", out.String(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestCLITaskAssignListShowAndErrors(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := `version: 1
+project: {id: example, name: Example}
+workers:
+  backend:
+    display_name: Backend Engineer
+    role: Build APIs.
+    runtime: codex
+    branch: {prefix: worker/backend}
+    worktree: {default: .}
+    paths: {allowed: ["**"], forbidden: [secrets/**]}
+  frontend:
+    display_name: Frontend Engineer
+    role: Build UI.
+    runtime: codex
+    branch: {prefix: worker/frontend}
+    worktree: {default: .}
+    paths: {allowed: ["**"], forbidden: [secrets/**]}
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "workers.yaml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "work.md"), []byte("# Build it\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: home}}}
+
+	run := func(args ...string) (string, error) {
+		out := &bytes.Buffer{}
+		cmd := NewRootCommand(service, out, &bytes.Buffer{})
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		return out.String(), err
+	}
+	out, err := run("task", "assign", "backend", "work.md")
+	if err != nil || !strings.Contains(out, "Assigned task work to worker backend") {
+		t.Fatalf("assign output = %q, error %v", out, err)
+	}
+	out, err = run("task", "list", "--worker", "backend")
+	if err != nil || !strings.Contains(out, "work\tbackend\tassigned\t0\twork.md") {
+		t.Fatalf("list output = %q, error %v", out, err)
+	}
+	out, err = run("task", "show", "work")
+	if err != nil || !strings.Contains(out, "Instructions:\n# Build it") {
+		t.Fatalf("show output = %q, error %v", out, err)
+	}
+	out, err = run("task", "show", "work", "--json")
+	if err != nil || !json.Valid([]byte(out)) || !strings.Contains(out, `"content_snapshot"`) {
+		t.Fatalf("JSON show output = %q, error %v", out, err)
+	}
+	if _, err = run("task", "assign", "backend", "work.md"); err == nil {
+		t.Fatal("duplicate assignment succeeded")
+	} else if code, ok := ExitCode(err); !ok || code != ExitInvalidTransition {
+		t.Fatalf("duplicate exit = %d, %v; error %v", code, ok, err)
+	}
+	if _, err = run("task", "list", "--worker", "missing"); err == nil {
+		t.Fatal("unknown worker filter succeeded")
+	} else if code, ok := ExitCode(err); !ok || code != ExitWorkerNotFound {
+		t.Fatalf("unknown worker exit = %d, %v; error %v", code, ok, err)
+	}
+}
+
+func TestCLIWorkerStartDryRunCreatesNoStateOrProcess(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "promptgrinder-home")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := `version: 1
+project: {id: example, name: Example}
+workers:
+  backend:
+    display_name: Backend Engineer
+    role: Build APIs.
+    runtime: claude
+    branch: {prefix: worker/backend}
+    worktree: {default: .}
+    paths:
+      allowed: [backend/**]
+      forbidden: [backend/secrets/**]
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "workers.yaml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{
+		HomeDir: home,
+		RuntimeOptions: map[string]map[string]any{
+			"codex": {"api_key": "must-not-leak", "model": "test-model"},
+		},
+	}}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "start", "backend", "--dry-run", "--runtime", "codex"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	for _, want := range []string{"Launch plan (dry run)", "Runtime: codex", "api_key: \"[redacted]\"", "No process started. No mutable state created."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q: %s", want, output)
+		}
+	}
+	if strings.Contains(output, "must-not-leak") {
+		t.Fatalf("output leaked secret: %s", output)
+	}
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatalf("dry-run touched state home %s: %v", home, err)
+	}
+}
+
+func TestCLIWorkerStatusAndResetTextAndJSON(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "promptgrinder-home")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryFile := `version: 1
+project: {id: example, name: Example}
+workers:
+  backend:
+    display_name: Backend Engineer
+    role: Build APIs.
+    runtime: codex
+    branch: {prefix: worker/backend}
+    worktree: {default: .}
+    paths:
+      allowed: [backend/**]
+      forbidden: [backend/secrets/**]
+`
+	if err := os.WriteFile(filepath.Join(repo, ".ai", "workers.yaml"), []byte(registryFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: home}}}
+
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "status", "backend"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Project: Example (example)", "Worker: backend", "Lifecycle: idle", "Revision: 1"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status output %q missing %q", out.String(), want)
+		}
+	}
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "status", "backend", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var statusDecoded namedWorkerStateJSONOutput
+	if err := json.Unmarshal(out.Bytes(), &statusDecoded); err != nil || statusDecoded.State.Lifecycle != workerdomain.LifecycleIdle {
+		t.Fatalf("status JSON = %q, decoded %#v, error %v", out.String(), statusDecoded, err)
+	}
+
+	store := workerstate.New(home)
+	stateValue, err := store.Load("example", "backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateValue.Lifecycle = workerdomain.LifecycleFailed
+	stateValue.FailureReason = "runtime exited"
+	if _, err := store.Save(stateValue, stateValue.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "reset", "backend", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decoded namedWorkerStateJSONOutput
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("invalid reset JSON %q: %v", out.String(), err)
+	}
+	if decoded.State.Lifecycle != workerdomain.LifecycleIdle || decoded.State.FailureReason != "" {
+		t.Fatalf("reset JSON state = %#v", decoded.State)
+	}
+	revision := decoded.State.Revision
+
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "reset", "backend", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil || decoded.State.Revision != revision {
+		t.Fatalf("repeated reset changed revision: %s, %v", out.String(), err)
+	}
+	out.Reset()
+	cmd = NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"worker", "reset", "backend"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Worker backend is idle (revision") {
+		t.Fatalf("reset text output = %q", out.String())
 	}
 }
 

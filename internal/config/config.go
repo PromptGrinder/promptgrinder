@@ -7,39 +7,47 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"promptgrinder/internal/workerdomain"
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	HomeDir                       string        `json:"home_dir"`
-	Engine                        string        `json:"engine"`
-	TerminalAdapter               string        `json:"terminal_adapter"`
-	TerminalMode                  string        `json:"terminal_mode"`
-	TerminalCloseOnFinish         bool          `json:"terminal_close_on_finish"`
-	TerminalCloseOnFailure        bool          `json:"terminal_close_on_failure"`
-	WorkerHeartbeatInterval       time.Duration `json:"worker_heartbeat_interval"`
-	WorkerTimeout                 time.Duration `json:"worker_timeout"`
-	CodexSandbox                  string        `json:"codex_sandbox"`
-	CodexApproval                 string        `json:"codex_approval"`
-	CodexExecutable               string        `json:"codex_executable,omitempty"`
-	RunEngine                     string        `json:"run_engine"`
-	RunFolderRepo                 string        `json:"run_folder_repo"`
-	RunFolderTemplate             string        `json:"run_folder_template"`
-	RunFolderEngine               string        `json:"run_folder_engine"`
-	RunFolderResume               bool          `json:"run_folder_resume"`
-	RunFolderFresh                bool          `json:"run_folder_fresh"`
-	RunFolderRestart              bool          `json:"run_folder_restart"`
-	RunFolderNoResume             bool          `json:"run_folder_no_resume"`
-	RunFolderCheckpoint           bool          `json:"run_folder_checkpoint"`
-	RunFolderCommitEach           bool          `json:"run_folder_commit_each"`
-	RunFolderRequireCleanGit      bool          `json:"run_folder_require_clean_git"`
-	RunFolderIncludeSpecification bool          `json:"run_folder_include_specification"`
-	RunFolderDetach               bool          `json:"run_folder_detach"`
-	Warnings                      []string      `json:"warnings,omitempty"`
+	HomeDir                       string                    `json:"home_dir"`
+	Engine                        string                    `json:"engine"`
+	TerminalAdapter               string                    `json:"terminal_adapter"`
+	TerminalMode                  string                    `json:"terminal_mode"`
+	TerminalCloseOnFinish         bool                      `json:"terminal_close_on_finish"`
+	TerminalCloseOnFailure        bool                      `json:"terminal_close_on_failure"`
+	WorkerHeartbeatInterval       time.Duration             `json:"worker_heartbeat_interval"`
+	WorkerTimeout                 time.Duration             `json:"worker_timeout"`
+	CodexSandbox                  string                    `json:"codex_sandbox"`
+	CodexApproval                 string                    `json:"codex_approval"`
+	CodexExecutable               string                    `json:"codex_executable,omitempty"`
+	RunEngine                     string                    `json:"run_engine"`
+	RunFolderRepo                 string                    `json:"run_folder_repo"`
+	RunFolderTemplate             string                    `json:"run_folder_template"`
+	RunFolderEngine               string                    `json:"run_folder_engine"`
+	RunFolderResume               bool                      `json:"run_folder_resume"`
+	RunFolderFresh                bool                      `json:"run_folder_fresh"`
+	RunFolderRestart              bool                      `json:"run_folder_restart"`
+	RunFolderNoResume             bool                      `json:"run_folder_no_resume"`
+	RunFolderCheckpoint           bool                      `json:"run_folder_checkpoint"`
+	RunFolderCommitEach           bool                      `json:"run_folder_commit_each"`
+	RunFolderRequireCleanGit      bool                      `json:"run_folder_require_clean_git"`
+	RunFolderIncludeSpecification bool                      `json:"run_folder_include_specification"`
+	RunFolderDetach               bool                      `json:"run_folder_detach"`
+	WorkerRuntime                 string                    `json:"worker_runtime,omitempty"`
+	RuntimeOptions                map[string]map[string]any `json:"runtime_options,omitempty"`
+	SchedulerProjectConcurrency   int                       `json:"scheduler_project_concurrency,omitempty"`
+	SchedulerRuntimeConcurrency   map[string]int            `json:"scheduler_runtime_concurrency,omitempty"`
+	SchedulerLeaseTTL             time.Duration             `json:"scheduler_lease_ttl,omitempty"`
+	Warnings                      []string                  `json:"warnings,omitempty"`
 }
 
 type DefaultsReport struct {
@@ -74,6 +82,7 @@ func LoadWithHome(repoRoot, homeOverride string) (Config, error) {
 	v.SetDefault("terminal.close_on_finish", true)
 	v.SetDefault("terminal.close_on_failure", false)
 	v.SetDefault("worker.heartbeat_interval", "30s")
+	v.SetDefault("scheduler.lease_ttl", "1m")
 	v.SetDefault("run_folder.template", "codex")
 	v.SetDefault("run_folder.detach", true)
 	if err := validateEnvironmentKeys(); err != nil {
@@ -98,6 +107,13 @@ func LoadWithHome(repoRoot, homeOverride string) (Config, error) {
 	heartbeat, err := ParseDuration(v.GetString("worker.heartbeat_interval"))
 	if err != nil {
 		return Config{}, err
+	}
+	leaseTTL, err := ParseDuration(v.GetString("scheduler.lease_ttl"))
+	if err != nil {
+		return Config{}, fmt.Errorf("scheduler lease ttl: %w", err)
+	}
+	if leaseTTL <= 0 {
+		return Config{}, fmt.Errorf("scheduler lease ttl must be positive")
 	}
 	var workerTimeout time.Duration
 	if timeoutValue := v.GetString("worker.timeout"); timeoutValue != "" {
@@ -148,12 +164,52 @@ func LoadWithHome(repoRoot, homeOverride string) (Config, error) {
 		RunFolderRequireCleanGit:      v.GetBool("run_folder.require_clean_git"),
 		RunFolderIncludeSpecification: v.GetBool("run_folder.include_specification"),
 		RunFolderDetach:               v.GetBool("run_folder.detach"),
+		WorkerRuntime:                 v.GetString("runtime.default"),
+		SchedulerProjectConcurrency:   v.GetInt("scheduler.project_concurrency"),
+		SchedulerRuntimeConcurrency:   intMap(v.GetStringMap("scheduler.runtime_concurrency")),
+		SchedulerLeaseTTL:             leaseTTL,
+		RuntimeOptions:                runtimeOptions(v.GetStringMap("runtime")),
 		Warnings:                      warnings,
 	}
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func runtimeOptions(values map[string]any) map[string]map[string]any {
+	result := map[string]map[string]any{}
+	for name, value := range values {
+		if name == "default" {
+			continue
+		}
+		if options, ok := value.(map[string]any); ok {
+			result[name] = options
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func intMap(values map[string]any) map[string]int {
+	result := make(map[string]int, len(values))
+	for key, value := range values {
+		switch typed := value.(type) {
+		case int:
+			result[key] = typed
+		case int64:
+			result[key] = int(typed)
+		case float64:
+			result[key] = int(typed)
+		case string:
+			if parsed, err := strconv.Atoi(typed); err == nil {
+				result[key] = parsed
+			}
+		}
+	}
+	return result
 }
 
 func ResolveHomeDir(homeOverride string) (string, error) {
@@ -301,7 +357,11 @@ var configSchema = map[string]any{
 	},
 	"terminal": map[string]any{"adapter": nil, "mode": nil, "close_on_finish": nil, "close_on_failure": nil},
 	"worker":   map[string]any{"heartbeat_interval": nil, "timeout": nil},
-	"run":      map[string]any{"engine": nil},
+	"runtime":  map[string]any{"default": nil},
+	"scheduler": map[string]any{
+		"project_concurrency": nil, "lease_ttl": nil, "runtime_concurrency": map[string]any{},
+	},
+	"run": map[string]any{"engine": nil},
 	"run_folder": map[string]any{
 		"repo": nil, "template": nil, "engine": nil, "resume": nil, "fresh": nil,
 		"restart": nil, "no_resume": nil, "checkpoint": nil, "commit_each": nil,
@@ -313,6 +373,70 @@ func validateConfigKeys(source string, values map[string]any, warnings *[]string
 	if legacy, ok := values["engine"].(string); ok {
 		*warnings = append(*warnings, fmt.Sprintf("%s: key engine is deprecated; migrate to engine.default", source))
 		values["engine"] = map[string]any{"default": legacy}
+	}
+	valuesForSchema := values
+	schemaForValidation := configSchema
+	if runtimeValue, ok := values["runtime"]; ok {
+		runtimes, ok := runtimeValue.(map[string]any)
+		if !ok {
+			return fmt.Errorf("configuration %s: key runtime must be a map", source)
+		}
+		runtimeSchemaValue := map[string]any{}
+		if fallback, ok := runtimes["default"]; ok {
+			name, ok := fallback.(string)
+			if !ok {
+				return fmt.Errorf("configuration %s: runtime.default must be a string", source)
+			}
+			if err := (workerdomain.RuntimeRef{Name: name}).Validate(); err != nil {
+				return fmt.Errorf("configuration %s: runtime.default: %w", source, err)
+			}
+			runtimeSchemaValue["default"] = fallback
+		}
+		for name, options := range runtimes {
+			if name == "default" {
+				continue
+			}
+			if err := (workerdomain.RuntimeRef{Name: name}).Validate(); err != nil {
+				return fmt.Errorf("configuration %s: runtime namespace: %w", source, err)
+			}
+			if _, ok := options.(map[string]any); !ok {
+				return fmt.Errorf("configuration %s: runtime.%s must be a map", source, name)
+			}
+		}
+		valuesForSchema = make(map[string]any, len(values))
+		for key, value := range values {
+			valuesForSchema[key] = value
+		}
+		valuesForSchema["runtime"] = runtimeSchemaValue
+	}
+	if schedulerValue, ok := values["scheduler"]; ok {
+		schedulerValues, ok := schedulerValue.(map[string]any)
+		if !ok {
+			return fmt.Errorf("configuration %s: key scheduler must be a map", source)
+		}
+		dynamicSchema := map[string]any{
+			"project_concurrency": nil, "lease_ttl": nil, "runtime_concurrency": map[string]any{},
+		}
+		if runtimeValue, ok := schedulerValues["runtime_concurrency"]; ok {
+			runtimeLimits, ok := runtimeValue.(map[string]any)
+			if !ok {
+				return fmt.Errorf("configuration %s: scheduler.runtime_concurrency must be a map", source)
+			}
+			runtimeSchema := map[string]any{}
+			for name := range runtimeLimits {
+				if err := workerdomain.ValidateSlug("scheduler runtime name", name); err != nil {
+					return fmt.Errorf("configuration %s: %w", source, err)
+				}
+				runtimeSchema[name] = nil
+			}
+			dynamicSchema["runtime_concurrency"] = runtimeSchema
+		}
+		schemaCopy := make(map[string]any, len(configSchema))
+		for key, value := range configSchema {
+			schemaCopy[key] = value
+		}
+		schemaCopy["scheduler"] = dynamicSchema
+		schemaForValidation = schemaCopy
 	}
 	var walk func(map[string]any, map[string]any, string) error
 	walk = func(input, schema map[string]any, prefix string) error {
@@ -344,7 +468,7 @@ func validateConfigKeys(source string, values map[string]any, warnings *[]string
 		}
 		return nil
 	}
-	if err := walk(values, configSchema, ""); err != nil {
+	if err := walk(valuesForSchema, schemaForValidation, ""); err != nil {
 		return err
 	}
 	return validateSourceValues(source, values)
@@ -423,6 +547,17 @@ func nestedValue(values map[string]any, path ...string) (any, bool) {
 }
 
 func Validate(cfg Config) error {
+	if cfg.SchedulerProjectConcurrency < 0 {
+		return fmt.Errorf("scheduler project concurrency must not be negative")
+	}
+	for runtimeName, limit := range cfg.SchedulerRuntimeConcurrency {
+		if err := workerdomain.ValidateSlug("scheduler runtime name", runtimeName); err != nil {
+			return err
+		}
+		if limit < 0 {
+			return fmt.Errorf("scheduler runtime concurrency for %q must not be negative", runtimeName)
+		}
+	}
 	if !oneOf(cfg.Engine, "codex") {
 		return fmt.Errorf("invalid engine.default %q: supported value is codex", cfg.Engine)
 	}

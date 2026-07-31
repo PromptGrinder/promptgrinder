@@ -18,11 +18,22 @@ import (
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/firstuse"
+	"promptgrinder/internal/review"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
+	pgscheduler "promptgrinder/internal/scheduler"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/taskqueue"
+	"promptgrinder/internal/taskstore"
 	"promptgrinder/internal/ui"
 	"promptgrinder/internal/worker"
+	"promptgrinder/internal/workeradapter"
+	"promptgrinder/internal/workercontrol"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerlaunch"
+	"promptgrinder/internal/workerregistry"
+	"promptgrinder/internal/workerstart"
+	"promptgrinder/internal/workerstate"
 
 	"github.com/spf13/cobra"
 )
@@ -111,6 +122,36 @@ func ExitCode(err error) (int, bool) {
 
 type listJSONOutput struct {
 	Workers []state.Worker `json:"workers"`
+}
+
+type workerDefinitionsJSONOutput struct {
+	Project workerdomain.Project            `json:"project"`
+	Workers []workerdomain.WorkerDefinition `json:"workers"`
+}
+
+type workerDefinitionJSONOutput struct {
+	Project workerdomain.Project          `json:"project"`
+	Worker  workerdomain.WorkerDefinition `json:"worker"`
+}
+
+type namedWorkerStateJSONOutput struct {
+	Project workerdomain.Project     `json:"project"`
+	State   workerdomain.WorkerState `json:"state"`
+}
+
+type namedWorkerStartJSONOutput struct {
+	State  workerdomain.WorkerState  `json:"state"`
+	Launch workerlaunch.LaunchResult `json:"launch"`
+}
+
+type tasksJSONOutput struct {
+	Project workerdomain.Project `json:"project"`
+	Tasks   []workerdomain.Task  `json:"tasks"`
+}
+
+type taskJSONOutput struct {
+	Project workerdomain.Project `json:"project"`
+	Task    workerdomain.Task    `json:"task"`
 }
 
 type statusJSONOutput struct {
@@ -865,6 +906,649 @@ Examples:
 	workersCmd.Flags().BoolVar(&workersJSON, "json", false, "print machine-readable JSON")
 	root.AddCommand(workersCmd)
 
+	var workerListJSON bool
+	var workerShowJSON bool
+	var workerStartDryRun bool
+	var workerStartJSON bool
+	var workerStartRuntime string
+	var workerStatusJSON bool
+	var workerResetJSON bool
+	var workerControlJSON bool
+	var workerPauseTimeout time.Duration
+	workerCmd := &cobra.Command{
+		Use:   "worker",
+		Short: "Inspect project-owned named worker definitions.",
+	}
+	workerListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List project-owned named worker definitions.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				if workerListJSON {
+					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+				}
+				return err
+			}
+			definitions := registry.List()
+			if workerListJSON {
+				return writeJSON(stdout, workerDefinitionsJSONOutput{Project: registry.Project, Workers: definitions}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "PROJECT\t%s\t%s\n", registry.Project.ID, registry.Project.Name)
+			fmt.Fprintln(stdout, "WORKER ID\tDISPLAY NAME\tRUNTIME\tWORKTREE")
+			for _, definition := range definitions {
+				fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", definition.ID, definition.DisplayName, definition.Runtime.Name, definition.Policy.DefaultWorktree)
+			}
+			return nil
+		},
+	}
+	workerListCmd.Flags().BoolVar(&workerListJSON, "json", false, "print machine-readable JSON")
+	workerShowCmd := &cobra.Command{
+		Use:   "show <worker-id>",
+		Short: "Show one project-owned named worker definition.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				if workerShowJSON {
+					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+				}
+				return err
+			}
+			definition, err := registry.Get(args[0])
+			if err != nil {
+				if workerShowJSON {
+					return writeJSONCommandError(stdout, "worker_not_found", err, compactJSON)
+				}
+				return StructuredError{Err: err, Code: ExitWorkerNotFound}
+			}
+			if workerShowJSON {
+				return writeJSON(stdout, workerDefinitionJSONOutput{Project: registry.Project, Worker: definition}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Project: %s (%s)\n", registry.Project.Name, registry.Project.ID)
+			fmt.Fprintf(stdout, "Worker: %s\n", definition.ID)
+			fmt.Fprintf(stdout, "Display name: %s\n", definition.DisplayName)
+			fmt.Fprintf(stdout, "Role: %s\n", definition.Role)
+			fmt.Fprintf(stdout, "Runtime: %s\n", definition.Runtime.Name)
+			fmt.Fprintf(stdout, "Branch prefix: %s\n", definition.Policy.BranchPrefix)
+			fmt.Fprintf(stdout, "Default worktree: %s\n", definition.Policy.DefaultWorktree)
+			fmt.Fprintf(stdout, "Allowed paths: %s\n", displayPaths(definition.Policy.AllowedPaths))
+			fmt.Fprintf(stdout, "Forbidden paths: %s\n", displayPaths(definition.Policy.ForbiddenPaths))
+			return nil
+		},
+	}
+	workerShowCmd.Flags().BoolVar(&workerShowJSON, "json", false, "print machine-readable JSON")
+	workerStartCmd := &cobra.Command{
+		Use:   "start <worker-id>",
+		Short: "Start a project-owned named worker.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				if workerStartJSON {
+					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+				}
+				return err
+			}
+			definition, err := registry.Get(args[0])
+			if err != nil {
+				if workerStartJSON {
+					return writeJSONCommandError(stdout, "worker_not_found", err, compactJSON)
+				}
+				return StructuredError{Err: err, Code: ExitWorkerNotFound}
+			}
+			cfg := service.Defaults().Config
+			if workerStartDryRun {
+				request, err := workerlaunch.Build(workerlaunch.BuildOptions{
+					Project: registry.Project, Worker: definition, Repository: registry.Root,
+					RuntimeOverride: workerStartRuntime, RuntimeDefault: cfg.WorkerRuntime,
+					RuntimeOptions: cfg.RuntimeOptions,
+				})
+				if err != nil {
+					if workerStartJSON {
+						return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+					}
+					return StructuredError{Err: err, Code: ExitInvalidInput}
+				}
+				if workerStartJSON {
+					return writeJSON(stdout, workerlaunch.Redacted(request), compactJSON)
+				}
+				fmt.Fprint(stdout, workerlaunch.PlanDocument(request))
+				return nil
+			}
+			runtimeService := pgruntime.NewService(cfg)
+			starter := workerstart.Service{
+				Home: cfg.HomeDir, Config: cfg,
+				Launchers: namedWorkerLaunchers(runtimeService),
+			}
+			result, err := starter.Start(cmd.Context(), registry.Root, definition.ID, workerStartRuntime)
+			if err != nil {
+				if workerStartJSON {
+					return writeJSONCommandError(stdout, "launch_error", err, compactJSON)
+				}
+				return StructuredError{Err: err, Code: ExitExecutionFailed}
+			}
+			if workerStartJSON {
+				return writeJSON(stdout, namedWorkerStartJSONOutput{State: result.State, Launch: result.Launch}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Worker %s started run %s with runtime %s (lifecycle %s).\n", result.State.WorkerID, result.Launch.RunID, result.Launch.RuntimeName, result.State.Lifecycle)
+			return nil
+		},
+	}
+	workerStartCmd.Flags().BoolVar(&workerStartDryRun, "dry-run", false, "resolve and validate the launch without starting a process or creating state")
+	workerStartCmd.Flags().BoolVar(&workerStartJSON, "json", false, "print the redacted launch request as machine-readable JSON")
+	workerStartCmd.Flags().StringVar(&workerStartRuntime, "runtime", "", "override the worker runtime for this launch")
+	workerStatusCmd := &cobra.Command{
+		Use:   "status <worker-id>",
+		Short: "Show PromptGrinder-owned lifecycle state for a named worker.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerStatusJSON, compactJSON)
+			}
+			store := workerstate.New(service.Defaults().Config.HomeDir)
+			workerState, err := store.Ensure(definition)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerStatusJSON, compactJSON)
+			}
+			if workerStatusJSON {
+				return writeJSON(stdout, namedWorkerStateJSONOutput{Project: registry.Project, State: workerState}, compactJSON)
+			}
+			printNamedWorkerState(stdout, registry.Project, workerState)
+			return nil
+		},
+	}
+	workerStatusCmd.Flags().BoolVar(&workerStatusJSON, "json", false, "print machine-readable JSON")
+	workerResetCmd := &cobra.Command{
+		Use:   "reset <worker-id>",
+		Short: "Reset a safely terminal named worker to idle.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerResetJSON, compactJSON)
+			}
+			store := workerstate.New(service.Defaults().Config.HomeDir)
+			workerState, err := store.Ensure(definition)
+			if err == nil {
+				workerState, err = store.Reset(workerState)
+			}
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerResetJSON, compactJSON)
+			}
+			if workerResetJSON {
+				return writeJSON(stdout, namedWorkerStateJSONOutput{Project: registry.Project, State: workerState}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Worker %s is idle (revision %d).\n", workerState.WorkerID, workerState.Revision)
+			return nil
+		},
+	}
+	workerResetCmd.Flags().BoolVar(&workerResetJSON, "json", false, "print machine-readable JSON")
+	workerPauseCmd := &cobra.Command{
+		Use: "pause <worker-id>", Short: "Gracefully stop and pause a running named worker.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir, Timeout: workerPauseTimeout}).Pause(cmd.Context(), state)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			if workerControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Worker %s paused (forced: %t, idempotent: %t).\n", registry.Project.ID+"/"+definition.ID, result.Forced, result.Idempotent)
+			return nil
+		},
+	}
+	workerPauseCmd.Flags().DurationVar(&workerPauseTimeout, "timeout", 10*time.Second, "graceful stop timeout before forced termination")
+	workerPauseCmd.Flags().BoolVar(&workerControlJSON, "json", false, "print machine-readable JSON")
+	workerResumeCmd := &cobra.Command{
+		Use: "resume <worker-id>", Short: "Resume a paused named worker.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			runtimeService := pgruntime.NewService(cfg)
+			launchers := namedWorkerLaunchers(runtimeService)
+			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: launchers}
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir, Launchers: launchers, StartNew: func(ctx context.Context, id string) error {
+				_, startErr := starter.Start(ctx, ".", id, "")
+				return startErr
+			}}).Resume(cmd.Context(), state)
+			if err != nil {
+				return namedWorkerCommandError(stdout, err, workerControlJSON, compactJSON)
+			}
+			if workerControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Worker %s resumed (session: %t, idempotent: %t).\n", definition.ID, result.Resumed, result.Idempotent)
+			return nil
+		},
+	}
+	workerResumeCmd.Flags().BoolVar(&workerControlJSON, "json", false, "print machine-readable JSON")
+	workerCmd.AddCommand(workerListCmd, workerShowCmd, workerStartCmd, workerStatusCmd, workerResetCmd, workerPauseCmd, workerResumeCmd)
+	root.AddCommand(workerCmd)
+
+	var taskAssignJSON bool
+	var taskListJSON bool
+	var taskListWorker string
+	var taskShowJSON bool
+	var taskQueueJSON bool
+	var taskControlJSON bool
+	taskCmd := &cobra.Command{Use: "task", Short: "Assign and inspect project-owned tasks."}
+	taskAssignCmd := &cobra.Command{
+		Use:   "assign <worker-id> <task.md>",
+		Short: "Assign an immutable task snapshot to a named worker.",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskAssignJSON, compactJSON)
+			}
+			store := taskstore.New(service.Defaults().Config.HomeDir)
+			task, err := store.Assign(registry.Root, definition, args[1])
+			if err != nil {
+				return taskCommandError(stdout, err, taskAssignJSON, compactJSON)
+			}
+			if taskAssignJSON {
+				return writeJSON(stdout, taskJSONOutput{Project: registry.Project, Task: task}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Assigned task %s to worker %s.\n", task.ID, task.WorkerID)
+			fmt.Fprintf(stdout, "Source: %s\n", task.SourceReference)
+			fmt.Fprintf(stdout, "Status: %s\n", task.Status)
+			return nil
+		},
+	}
+	taskAssignCmd.Flags().BoolVar(&taskAssignJSON, "json", false, "print machine-readable JSON")
+	taskEnqueueCmd := &cobra.Command{
+		Use:   "enqueue <worker-id> <task.md>",
+		Short: "Append an immutable task snapshot to a worker FIFO.",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			task, err := taskstore.New(service.Defaults().Config.HomeDir).Enqueue(registry.Root, definition, args[1])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, taskJSONOutput{Project: registry.Project, Task: task}, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Enqueued task %s for worker %s.\n", task.ID, task.WorkerID)
+			return nil
+		},
+	}
+	taskEnqueueCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
+	taskListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List tasks owned by the current project.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskListJSON, compactJSON)
+			}
+			if taskListWorker != "" {
+				if _, err := registry.Get(taskListWorker); err != nil {
+					return taskCommandError(stdout, err, taskListJSON, compactJSON)
+				}
+			}
+			tasks, err := taskstore.New(service.Defaults().Config.HomeDir).List(registry.Project.ID, taskListWorker)
+			if err != nil {
+				return taskCommandError(stdout, err, taskListJSON, compactJSON)
+			}
+			if taskListJSON {
+				return writeJSON(stdout, tasksJSONOutput{Project: registry.Project, Tasks: tasks}, compactJSON)
+			}
+			if len(tasks) == 0 {
+				fmt.Fprintln(stdout, "No tasks found.")
+				return nil
+			}
+			fmt.Fprintln(stdout, "TASK ID\tWORKER ID\tSTATUS\tATTEMPTS\tSOURCE")
+			for _, task := range tasks {
+				fmt.Fprintf(stdout, "%s\t%s\t%s\t%d\t%s\n", task.ID, task.WorkerID, task.Status, task.AttemptCount, task.SourceReference)
+			}
+			return nil
+		},
+	}
+	taskListCmd.Flags().StringVar(&taskListWorker, "worker", "", "show tasks assigned to this worker")
+	taskListCmd.Flags().BoolVar(&taskListJSON, "json", false, "print machine-readable JSON")
+	taskShowCmd := &cobra.Command{
+		Use:   "show <task-id>",
+		Short: "Show one immutable task snapshot.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskShowJSON, compactJSON)
+			}
+			task, err := taskstore.New(service.Defaults().Config.HomeDir).Load(registry.Project.ID, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskShowJSON, compactJSON)
+			}
+			if _, err := registry.Get(task.WorkerID); err != nil {
+				return taskCommandError(stdout, fmt.Errorf("persisted task worker mismatch: %w", err), taskShowJSON, compactJSON)
+			}
+			if taskShowJSON {
+				return writeJSON(stdout, taskJSONOutput{Project: registry.Project, Task: task}, compactJSON)
+			}
+			printTask(stdout, task)
+			return nil
+		},
+	}
+	taskShowCmd.Flags().BoolVar(&taskShowJSON, "json", false, "print machine-readable JSON")
+	queueCmd := &cobra.Command{Use: "queue", Short: "Inspect and edit pending worker task queues."}
+	queueListCmd := &cobra.Command{
+		Use: "list <worker-id>", Args: cobra.ExactArgs(1), Short: "List a worker queue in FIFO order.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			queue, err := taskqueue.New(service.Defaults().Config.HomeDir).List(registry.Project.ID, definition.ID)
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, queue, compactJSON)
+			}
+			if len(queue.Entries) == 0 {
+				fmt.Fprintln(stdout, "Queue is empty.")
+				return nil
+			}
+			fmt.Fprintln(stdout, "POSITION\tTASK ID\tENQUEUED AT\tLEASE")
+			for i, entry := range queue.Entries {
+				lease := "-"
+				if entry.Lease != nil {
+					lease = entry.Lease.ExpiresAt.Format(time.RFC3339)
+				}
+				fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\n", i+1, entry.TaskID, entry.EnqueuedAt.Format(time.RFC3339), lease)
+			}
+			return nil
+		},
+	}
+	queueReorderCmd := &cobra.Command{
+		Use: "reorder <worker-id> <task-id> <position>", Args: cobra.ExactArgs(3), Short: "Move a pending task to a one-based queue position.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			position, err := strconv.Atoi(args[2])
+			if err != nil || position < 1 {
+				return taskCommandError(stdout, fmt.Errorf("position must be a positive integer"), taskQueueJSON, compactJSON)
+			}
+			queue, err := taskqueue.New(service.Defaults().Config.HomeDir).Reorder(registry.Project.ID, definition.ID, args[1], position-1)
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, queue, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Moved task %s to position %d.\n", args[1], position)
+			return nil
+		},
+	}
+	queueRemoveCmd := &cobra.Command{
+		Use: "remove <worker-id> <task-id>", Args: cobra.ExactArgs(2), Short: "Remove a pending task from a worker queue.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, definition, err := loadNamedWorker(args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			queue, err := taskqueue.New(service.Defaults().Config.HomeDir).Remove(registry.Project.ID, definition.ID, args[1])
+			if err != nil {
+				return taskCommandError(stdout, err, taskQueueJSON, compactJSON)
+			}
+			if taskQueueJSON {
+				return writeJSON(stdout, queue, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Removed pending task %s from worker %s.\n", args[1], definition.ID)
+			return nil
+		},
+	}
+	queueListCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
+	queueReorderCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
+	queueRemoveCmd.Flags().BoolVar(&taskQueueJSON, "json", false, "print machine-readable JSON")
+	queueCmd.AddCommand(queueListCmd, queueReorderCmd, queueRemoveCmd)
+	taskRetryCmd := &cobra.Command{
+		Use: "retry <task-id>", Short: "Start a new attempt without replacing prior evidence.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			task, err := taskstore.New(cfg.HomeDir).Load(registry.Project.ID, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			definition, err := registry.Get(task.WorkerID)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			runtimeService := pgruntime.NewService(cfg)
+			launchers := namedWorkerLaunchers(runtimeService)
+			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: launchers}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir, StartNew: func(ctx context.Context, id string) error {
+				_, startErr := starter.Start(ctx, registry.Root, id, "")
+				return startErr
+			}}).Retry(cmd.Context(), state, task)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			if taskControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Retry requested for task %s; prior attempts retained.\n", task.ID)
+			return nil
+		},
+	}
+	taskCancelCmd := &cobra.Command{
+		Use: "cancel <task-id>", Short: "Cancel active or queued work without deleting evidence.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			cfg := service.Defaults().Config
+			task, err := taskstore.New(cfg.HomeDir).Load(registry.Project.ID, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			definition, err := registry.Get(task.WorkerID)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			result, err := (workercontrol.Service{Home: cfg.HomeDir}).Cancel(cmd.Context(), state, task)
+			if err != nil {
+				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
+			}
+			if taskControlJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Task %s canceled (idempotent: %t); evidence retained.\n", task.ID, result.Idempotent)
+			return nil
+		},
+	}
+	taskRetryCmd.Flags().BoolVar(&taskControlJSON, "json", false, "print machine-readable JSON")
+	taskCancelCmd.Flags().BoolVar(&taskControlJSON, "json", false, "print machine-readable JSON")
+	taskCmd.AddCommand(taskAssignCmd, taskEnqueueCmd, taskListCmd, taskShowCmd, taskRetryCmd, taskCancelCmd, queueCmd)
+	root.AddCommand(taskCmd)
+
+	var reviewJSON bool
+	var reviewSummary string
+	var reviewChangedPaths []string
+	var reviewCommits []string
+	var reviewValidations []string
+	var reviewReason string
+	reviewCmd := &cobra.Command{
+		Use:   "review",
+		Short: "Create and decide local task review handoffs.",
+		Long: `Review handoffs are local and never push, open a pull request, merge,
+tag, publish, or release. Rejection preserves all evidence and requeues the
+task at the tail of its original implementing worker's FIFO.`,
+	}
+	reviewSubmitCmd := &cobra.Command{
+		Use: "submit <task-id> <implementer-worker-id>", Short: "Submit complete implementation evidence for local review.", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			validations, err := parseReviewValidations(reviewValidations)
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Submit(registry, args[0], args[1], review.Evidence{
+				Summary: reviewSummary, ChangedPaths: reviewChangedPaths, Commits: reviewCommits, Validations: validations,
+			})
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Task %s is awaiting local review (handoff %s).\n", result.Task.ID, result.Handoff.ID)
+			return nil
+		},
+	}
+	reviewSubmitCmd.Flags().StringVar(&reviewSummary, "summary", "", "completion summary (required)")
+	reviewSubmitCmd.Flags().StringSliceVar(&reviewChangedPaths, "changed-path", nil, "repository-relative changed path (repeatable)")
+	reviewSubmitCmd.Flags().StringSliceVar(&reviewCommits, "commit", nil, "commit identifier recorded as evidence (repeatable)")
+	reviewSubmitCmd.Flags().StringSliceVar(&reviewValidations, "validation", nil, "validation evidence as command=result (repeatable, required)")
+	reviewSubmitCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewShowCmd := &cobra.Command{
+		Use: "show <task-id>", Aliases: []string{"inspect"}, Short: "Inspect the latest local review handoff.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Inspect(registry, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			printReviewHandoff(stdout, result.Handoff)
+			return nil
+		},
+	}
+	reviewShowCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewAcceptCmd := &cobra.Command{
+		Use: "accept <task-id> <reviewer-worker-id>", Short: "Accept a local review without publishing externally.", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Accept(registry, args[0], args[1], reviewReason)
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Accepted task %s locally as reviewer %s. No external publication was performed.\n", result.Task.ID, args[1])
+			return nil
+		},
+	}
+	reviewAcceptCmd.Flags().StringVar(&reviewReason, "reason", "", "review decision reason (required)")
+	reviewAcceptCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewRejectCmd := &cobra.Command{
+		Use: "reject <task-id> <reviewer-worker-id>", Short: "Reject and requeue work while preserving evidence.", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Reject(registry, args[0], args[1], reviewReason)
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Rejected task %s; evidence retained and task requeued to worker %s FIFO tail.\n", result.Task.ID, result.Task.WorkerID)
+			return nil
+		},
+	}
+	reviewRejectCmd.Flags().StringVar(&reviewReason, "reason", "", "review decision reason (required)")
+	reviewRejectCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewCmd.AddCommand(reviewSubmitCmd, reviewShowCmd, reviewAcceptCmd, reviewRejectCmd)
+	root.AddCommand(reviewCmd)
+
+	var schedulerOnce bool
+	var schedulerInterval time.Duration
+	schedulerCmd := &cobra.Command{Use: "scheduler", Short: "Dispatch eligible idle named workers."}
+	schedulerRunCmd := &cobra.Command{
+		Use: "run", Args: cobra.NoArgs, Short: "Run the local FIFO scheduler.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return err
+			}
+			cfg := service.Defaults().Config
+			runtimeService := pgruntime.NewService(cfg)
+			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: namedWorkerLaunchers(runtimeService)}
+			schedulerService := pgscheduler.Service{
+				Home: cfg.HomeDir, Config: cfg,
+				Dispatch: func(ctx context.Context, dispatch pgscheduler.Dispatch) error {
+					_, err := starter.Start(ctx, registry.Root, dispatch.Worker.ID, "")
+					return err
+				},
+			}
+			for {
+				dispatched, err := schedulerService.RunOnce(cmd.Context(), registry)
+				if err != nil {
+					return err
+				}
+				if dispatched != nil {
+					fmt.Fprintf(stdout, "Dispatched task %s to worker %s.\n", dispatched.Task.ID, dispatched.Worker.ID)
+				}
+				if schedulerOnce {
+					return nil
+				}
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(schedulerInterval):
+				}
+			}
+		},
+	}
+	schedulerRunCmd.Flags().BoolVar(&schedulerOnce, "once", false, "perform one scheduling decision and exit")
+	schedulerRunCmd.Flags().DurationVar(&schedulerInterval, "interval", time.Second, "poll interval")
+	schedulerCmd.AddCommand(schedulerRunCmd)
+	root.AddCommand(schedulerCmd)
+
 	var eventTail int
 	var eventType string
 	var eventSeverity string
@@ -1188,6 +1872,107 @@ Examples:
 	return root
 }
 
+func loadNamedWorker(id string) (*workerregistry.Registry, workerdomain.WorkerDefinition, error) {
+	registry, err := workerregistry.Load(".")
+	if err != nil {
+		return nil, workerdomain.WorkerDefinition{}, err
+	}
+	definition, err := registry.Get(id)
+	return registry, definition, err
+}
+
+func namedWorkerCommandError(stdout io.Writer, err error, jsonOutput, compact bool) error {
+	code := classifyError(err)
+	if errors.Is(err, workerregistry.ErrWorkerNotFound) {
+		code = "worker_not_found"
+	} else if errors.Is(err, workerstate.ErrUnsafeReset) || strings.Contains(err.Error(), "lifecycle transition") {
+		code = "invalid_transition"
+	}
+	if jsonOutput {
+		return writeJSONCommandError(stdout, code, err, compact)
+	}
+	return StructuredError{Err: err, Code: errorExitCode(code)}
+}
+
+func taskCommandError(stdout io.Writer, err error, jsonOutput, compact bool) error {
+	code := classifyError(err)
+	switch {
+	case errors.Is(err, workerregistry.ErrWorkerNotFound):
+		code = "worker_not_found"
+	case errors.Is(err, taskstore.ErrNotFound):
+		code = "task_not_found"
+	case errors.Is(err, taskstore.ErrActiveAssignment), errors.Is(err, taskstore.ErrTaskExists):
+		code = "invalid_transition"
+	}
+	if jsonOutput {
+		return writeJSONCommandError(stdout, code, err, compact)
+	}
+	return StructuredError{Err: err, Code: errorExitCode(code)}
+}
+
+func printTask(stdout io.Writer, task workerdomain.Task) {
+	fmt.Fprintf(stdout, "Task: %s\n", task.ID)
+	fmt.Fprintf(stdout, "Project: %s\n", task.ProjectID)
+	fmt.Fprintf(stdout, "Worker: %s\n", task.WorkerID)
+	fmt.Fprintf(stdout, "Status: %s\n", task.Status)
+	fmt.Fprintf(stdout, "Attempts: %d\n", task.AttemptCount)
+	fmt.Fprintf(stdout, "Source: %s\n", task.SourceReference)
+	fmt.Fprintf(stdout, "Created: %s\n", formatTime(&task.CreatedAt))
+	fmt.Fprintf(stdout, "Updated: %s\n", formatTime(&task.UpdatedAt))
+	fmt.Fprintln(stdout, "Instructions:")
+	fmt.Fprint(stdout, task.Instructions)
+	if !strings.HasSuffix(task.Instructions, "\n") {
+		fmt.Fprintln(stdout)
+	}
+}
+
+func parseReviewValidations(values []string) ([]workerdomain.Validation, error) {
+	result := make([]workerdomain.Validation, 0, len(values))
+	for _, value := range values {
+		command, outcome, ok := strings.Cut(value, "=")
+		if !ok || strings.TrimSpace(command) == "" || strings.TrimSpace(outcome) == "" {
+			return nil, fmt.Errorf("validation %q must use command=result", value)
+		}
+		result = append(result, workerdomain.Validation{Command: strings.TrimSpace(command), Result: strings.TrimSpace(outcome)})
+	}
+	return result, nil
+}
+
+func printReviewHandoff(stdout io.Writer, handoff workerdomain.ReviewHandoff) {
+	fmt.Fprintf(stdout, "Review: %s\n", handoff.ID)
+	fmt.Fprintf(stdout, "Task: %s\n", handoff.TaskID)
+	fmt.Fprintf(stdout, "Implementer: %s\n", handoff.ImplementerID)
+	fmt.Fprintf(stdout, "Status: %s\n", handoff.Status)
+	fmt.Fprintf(stdout, "Summary: %s\n", handoff.Summary)
+	fmt.Fprintf(stdout, "Changed paths: %s\n", strings.Join(handoff.ChangedPaths, ", "))
+	fmt.Fprintf(stdout, "Commits: %s\n", strings.Join(handoff.Commits, ", "))
+	fmt.Fprintf(stdout, "Attempts: %d\n", len(handoff.TaskAttempts))
+	fmt.Fprintf(stdout, "Runtime evidence: %d\n", len(handoff.RuntimeEvidence))
+	fmt.Fprintf(stdout, "Validations: %d\n", len(handoff.Validations))
+	fmt.Fprintf(stdout, "Reviewer: %s\n", valueOrDash(handoff.ReviewerID))
+	fmt.Fprintf(stdout, "Decision reason: %s\n", valueOrDash(handoff.DecisionReason))
+}
+
+func printNamedWorkerState(stdout io.Writer, project workerdomain.Project, state workerdomain.WorkerState) {
+	fmt.Fprintf(stdout, "Project: %s (%s)\n", project.Name, project.ID)
+	fmt.Fprintf(stdout, "Worker: %s\n", state.WorkerID)
+	fmt.Fprintf(stdout, "Lifecycle: %s\n", state.Lifecycle)
+	fmt.Fprintf(stdout, "Revision: %d\n", state.Revision)
+	fmt.Fprintf(stdout, "Active task: %s\n", valueOrDash(state.ActiveTaskID))
+	fmt.Fprintf(stdout, "Active run: %s\n", valueOrDash(state.ActiveRunID))
+	if state.RuntimeSession == nil {
+		fmt.Fprintln(stdout, "Runtime session: -")
+	} else {
+		fmt.Fprintf(stdout, "Runtime session: %s/%s\n", state.RuntimeSession.Runtime, state.RuntimeSession.SessionID)
+	}
+	fmt.Fprintf(stdout, "Last completed task: %s\n", valueOrDash(state.LastCompletedTaskID))
+	fmt.Fprintf(stdout, "Failure reason: %s\n", valueOrDash(state.FailureReason))
+	fmt.Fprintf(stdout, "Block reason: %s\n", valueOrDash(state.BlockReason))
+	fmt.Fprintf(stdout, "Created: %s\n", formatTime(&state.CreatedAt))
+	fmt.Fprintf(stdout, "Updated: %s\n", formatTime(&state.UpdatedAt))
+	fmt.Fprintf(stdout, "Lifecycle changed: %s\n", formatTime(&state.LifecycleChangedAt))
+}
+
 func printStatus(stdout io.Writer, summary pgruntime.StatusSummary) {
 	worker := summary.Worker
 	fmt.Fprintf(stdout, "Worker: %s\n", worker.ID)
@@ -1397,6 +2182,13 @@ func printWorkers(stdout io.Writer, service Service, workers []state.Worker, inc
 		}
 	}
 	return nil
+}
+
+func displayPaths(paths []string) string {
+	if len(paths) == 0 {
+		return "(none)"
+	}
+	return strings.Join(paths, ", ")
 }
 
 func sequencePromptLabel(item runfolder.SequenceItem) string {
@@ -2093,5 +2885,12 @@ func setPlainEnvForRun(plain bool) func() {
 			return
 		}
 		_ = os.Unsetenv("PROMPTGRINDER_PLAIN")
+	}
+}
+
+func namedWorkerLaunchers(runtimeService pgruntime.Service) map[string]workerlaunch.Launcher {
+	return map[string]workerlaunch.Launcher{
+		"codex":       workeradapter.Codex{Manager: runtimeService.Worker},
+		"antigravity": workeradapter.Antigravity{},
 	}
 }

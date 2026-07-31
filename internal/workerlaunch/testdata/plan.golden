@@ -1,0 +1,28 @@
+Launch plan (dry run)
+Project: Example (example)
+Worker: Backend Sonar (backend-sonar)
+Runtime: codex
+Repository: /repo
+Worktree: /repo
+Branch prefix: worker/backend-sonar
+Allowed paths: backend/**, services/**
+Forbidden paths: infrastructure/production/**, secrets/**
+Assigned task: sonar-001
+Runtime options:
+  api_token: "[redacted]"
+  model: "gpt-5"
+  nested: {"password":"[redacted]","safe":"visible"}
+Injected context:
+# PromptGrinder Worker Context
+
+Project: Example (example)
+Worker: Backend Sonar (backend-sonar)
+Responsibility: Resolve backend findings safely.
+Repository: /repo
+Worktree: /repo
+Allowed paths: backend/**, services/**
+Forbidden paths: infrastructure/production/**, secrets/**
+Assigned task: sonar-001
+Task source: tasks/sonar-001.md
+Task instructions: Fix the reported finding.
+No process started. No mutable state created.

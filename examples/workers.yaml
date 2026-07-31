@@ -1,0 +1,37 @@
+# Copy this file to .ai/workers.yaml in a repository that opts into named
+# workers. PromptGrinder itself does not require this registry.
+version: 1
+project:
+  id: footybadger
+  name: FootyBadger
+
+workers:
+  backend-sonar:
+    display_name: Backend Sonar Engineer
+    role: Resolve backend static-analysis findings safely.
+    runtime: codex
+    branch:
+      prefix: worker/backend-sonar
+    worktree:
+      default: .
+    paths:
+      allowed:
+        - backend/**
+      forbidden:
+        - android/**
+        - infrastructure/production/**
+
+  documentation:
+    display_name: Documentation Engineer
+    role: Maintain accurate project documentation.
+    runtime: antigravity
+    branch:
+      prefix: worker/documentation
+    worktree:
+      default: .
+    paths:
+      allowed:
+        - docs/**
+        - README.md
+      forbidden:
+        - infrastructure/production/**
