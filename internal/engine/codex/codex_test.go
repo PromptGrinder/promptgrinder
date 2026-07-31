@@ -64,6 +64,9 @@ func TestBuildScriptUsesInternalCodexExecutor(t *testing.T) {
 	if !strings.Contains(script, "heartbeat_loop &") {
 		t.Fatalf("script does not include heartbeat loop:\n%s", script)
 	}
+	if !strings.Contains(script, `if [ "${PROMPTGRINDER_HEADLESS:-}" != "1" ]; then`) {
+		t.Fatalf("script does not suppress the heartbeat sleep loop in headless execution:\n%s", script)
+	}
 	if !strings.Contains(script, "kill \"$HEARTBEAT_PID\"") {
 		t.Fatalf("script does not stop heartbeat loop:\n%s", script)
 	}
@@ -443,6 +446,17 @@ func TestParseResultExtractsBlockingCompletionReport(t *testing.T) {
 	}
 	if !result.RejectsContinuation() {
 		t.Fatal("blocked completion should reject continuation")
+	}
+}
+
+func TestParseResultRejectsDuplicateCompletionFields(t *testing.T) {
+	log := []byte("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"STATUS: PASS\\nSTATUS: BLOCKED\\nNEXT_PROMPT_SAFE: yes\"}}\n")
+	result := Engine{}.ParseResult(execution.Context{}, log)
+	if result.CompletionReason != "duplicate completion fields" {
+		t.Fatalf("result = %#v", result)
+	}
+	if err := result.OrderedCompletionError(); err == nil {
+		t.Fatal("duplicate semantic fields must not be accepted")
 	}
 }
 

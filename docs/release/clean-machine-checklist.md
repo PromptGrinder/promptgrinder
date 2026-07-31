@@ -63,9 +63,16 @@ promptgrinder run --dry-run smoke.md
 ```
 
 Confirm `doctor` is read-only, setup previews every write, dry-run creates no
-worker, and human/JSON doctor outcomes agree. Copy
+worker, and human/JSON doctor outcomes agree. When PromptGrinder is not on
+`PATH`, confirm doctor identifies zsh, Bash, or Fish and prints a correct
+copyable command without editing the shell profile. Copy
 `examples/smoke/read-only.md` to `smoke.md` and adjust `working_directory` to
 the disposable repository if necessary.
+
+For RC.2, also run deterministic repository discovery in a disposable fixture,
+confirm only a new `.promptgrinder/` tree is written, rerun it to prove stable
+output, and run `roles enhance` in review-only and rejected modes before testing
+an explicitly approved apply operation.
 
 ## 3. Adapter smoke runs
 
@@ -128,6 +135,12 @@ promptgrinder reconcile --older-than 1m --json
 promptgrinder reconcile --older-than 1m --mark-failed --json
 promptgrinder prune --json
 ```
+
+For ordered folders, cover foreground and detached modes. Require the startup
+sequence ID/status command, full inventory, semantic failure reason, strict
+PASS/safe continuation, blocked or clarification stop, safe resume, timestamped
+sequence output, folder filtering, stale-supervisor reconciliation, and a clean
+focused commit that excludes pre-existing or forbidden paths.
 
 ## 5. Upgrade, rollback, and uninstall
 

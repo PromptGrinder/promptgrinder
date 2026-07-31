@@ -1,0 +1,4 @@
+interface:
+  display_name: "PromptGrinder Slice Authoring"
+  short_description: "Write safe executable PromptGrinder slices"
+  default_prompt: "Use $promptgrinder-slice-authoring to break this work into safe PromptGrinder slices."

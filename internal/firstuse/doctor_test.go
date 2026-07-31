@@ -90,6 +90,38 @@ func TestDoctorRejectsHomeBelowNonDirectory(t *testing.T) {
 	}
 }
 
+func TestDoctorPrintsShellSpecificPathRemediation(t *testing.T) {
+	for _, test := range []struct {
+		name, shell, profile, command string
+	}{
+		{name: "zsh", shell: "/bin/zsh", profile: "~/.zshrc", command: "source ~/.zshrc"},
+		{name: "bash", shell: "/bin/bash", profile: "~/.bash_profile", command: "source ~/.bash_profile"},
+		{name: "fish", shell: "/opt/homebrew/bin/fish", profile: "~/.config/fish/config.fish", command: "fish_add_path"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			exe := fakeExecutable(t, "promptgrinder")
+			check := checkPromptGrinderPath(DoctorOptions{Shell: test.shell, LookPath: func(string) (string, error) {
+				return "", errors.New("missing")
+			}}, exe)
+			if check.Status != Warning || check.Evidence["profile"] != test.profile || !strings.Contains(check.Remediation, test.command) || !strings.Contains(check.Remediation, filepath.Dir(exe)) {
+				t.Fatalf("check = %#v", check)
+			}
+			if strings.Contains(check.Remediation, "promptgrinder doctor >>") {
+				t.Fatalf("unsafe remediation: %q", check.Remediation)
+			}
+		})
+	}
+}
+
+func TestDoctorPathCheckPassesWhenCommandIsDiscoverable(t *testing.T) {
+	check := checkPromptGrinderPath(DoctorOptions{LookPath: func(string) (string, error) {
+		return "/usr/local/bin/promptgrinder", nil
+	}}, "/some/other/promptgrinder")
+	if check.Status != Pass || check.Remediation != "" {
+		t.Fatalf("check = %#v", check)
+	}
+}
+
 func TestRedaction(t *testing.T) {
 	input := "OPENAI_API_KEY=supersecret /Users/me/.codex/auth.json ordinary"
 	got := RedactText(input)

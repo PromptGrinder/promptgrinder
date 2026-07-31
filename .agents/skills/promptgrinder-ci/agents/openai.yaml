@@ -1,0 +1,4 @@
+interface:
+  display_name: "PromptGrinder CI"
+  short_description: "Maintain deterministic PromptGrinder CI"
+  default_prompt: "Use $promptgrinder-ci to update or diagnose PromptGrinder CI."

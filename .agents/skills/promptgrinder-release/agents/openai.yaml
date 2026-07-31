@@ -1,0 +1,4 @@
+interface:
+  display_name: "PromptGrinder Release"
+  short_description: "Qualify PromptGrinder release candidates"
+  default_prompt: "Use $promptgrinder-release to qualify this PromptGrinder release candidate."

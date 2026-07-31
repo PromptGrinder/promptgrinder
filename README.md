@@ -4,32 +4,40 @@
 
 ## Quick Start
 
-Run multiple prompts with shared context:
+Discover the repository and generate project roles:
 
-    promptgrinder run --shared-context "docs/tasks/02[A-E]-*.md"
+    promptgrinder discover
 
-Run every prompt in a folder:
+Discovery is deterministic and writes only a new `.promptgrinder/` tree with
+`project.yaml`, generated role YAML under `roles/`, and `context/`. It never
+overwrites existing files.
 
-    promptgrinder run-folder docs/tasks/
+Review suggested role improvements without writing them:
 
-Validate without executing:
+    promptgrinder roles enhance
 
-    promptgrinder validate docs/tasks/
+Validate, then run a prompt:
 
-Inspect available commands:
+    promptgrinder validate docs/tasks/10-implement.md
+    promptgrinder run docs/tasks/10-implement.md
 
-    promptgrinder --help
+Run an ordered folder in the invoking terminal:
 
-Most users only need these four commands to get started.
+    promptgrinder run-folder docs/tasks/ --detach=false
+
+Resume it after a failure or interruption:
+
+    promptgrinder run-folder docs/tasks/ --detach=false --resume
 
 ![PromptGrinder executing five sequential work orders successfully](docs/images/sequential-workflow.png)
 
 ## Overview
 
-PromptGrinder is a local-first macOS CLI for engineers who use the Codex CLI.
-It validates Markdown work orders, runs them individually or in a defined
-sequence, carries context between sequential tasks, and records worker state,
-logs, and events for review.
+PromptGrinder is a local-first engineering orchestration CLI. It coordinates
+replaceable AI runtimes, persistent project-owned workers, deterministic role
+discovery, reviewable task queues, and Markdown work orders. PromptGrinder owns
+identity, policy, lifecycle, state, worktrees, scheduling, and review evidence;
+the selected runtime performs the engineering work.
 
 ### Core capabilities
 
@@ -40,6 +48,12 @@ logs, and events for review.
 - **Deterministic validation:** resolve and validate work orders before launch.
 - **Local-first operation:** keep PromptGrinder orchestration state on your machine.
 - **Codex integration:** execute through the locally installed Codex CLI.
+- **Persistent workers:** define project roles, assign queued tasks, and retain
+  lifecycle and review evidence across attempts.
+- **Runtime abstraction:** launch named workers through Codex or Antigravity
+  without changing their role definitions.
+- **Role discovery and enhancement:** generate deterministic role YAML, then
+  review grounded AI-assisted recommendations before applying selected changes.
 - **macOS terminals:** use Terminal.app, iTerm2, or headless execution.
 
 ## Installation
@@ -71,7 +85,10 @@ promptgrinder --version
 ```
 
 Use the `amd64` archive and directory on Intel. Ensure `$HOME/.local/bin` is on
-`PATH`. Release binaries are currently unsigned and not notarized.
+`PATH`. `promptgrinder doctor` detects the current shell and prints an exact,
+copyable PATH command when it is not. It reports the change but never edits
+`.zshrc`, `.bash_profile`, or another shell profile automatically. Release
+binaries are currently unsigned and not notarized.
 
 ### Build from source
 
@@ -140,6 +157,14 @@ execute sequential work. A failed sequential task stops the sequence.
 PromptGrinder does not provide a command that pushes commits, creates pull
 requests, publishes releases, or merges branches.
 
+Automatic per-task commits are conservative: `--commit-each=true` requires a
+clean Git baseline even if `--require-clean-git=false` is supplied, stages only
+the paths attributed to that worker (including deletions), and refuses a commit
+when the index, worktree, or HEAD changes unexpectedly. PromptGrinder state and
+output paths are never included. Start from a clean worktree and use
+`--require-clean-git`; use `--commit-each=false` unless focused automatic
+commits are intended.
+
 ## Examples
 
 - [`examples/minimal.md`](examples/minimal.md) — the smallest useful work order.
@@ -157,7 +182,7 @@ requests, publishes releases, or merges branches.
 | `run-folder <folder>` | Run numbered work orders sequentially |
 | `discover` | Detect repository technologies and generate `.promptgrinder/` project roles |
 | `roles enhance` | Review grounded role recommendations; apply with `--apply-all` or `--apply-selected <id>` |
-| `validate <task.md>` | Validate a work order without creating a worker |
+| `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
 | `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
 | `setup` | Preview or create PromptGrinder-owned first-use files |
 | `list` | List workers |
@@ -165,12 +190,44 @@ requests, publishes releases, or merges branches.
 | `logs <worker-id>` | Read one worker log |
 | `events [worker-id]` | Read or follow worker or global events |
 | `sequence <id\|current>` | Inspect an ordered workflow |
+| `sequences [--folder <path>]` | List ordered workflows, optionally filtered by a normalized relative or absolute folder path |
 | `cancel <worker-id>` | Cancel an active worker |
 | `reconcile` | Inspect stale workers and sequences |
 
 Use `promptgrinder --help` and `promptgrinder <command> --help` for the complete
 command and option reference. Add `--json` where supported for structured
 output.
+
+### Ordered folder completion contract
+
+`run-folder` discovers only recognized numbered Markdown names:
+`00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
+`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. README files,
+notes, completion reports, and unknown numbered file types are never runnable.
+Specifications are shared context unless `--include-specification` is set.
+
+PromptGrinder appends one visible completion-report instruction to every
+runnable ordered prompt, including the first prompt, resumed prompts, prompts
+using shared specifications, and non-Codex engines. A zero engine exit is only
+successful when the final structured result contains exactly one `STATUS:
+PASS` and exactly one `NEXT_PROMPT_SAFE: yes`. Missing, malformed, duplicate,
+blocked, partial, or unsafe reports stop the sequence and are persisted with
+the worker ID, log, engine exit code, completion fields, and semantic reason.
+Independent `run` commands retain their existing engine behavior.
+
+Sequence human and JSON output includes UTC created, started, updated, and
+finished timestamps; older records without those fields remain readable.
+Detached startup prints the sequence ID and a copyable `promptgrinder sequence
+<id>` command. Detached completion and failure notifications are deterministic
+local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
+Foreground execution stays in the invoking terminal, prints the full prompt
+inventory before launch, and shows live status, elapsed time, worker IDs, logs,
+and immediate failure reasons. `--plain` keeps the same information without
+colors, animation, or terminal control sequences.
+
+For now, task bodies must contain the actual instructions to execute. Custom
+YAML fields are not an instruction language and unsupported frontmatter keys
+are rejected rather than treated as task content.
 
 `roles enhance` is review-only by default and with `--reject-all`. It writes
 nothing unless `--apply-all` or `--apply-selected <id>[,<id>...]` is supplied;
@@ -179,6 +236,11 @@ automation output. The configured Codex executable is used only through a
 bounded, structured advisor request in a temporary directory with a read-only
 sandbox. PromptGrinder validates grounding and performs all YAML merging; the
 advisor never receives the repository path or write access.
+
+The `.promptgrinder/project.yaml` and `.promptgrinder/roles/*.yaml` files are
+discovery and enhancement artifacts in RC.2. Executable named-worker definitions
+remain in `.ai/workers.yaml`; RC.2 does not silently convert or activate a
+suggested role as a worker.
 
 ## Configuration
 
@@ -212,6 +274,43 @@ PromptGrinder provides orchestration controls, not a security guarantee:
 - worker state, events, logs, and summaries remain inspectable locally;
 - shared-context workflows require Git and a clean worktree by default;
 - no hosted PromptGrinder service is required.
+
+### Task frontmatter contract v1
+
+Frontmatter is a strict, versioned contract. Unknown top-level keys and unknown
+keys nested under `engine` are errors; YAML anchors/aliases and `depends_on` are
+not supported. Errors name the source task. Runtime metadata remains separate
+from task instructions:
+
+- `engine` (a name or mapping with `name`, `model`, `profile`, `sandbox`,
+  `approval`, `web_search`, and `images`), plus the compatible top-level engine
+  keys `sandbox`, `approval`, `web_search`, and `images`;
+- `working_directory`, `timeout`, `labels`, and `env` configure execution or
+  identify the run;
+- `acceptance_criteria` is a nonempty string or nonempty list of strings;
+- `allowed_paths` is a nonempty list of repository-relative patterns;
+- `forbidden_paths` is a list of repository-relative patterns and may be empty;
+- `validation` is a nonempty string or nonempty list of commands or
+  instructions.
+
+`allowed_paths` and `forbidden_paths` are enforced for ordinary `run` and
+`run-folder` workers as well as named workers. Forbidden patterns win. Keep
+executable instructions in the Markdown body and use only supported metadata.
+
+The four semantic fields are rendered, in the order shown above, into a
+`# Task Semantics (v1)` preamble sent to the engine. The Markdown body following
+frontmatter is otherwise byte-for-byte unchanged. Validation entries are AI
+instructions only: PromptGrinder never executes them as shell commands.
+Absolute or repository-escaping path patterns, identical allowed/forbidden
+rules, empty required values, wrong types, and secret-looking semantic values
+are rejected. A deterministic warning is emitted when frontmatter is at least
+2048 bytes, rendered task instructions are at most 256 bytes, and frontmatter
+is at least eight times larger; warnings appear in human and JSON validation.
+
+Use `promptgrinder validate --render <task.md>` to inspect the exact prompt
+bytes without launching Codex or creating worker state. `--render` and `--json`
+are intentionally incompatible; ordinary `--json` validation reports the
+warning and execution plan fields.
 
 PromptGrinder passes the selected sandbox and approval settings to Codex; Codex
 performs model execution and tool use. Review work orders and permissions before
@@ -344,11 +443,14 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.1` release target is:
+The published `v1.0.0-rc.1` release target is macOS on Apple silicon and Intel.
+The in-development `v1.0.0-rc.2` candidate retains that platform target and
+adds the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
 - macOS on Intel (`darwin/amd64`);
-- the Codex CLI as the only execution engine;
+- Codex for one-off `run` and `run-folder` execution;
+- Codex and Antigravity adapters for named-worker execution;
 - Terminal.app, iTerm2, and headless execution.
 
 Exact qualified macOS, Codex, Terminal.app, and iTerm2 versions remain pending
@@ -381,13 +483,18 @@ PROMPTGRINDER_LIVE_TERMINAL=1 \
 
 This may open Terminal.app and iTerm2 and trigger macOS Automation prompts.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) before submitting a change.
+Repository-local Codex development skills live under `.agents/skills/` for
+general development, slice authoring, CI, and release qualification.
 
 ## Documentation and support
 
 - [Worker runtime use cases](docs/product/worker-runtime-use-cases.md)
 - [Release policy](docs/RELEASE_POLICY.md)
-- [Release qualification](docs/release/qualification.md)
-- [Release-candidate notes](docs/release/v1.0.0-rc.1-release-notes.md)
+- [RC.2 qualification](docs/release/v1.0.0-rc.2-qualification.md)
+- [RC.2 final gate](docs/release/v1.0.0-rc.2-final-gate.md)
+- [RC.2 candidate notes](docs/release/v1.0.0-rc.2-release-notes.md)
+- [Historical RC.1 qualification](docs/release/qualification.md)
+- [Historical RC.1 notes](docs/release/v1.0.0-rc.1-release-notes.md)
 - [Support](SUPPORT.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)

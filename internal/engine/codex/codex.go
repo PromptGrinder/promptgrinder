@@ -119,36 +119,8 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 			result.Summary = strings.TrimSpace(event.Item.Text)
 		}
 	}
-	result.CompletionStatus, result.NextPromptSafe = parseCompletionReport(result.Summary)
+	result.CompletionStatus, result.NextPromptSafe, result.CompletionReason = state.ParseOrderedCompletionReport(result.Summary)
 	return result
-}
-
-func parseCompletionReport(summary string) (string, *bool) {
-	completionStatus := ""
-	var nextPromptSafe *bool
-	for _, line := range strings.Split(summary, "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		switch strings.TrimSpace(key) {
-		case "STATUS":
-			value = strings.ToUpper(strings.TrimSpace(value))
-			if value == "PASS" || value == "PARTIAL" || value == "BLOCKED" {
-				completionStatus = value
-			}
-		case "NEXT_PROMPT_SAFE":
-			switch strings.ToLower(strings.TrimSpace(value)) {
-			case "yes":
-				value := true
-				nextPromptSafe = &value
-			case "no":
-				value := false
-				nextPromptSafe = &value
-			}
-		}
-	}
-	return completionStatus, nextPromptSafe
 }
 
 func (e Engine) BuildScript(worker state.Worker, executablePath string) string {
@@ -263,8 +235,11 @@ heartbeat_loop() {
 }
 
 heartbeat
-heartbeat_loop &
-HEARTBEAT_PID=$!
+HEARTBEAT_PID=""
+if [ "${PROMPTGRINDER_HEADLESS:-}" != "1" ]; then
+  heartbeat_loop &
+  HEARTBEAT_PID=$!
+fi
 
 if [ ! -x "$CODEX_BIN" ]; then
   echo "Error: validated Codex executable is no longer executable: $CODEX_BIN"
@@ -274,8 +249,10 @@ else
   EXIT_CODE=$?
 fi
 
-kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
-wait "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+if [ -n "$HEARTBEAT_PID" ]; then
+  kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+  wait "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+fi
 heartbeat
 
 "$PROMPTGRINDER_BIN" __worker-finish "$RECORD_PATH" "$EXIT_CODE"

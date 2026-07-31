@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -767,6 +768,9 @@ func TestCLIRunFolderUsesConfiguredDefaults(t *testing.T) {
 	if service.runFolderOptions.Template != "codex" || service.runFolderOptions.EngineOverride != "codex" || service.runFolderOptions.RepoPath != "/repo" {
 		t.Fatalf("run folder options = %#v", service.runFolderOptions)
 	}
+	if service.runFolderOptions.ExecutionPolicy != pgruntime.RunFolderExecutionForeground {
+		t.Fatalf("execution policy = %q", service.runFolderOptions.ExecutionPolicy)
+	}
 }
 
 func TestCLIEnginesHuman(t *testing.T) {
@@ -1014,8 +1018,9 @@ func TestCLIRunUnknownEngineReturnsExitCode2(t *testing.T) {
 
 func TestCLIValidateJSON(t *testing.T) {
 	service := &fakeService{validatePlan: worker.ValidationPlan{
-		Valid:  true,
-		Engine: "codex",
+		Valid:    true,
+		Engine:   "codex",
+		Warnings: []string{"frontmatter is oversized"},
 		ExecutionPlan: map[string]any{
 			"engine": "codex",
 		},
@@ -1031,8 +1036,34 @@ func TestCLIValidateJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("invalid json %q: %v", out.String(), err)
 	}
-	if !decoded.Valid || decoded.Engine != "codex" {
+	if !decoded.Valid || decoded.Engine != "codex" || len(decoded.Warnings) != 1 {
 		t.Fatalf("decoded = %#v", decoded)
+	}
+}
+
+func TestCLIValidateRenderPrintsExactPromptBytes(t *testing.T) {
+	want := "# Task Semantics (v1)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
+	service := &fakeService{validatePlan: worker.ValidationPlan{Valid: true, Engine: "codex", RenderedPrompt: want, ExecutionPlan: map[string]any{}}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", "--render", "task with spaces.md"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != want {
+		t.Fatalf("rendered bytes = %q, want %q", out.String(), want)
+	}
+}
+
+func TestCLIValidateRenderRejectsJSON(t *testing.T) {
+	cmd := NewRootCommand(&fakeService{}, &bytes.Buffer{}, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", "task.md", "--render", "--json"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("err = %v", err)
+	}
+	if code, ok := ExitCode(err); !ok || code != ExitInvalidInput {
+		t.Fatalf("exit code = %d, %t", code, ok)
 	}
 }
 
@@ -1063,8 +1094,9 @@ func TestCLIValidateInvalidReturnsExitCode2(t *testing.T) {
 
 func TestCLIValidateRedactedHumanOutput(t *testing.T) {
 	service := &fakeService{validatePlan: worker.ValidationPlan{
-		Valid:  true,
-		Engine: "codex",
+		Valid:    true,
+		Engine:   "codex",
+		Warnings: []string{"frontmatter is oversized"},
 		ExecutionPlan: map[string]any{
 			"working_directory":  "/repo",
 			"command_preview":    "codex exec --cd /repo",
@@ -1082,7 +1114,7 @@ func TestCLIValidateRedactedHumanOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := out.String()
-	for _, want := range []string{"Valid: true", "Engine: codex", "Command: codex exec --cd /repo", "Worker launch: false"} {
+	for _, want := range []string{"Valid: true", "Engine: codex", "Warning: frontmatter is oversized", "Command: codex exec --cd /repo", "Worker launch: false"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("validate output missing %q: %q", want, output)
 		}
@@ -1996,6 +2028,99 @@ func TestCLIRunFolderPrintsAggregateSummary(t *testing.T) {
 	}
 }
 
+func TestCLIRunFolderForegroundRendersLifecycleWithoutDuplicateInventory(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("PROMPTGRINDER_PLAIN", "")
+	events := []pgruntime.RunFolderProgressEvent{
+		{Type: "run.started", SequenceID: "seq_cli", Folder: "specs", Inventory: []runfolder.ProgressPrompt{
+			{Name: "00-spec.md", Type: runfolder.TypeSpecification, Status: "pending"},
+			{Name: "10-implement.md", Type: runfolder.TypeImplement, Status: "pending"},
+		}},
+		{Type: "prompt.started", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "running"},
+		{Type: "prompt.skipped", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "skipped"},
+		{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "running"},
+		{Type: "prompt.succeeded", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "succeeded", WorkerID: "wrk_1", LogPath: "/tmp/worker.log", Duration: time.Second},
+		{Type: "run.completed", SequenceID: "seq_cli"},
+	}
+	service := &fakeService{runFolderProgress: events}
+
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		args []string
+		ansi bool
+	}{
+		{name: "tty", out: &ttyBuffer{}, args: []string{"run-folder", "specs"}, ansi: true},
+		{name: "redirected", out: &bytes.Buffer{}, args: []string{"run-folder", "specs"}},
+		{name: "plain tty", out: &ttyBuffer{}, args: []string{"--plain", "run-folder", "specs"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := NewRootCommand(service, tc.out, &bytes.Buffer{})
+			cmd.SetArgs(tc.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			got := tc.out.(interface{ String() string }).String()
+			for _, want := range []string{"Mode: foreground", "Sequence: seq_cli", "00-spec.md [specification] - skipped", "10-implement.md [implement] - succeeded", "worker: wrk_1", "Result: succeeded"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("output missing %q: %q", want, got)
+				}
+			}
+			if !tc.ansi && strings.Count(got, "Prompts:\n") != 1 {
+				t.Fatalf("prompt inventory count = %d: %q", strings.Count(got, "Prompts:\n"), got)
+			}
+			if strings.Contains(got, "\x1b") != tc.ansi {
+				t.Fatalf("ANSI presence = %v, want %v: %q", strings.Contains(got, "\x1b"), tc.ansi, got)
+			}
+		})
+	}
+}
+
+func TestCLIRunFolderForegroundResumeFailureQuotesFolder(t *testing.T) {
+	folder := "tasks/odd path;$(touch nope)'s"
+	service := &fakeService{
+		runFolderErr: errTest("worker launch failed"),
+		runFolderProgress: []pgruntime.RunFolderProgressEvent{
+			{Type: "run.started", SequenceID: "seq_resume", Folder: folder, Inventory: []runfolder.ProgressPrompt{
+				{Name: "10-done.md", Type: runfolder.TypeImplement, Status: "succeeded"},
+				{Name: "20-next.md", Type: runfolder.TypeTest, Status: "pending"},
+			}},
+			{Type: "prompt.started", PromptName: "20-next.md", PromptType: runfolder.TypeTest, Status: "running"},
+			{Type: "prompt.failed", PromptName: "20-next.md", PromptType: runfolder.TypeTest, Status: "failed", WorkerID: "wrk_bad", LogPath: "/tmp/bad.log"},
+		},
+	}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", folder, "--resume"})
+	err := cmd.Execute()
+	if code, ok := ExitCode(err); !ok || code != ExitExecutionFailed {
+		t.Fatalf("exit code = %d %v, want %d", code, ok, ExitExecutionFailed)
+	}
+	got := out.String()
+	for _, want := range []string{"10-done.md [implement] - succeeded", "20-next.md [test] - failed", "Result: failed", `Resume: promptgrinder run-folder 'tasks/odd path;$(touch nope)'"'"'s' --resume`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q: %q", want, got)
+		}
+	}
+	if strings.Count(got, "Prompts:\n") != 1 || strings.ContainsAny(got, "\r\x1b") {
+		t.Fatalf("failure output is not deterministic: %q", got)
+	}
+}
+
+func TestCLIRunFolderForegroundNoColorDisablesTTYControls(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	out := &ttyBuffer{}
+	service := &fakeService{runFolderProgress: []pgruntime.RunFolderProgressEvent{{Type: "run.started", Folder: "specs", Inventory: []runfolder.ProgressPrompt{{Name: "10-a.md", Type: runfolder.TypeImplement, Status: "pending"}}}, {Type: "run.completed"}}}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "specs"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(out.String(), "\r\x1b") {
+		t.Fatalf("NO_COLOR output contains controls: %q", out.String())
+	}
+}
+
 func TestCLIRunFolderEngineOverrideAndUnknownExitCode(t *testing.T) {
 	service := &fakeService{runFolderErr: errTest(`invalid engine "missing": unknown engine`)}
 	cmd := NewRootCommand(service, &bytes.Buffer{}, &bytes.Buffer{})
@@ -2010,6 +2135,22 @@ func TestCLIRunFolderEngineOverrideAndUnknownExitCode(t *testing.T) {
 	}
 	if service.runFolderOptions.EngineOverride != "missing" {
 		t.Fatalf("runFolderOptions = %#v", service.runFolderOptions)
+	}
+}
+
+func TestCLIDetachedRunFolderPrintsSequenceInspectionCommand(t *testing.T) {
+	home := t.TempDir()
+	service := &fakeService{sequence: pgruntime.SequenceState{SequenceID: "seq_detached"}, defaultsReport: config.DefaultsReport{HomeDir: home}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "task folder", "--detach"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Sequence: seq_detached", "Status: promptgrinder sequence seq_detached"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output = %q, missing %q", out.String(), want)
+		}
 	}
 }
 
@@ -2053,6 +2194,28 @@ func TestCLISequencesJSON(t *testing.T) {
 	}
 	if len(decoded.Sequences) != 1 || decoded.Sequences[0].SequenceID != "seq_abc123" {
 		t.Fatalf("decoded = %#v", decoded)
+	}
+}
+
+func TestCLISequencesFiltersNormalizedFolderWithSpaces(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "task folder")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	service := &fakeService{sequences: []pgruntime.SequenceProgress{
+		{SequenceID: "seq_match", Folder: folder},
+		{SequenceID: "seq_other", Folder: filepath.Join(root, "other")},
+	}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"sequences", "--folder", "task folder"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "seq_match") || strings.Contains(out.String(), "seq_other") {
+		t.Fatalf("output = %q", out.String())
 	}
 }
 
@@ -2216,6 +2379,7 @@ type fakeService struct {
 	runFolderSummary  pgruntime.RunFolderSummary
 	runFolderErr      error
 	runFolderOptions  pgruntime.RunFolderOptions
+	runFolderProgress []pgruntime.RunFolderProgressEvent
 	defaultsReport    config.DefaultsReport
 	engines           []engine.Descriptor
 	validatePlan      worker.ValidationPlan
@@ -2266,6 +2430,11 @@ func (f *fakeService) RunPathsWithOptions(paths []string, options pgruntime.RunO
 
 func (f *fakeService) RunPromptFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderSummary, error) {
 	f.runFolderOptions = options
+	for _, progress := range f.runFolderProgress {
+		if options.Progress != nil {
+			options.Progress(progress)
+		}
+	}
 	return f.runFolderSummary, f.runFolderErr
 }
 
@@ -2304,6 +2473,13 @@ func (f *fakeService) Validate(path, engineOverride string) (worker.ValidationPl
 
 func (f *fakeService) Sequences() ([]pgruntime.SequenceProgress, error) {
 	return f.sequences, nil
+}
+
+func (f *fakeService) SequenceID(path string, options pgruntime.RunFolderOptions) (string, error) {
+	if f.sequence.SequenceID != "" {
+		return f.sequence.SequenceID, nil
+	}
+	return "seq_test", nil
 }
 
 func (f *fakeService) Sequence(sequenceID string) (pgruntime.SequenceState, error) {

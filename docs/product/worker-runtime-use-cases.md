@@ -201,6 +201,53 @@ definitions.
 Adding support for a new runtime should require implementing a runtime adapter
 rather than redesigning PromptGrinder.
 
+## UC-14: Discover Project Roles
+
+As an engineer,
+
+I want PromptGrinder to inspect repository evidence deterministically,
+
+so that I can start with minimal project and role YAML without an AI call.
+
+```sh
+promptgrinder discover
+```
+
+Discovery writes only a new `.promptgrinder/` tree and refuses to overwrite
+existing files. Generated roles are proposals, not automatically active named
+workers.
+
+## UC-15: Enhance Roles With Review
+
+As an engineer,
+
+I want an AI runtime to propose evidence-grounded improvements to discovered
+roles,
+
+so that quality gates, context, permissions, and behavior reflect the project
+without silently replacing user configuration.
+
+```sh
+promptgrinder roles enhance
+promptgrinder roles enhance --apply-selected recommendation-id
+```
+
+PromptGrinder collects repository evidence, requires structured recommendations,
+renders every reason and confidence, and performs approved YAML merges itself.
+The AI runtime never edits role files directly.
+
+## UC-16: Trust Ordered Automation
+
+As an engineer,
+
+I want ordered workers to continue only after an explicit safe completion,
+
+so that a clarification or partial result cannot be mistaken for success.
+
+PromptGrinder requires `STATUS: PASS` and `NEXT_PROMPT_SAFE: yes`, preserves the
+failure reason, enforces task path policy, and commits only worker-attributed
+changes from a clean baseline.
+
 ## Success Criteria
 
 PromptGrinder should allow me to think in terms of engineering team members

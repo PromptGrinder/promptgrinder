@@ -3,6 +3,7 @@ package worker
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,24 +17,30 @@ import (
 	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/terminal"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 type ExecutorFactory func(config.Config) (execution.Executor, error)
+type TerminalAdapterSelector func(string, string) (terminal.TerminalAdapter, error)
 
 type Manager struct {
-	Store               state.Store
-	Engine              engine.Engine
-	Registry            engine.Registry
-	EngineName          string
-	EngineOverride      string
-	SandboxOverride     string
-	RepositoryOverride  string
-	CodexSessionID      string
-	CaptureCodexSession bool
-	Executable          string
-	UseRepoConfig       bool
-	BaseConfig          config.Config
-	NewExecutor         ExecutorFactory
+	Store                   state.Store
+	Engine                  engine.Engine
+	Registry                engine.Registry
+	EngineName              string
+	EngineOverride          string
+	SandboxOverride         string
+	RepositoryOverride      string
+	CodexSessionID          string
+	CaptureCodexSession     bool
+	Executable              string
+	UseRepoConfig           bool
+	BaseConfig              config.Config
+	NewExecutor             ExecutorFactory
+	TerminalAdapterOverride string
+	TerminalModeOverride    string
+	SelectTerminalAdapter   TerminalAdapterSelector
 }
 
 type LaunchResult struct {
@@ -80,10 +87,13 @@ func (m Manager) ValidateContentWithMetadata(taskPath, content string, metadata 
 	}
 	task, err := markdown.Parse(content)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse task %s: %w", absTask, err)
 	}
 	if strings.TrimSpace(task.Body) == "" {
 		return fmt.Errorf("task prompt is empty: %s", absTask)
+	}
+	if err := markdown.Validate(task, absTask); err != nil {
+		return err
 	}
 	if metadata == nil {
 		metadata = task.Metadata
@@ -115,11 +125,12 @@ func (m Manager) ValidateContentWithMetadata(taskPath, content string, metadata 
 }
 
 type ValidationPlan struct {
-	Valid         bool           `json:"valid"`
-	Engine        string         `json:"engine"`
-	Warnings      []string       `json:"warnings"`
-	Errors        []string       `json:"errors"`
-	ExecutionPlan map[string]any `json:"execution_plan"`
+	Valid          bool           `json:"valid"`
+	Engine         string         `json:"engine"`
+	Warnings       []string       `json:"warnings"`
+	Errors         []string       `json:"errors"`
+	ExecutionPlan  map[string]any `json:"execution_plan"`
+	RenderedPrompt string         `json:"-"`
 }
 
 func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
@@ -133,10 +144,14 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 	}
 	task, err := markdown.Parse(string(data))
 	if err != nil {
+		err = fmt.Errorf("parse task %s: %w", absTask, err)
 		return invalidValidationPlan("", err), err
 	}
 	if strings.TrimSpace(task.Body) == "" {
 		err := fmt.Errorf("task prompt is empty: %s", absTask)
+		return invalidValidationPlan("", err), err
+	}
+	if err := markdown.Validate(task, absTask); err != nil {
 		return invalidValidationPlan("", err), err
 	}
 	repoRoot, err := repository.DetectRoot(absTask)
@@ -157,7 +172,8 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 	if err := adapter.Validate(ctx); err != nil {
 		return invalidValidationPlan(selected, err), err
 	}
-	request, err := adapter.Build(ctx, []byte(task.Body), m.Executable)
+	rendered := markdown.Render(task)
+	request, err := adapter.Build(ctx, rendered, m.Executable)
 	if err != nil {
 		return invalidValidationPlan(selected, err), err
 	}
@@ -178,21 +194,25 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 		executionPlan["command_preview"] = preview
 	}
 	return ValidationPlan{
-		Valid:         true,
-		Engine:        selected,
-		Warnings:      []string{},
-		Errors:        []string{},
-		ExecutionPlan: redactValue(executionPlan).(map[string]any),
+		Valid:          true,
+		Engine:         selected,
+		Warnings:       markdown.Warnings(task),
+		Errors:         []string{},
+		ExecutionPlan:  redactValue(executionPlan).(map[string]any),
+		RenderedPrompt: string(request.Prompt),
 	}, nil
 }
 
 func (m Manager) launchData(absTask string, data []byte, suppliedMetadata map[string]any) LaunchResult {
 	task, err := markdown.Parse(string(data))
 	if err != nil {
-		return LaunchResult{Err: err}
+		return LaunchResult{Err: fmt.Errorf("parse task %s: %w", absTask, err)}
 	}
 	if strings.TrimSpace(task.Body) == "" {
 		return LaunchResult{Err: fmt.Errorf("task prompt is empty: %s", absTask)}
+	}
+	if err := markdown.Validate(task, absTask); err != nil {
+		return LaunchResult{Err: err}
 	}
 	repoRootPath := absTask
 	if m.RepositoryOverride != "" {
@@ -219,6 +239,13 @@ func (m Manager) launchData(absTask string, data []byte, suppliedMetadata map[st
 	if m.CaptureCodexSession {
 		metadata["codex_capture_session"] = true
 	}
+	if snapshot, snapshotErr := workerpathpolicy.Capture(repoRoot); snapshotErr == nil {
+		if encoded, encodeErr := json.Marshal(snapshot); encodeErr == nil {
+			metadata["ordinary_path_baseline"] = string(encoded)
+			metadata["ordinary_allowed_paths"] = taskMetadata["allowed_paths"]
+			metadata["ordinary_forbidden_paths"] = taskMetadata["forbidden_paths"]
+		}
+	}
 	validateCtx, err := validationContext(repoRoot, absTask, engineName, metadata, cfg)
 	if err != nil {
 		return LaunchResult{Err: err}
@@ -239,7 +266,7 @@ func (m Manager) launchData(absTask string, data []byte, suppliedMetadata map[st
 	if err != nil {
 		return LaunchResult{Worker: worker, Err: err}
 	}
-	request, err := adapter.Build(ctx, []byte(task.Body), m.Executable)
+	request, err := adapter.Build(ctx, markdown.Render(task), m.Executable)
 	if err != nil {
 		return LaunchResult{Worker: worker, Err: err}
 	}
@@ -364,6 +391,9 @@ func engineNameFromMetadata(metadata map[string]any) string {
 func resolvedMetadata(metadata map[string]any, cfg config.Config, engineName string) map[string]any {
 	out := map[string]any{}
 	for key, value := range metadata {
+		if isSemanticMetadataKey(key) {
+			continue
+		}
 		out[key] = value
 	}
 	engineMap := map[string]any{}
@@ -378,6 +408,15 @@ func resolvedMetadata(metadata map[string]any, cfg config.Config, engineName str
 		out["timeout"] = cfg.WorkerTimeout.String()
 	}
 	return out
+}
+
+func isSemanticMetadataKey(key string) bool {
+	switch key {
+	case "acceptance_criteria", "allowed_paths", "forbidden_paths", "validation":
+		return true
+	default:
+		return false
+	}
 }
 
 func durationString(value time.Duration) string {
@@ -610,10 +649,33 @@ func (m Manager) createWorker(repoRoot, taskPath, engineName, requestedEngine st
 }
 
 func (m Manager) executor(cfg config.Config) (execution.Executor, error) {
-	if m.NewExecutor != nil {
-		return m.NewExecutor(cfg)
+	if m.TerminalAdapterOverride != "" {
+		cfg.TerminalAdapter = m.TerminalAdapterOverride
+		cfg.TerminalMode = m.TerminalModeOverride
+		if cfg.TerminalMode == "" {
+			cfg.TerminalMode = "normal"
+		}
 	}
-	return execution.Executor{Store: m.Store}, nil
+	executor := execution.Executor{Store: m.Store}
+	if m.NewExecutor != nil {
+		var err error
+		executor, err = m.NewExecutor(cfg)
+		if err != nil {
+			return executor, err
+		}
+	}
+	if m.TerminalAdapterOverride != "" {
+		selector := m.SelectTerminalAdapter
+		if selector == nil {
+			selector = terminal.SelectAdapter
+		}
+		adapter, err := selector(cfg.TerminalAdapter, cfg.TerminalMode)
+		if err != nil {
+			return execution.Executor{}, err
+		}
+		executor.Terminal = adapter
+	}
+	return executor, nil
 }
 
 func newWorkerID() (string, error) {
