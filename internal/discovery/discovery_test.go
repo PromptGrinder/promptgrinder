@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestTechnologyDetectorAndRoleGenerator(t *testing.T) {
@@ -89,9 +91,40 @@ func TestGeneratedContentIsDeterministicAndMinimal(t *testing.T) {
 			t.Errorf("role YAML missing %q:\n%s", want, role)
 		}
 	}
+	var manifest ProjectManifest
+	if err := yaml.Unmarshal(first.Files[0].Content, &manifest); err != nil {
+		t.Fatalf("parse project manifest: %v", err)
+	}
+	if manifest.Name == "" || len(manifest.Languages) == 0 || len(manifest.Frameworks) == 0 || len(manifest.Roles) == 0 || manifest.GeneratedBy != GeneratedBy {
+		t.Fatalf("manifest public fields are incomplete: %+v", manifest)
+	}
+	var parsedRole Role
+	if err := yaml.Unmarshal(first.Files[1].Content, &parsedRole); err != nil {
+		t.Fatalf("parse role: %v", err)
+	}
+	if parsedRole.ID == "" || parsedRole.Name == "" || parsedRole.Description == "" || len(parsedRole.Technology) == 0 || len(parsedRole.AllowedPaths) == 0 || parsedRole.Runtime.Preferred == "" || len(parsedRole.QualityGates) == 0 || !parsedRole.Status.Generated {
+		t.Fatalf("role public fields are incomplete: %+v", parsedRole)
+	}
 }
 
-func TestDiscoverWritesOnlyPromptGrinderAndRefusesOverwrite(t *testing.T) {
+func TestDiscoverWithoutSupportedEvidenceCreatesEmptyProjectStructure(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, map[string]string{"data/example.xyz": "unknown"})
+	result, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Roles) != 0 || !reflect.DeepEqual(result.Files, []string{".promptgrinder/project.yaml"}) {
+		t.Fatalf("result = %+v", result)
+	}
+	for _, dir := range []string{"roles", "context"} {
+		if info, err := os.Stat(filepath.Join(root, ".promptgrinder", dir)); err != nil || !info.IsDir() {
+			t.Fatalf("%s directory: %v", dir, err)
+		}
+	}
+}
+
+func TestDiscoverWritesOnlyPromptGrinderAndLeavesIdenticalFilesUntouched(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "safe repo with spaces")
 	writeFixture(t, root, map[string]string{"pom.xml": "spring-boot", "keep.txt": "unchanged"})
 	result, err := Discover(root)
@@ -108,8 +141,8 @@ func TestDiscoverWritesOnlyPromptGrinderAndRefusesOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Discover(root); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
-		t.Fatalf("second discovery error = %v", err)
+	if _, err := Discover(root); err != nil {
+		t.Fatalf("second discovery: %v", err)
 	}
 	after, _ := os.ReadFile(filepath.Join(root, ".promptgrinder", "project.yaml"))
 	if !bytes.Equal(before, after) {

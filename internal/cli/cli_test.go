@@ -14,6 +14,7 @@ import (
 
 	"promptgrinder/internal/buildinfo"
 	"promptgrinder/internal/config"
+	"promptgrinder/internal/discovery"
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
@@ -86,12 +87,57 @@ func TestV1PublicRootCommandContract(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"cancel", "complete", "defaults", "doctor", "engines", "events", "fail", "list",
+		"cancel", "complete", "defaults", "discover", "doctor", "engines", "events", "fail", "list",
 		"logs", "prune", "reconcile", "review", "run", "run-folder", "scheduler", "sequence",
 		"sequences", "setup", "status", "task", "terminals", "validate", "worker", "workers",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("public root commands changed\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestDiscoverCommandPrintsStableSectionsAndUsesInjectedDiscovery(t *testing.T) {
+	out := &bytes.Buffer{}
+	calledWith := ""
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(&fakeService{}, out, &bytes.Buffer{}, func() (string, error) { return repo, nil }, func(root string) (discovery.Result, error) {
+		calledWith = root
+		return discovery.Result{
+			Roles: []discovery.Role{{ID: "backend-feature", Name: "Backend Feature"}, {ID: "backend-test", Name: "Backend Test"}},
+			Files: []string{".promptgrinder/project.yaml", ".promptgrinder/roles/backend-feature.yaml", ".promptgrinder/roles/backend-test.yaml"},
+		}, nil
+	})
+	cmd.SetArgs([]string{"discover"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if calledWith != repo {
+		t.Fatalf("discover root = %q, want %q", calledWith, repo)
+	}
+	want := "Discovered:\n  Backend Feature\n  Backend Test\nGenerated:\n  .promptgrinder/project.yaml\n  .promptgrinder/roles/backend-feature.yaml\n  .promptgrinder/roles/backend-test.yaml\n  .promptgrinder/context/\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestDiscoverCommandOutsideRepositoryIsInvalidInput(t *testing.T) {
+	called := false
+	cmd := newRootCommand(&fakeService{}, &bytes.Buffer{}, &bytes.Buffer{}, func() (string, error) {
+		return t.TempDir(), nil
+	}, func(string) (discovery.Result, error) {
+		called = true
+		return discovery.Result{}, nil
+	})
+	cmd.SetArgs([]string{"discover"})
+	err := cmd.Execute()
+	if code, ok := ExitCode(err); !ok || code != ExitInvalidInput {
+		t.Fatalf("exit code = %d %v, want %d (error %v)", code, ok, ExitInvalidInput, err)
+	}
+	if called {
+		t.Fatal("discovery was called outside a repository")
 	}
 }
 

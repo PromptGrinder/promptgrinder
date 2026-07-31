@@ -16,6 +16,7 @@ import (
 
 	"promptgrinder/internal/buildinfo"
 	"promptgrinder/internal/config"
+	"promptgrinder/internal/discovery"
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/firstuse"
 	"promptgrinder/internal/review"
@@ -252,6 +253,12 @@ type errorJSON struct {
 }
 
 func NewRootCommand(service Service, stdout, stderr io.Writer) *cobra.Command {
+	return newRootCommand(service, stdout, stderr, os.Getwd, discovery.Discover)
+}
+
+type discoverFunc func(string) (discovery.Result, error)
+
+func newRootCommand(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc) *cobra.Command {
 	var compactJSON bool
 	var plainOutput bool
 	var themeName string
@@ -268,6 +275,41 @@ func NewRootCommand(service Service, stdout, stderr io.Writer) *cobra.Command {
 	root.PersistentFlags().BoolVar(&compactJSON, "compact", false, "emit compact single-line JSON when used with --json")
 	root.PersistentFlags().BoolVar(&plainOutput, "plain", false, "disable color and decorative box styling")
 	root.PersistentFlags().StringVar(&themeName, "theme", "default", "interactive theme: default, minimal, or loud")
+
+	discoverCmd := &cobra.Command{
+		Use:   "discover",
+		Short: "Discover repository technologies and generate PromptGrinder roles.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			currentPath, err := getwd()
+			if err != nil {
+				return StructuredError{Err: fmt.Errorf("determine current repository: %w", err), Code: ExitInvalidInput}
+			}
+			rootPath, err := findRepositoryRoot(currentPath)
+			if err != nil {
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			result, err := discover(rootPath)
+			if err != nil {
+				return StructuredError{Err: fmt.Errorf("discover repository: %w", err), Code: ExitInvalidInput}
+			}
+			fmt.Fprintln(stdout, "Discovered:")
+			if len(result.Roles) == 0 {
+				fmt.Fprintln(stdout, "  (no supported roles)")
+			} else {
+				for _, role := range result.Roles {
+					fmt.Fprintf(stdout, "  %s\n", role.Name)
+				}
+			}
+			fmt.Fprintln(stdout, "Generated:")
+			for _, path := range result.Files {
+				fmt.Fprintf(stdout, "  %s\n", path)
+			}
+			fmt.Fprintln(stdout, "  .promptgrinder/context/")
+			return nil
+		},
+	}
+	root.AddCommand(discoverCmd)
 
 	var runJSON bool
 	var runEngine string
@@ -1870,6 +1912,22 @@ task at the tail of its original implementing worker's FIFO.`,
 	root.AddCommand(engineCodex)
 
 	return root
+}
+
+func findRepositoryRoot(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve current repository: %w", err)
+	}
+	for current := abs; ; current = filepath.Dir(current) {
+		if _, statErr := os.Stat(filepath.Join(current, ".git")); statErr == nil {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("current directory is not inside a repository: %s", abs)
+		}
+	}
 }
 
 func loadNamedWorker(id string) (*workerregistry.Registry, workerdomain.WorkerDefinition, error) {

@@ -155,6 +155,7 @@ requests, publishes releases, or merges branches.
 | --- | --- |
 | `run <path...>` | Run one or more work orders |
 | `run-folder <folder>` | Run numbered work orders sequentially |
+| `discover` | Detect repository technologies and generate `.promptgrinder/` project roles |
 | `validate <task.md>` | Validate a work order without creating a worker |
 | `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
 | `setup` | Preview or create PromptGrinder-owned first-use files |

@@ -54,10 +54,19 @@ func WritePlan(root string, plan Plan) error {
 		if err != nil {
 			return err
 		}
-		if _, err = os.Lstat(target); err == nil {
-			return fmt.Errorf("refusing to overwrite existing target %q", f.Path)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect target %q: %w", f.Path, err)
+		if info, statErr := os.Lstat(target); statErr == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("refusing to overwrite existing target %q", f.Path)
+			}
+			existing, readErr := os.ReadFile(target)
+			if readErr != nil {
+				return fmt.Errorf("inspect target %q: %w", f.Path, readErr)
+			}
+			if !bytes.Equal(existing, f.Content) {
+				return fmt.Errorf("refusing to overwrite conflicting target %q", f.Path)
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("inspect target %q: %w", f.Path, statErr)
 		}
 	}
 	for _, dir := range []string{".promptgrinder", ".promptgrinder/roles", ".promptgrinder/context"} {
@@ -78,6 +87,10 @@ func WritePlan(root string, plan Plan) error {
 	}
 	for _, f := range plan.Files {
 		target, _ := safeTarget(abs, f.Path)
+		if _, err := os.Lstat(target); err == nil {
+			// The preflight established that an existing file is byte-identical.
+			continue
+		}
 		file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err != nil {
 			return fmt.Errorf("create %q: %w", f.Path, err)

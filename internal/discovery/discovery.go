@@ -32,5 +32,5 @@ func Discover(root string) (Result, error) {
 	for i, f := range plan.Files {
 		paths[i] = f.Path
 	}
-	return Result{Detection: plan.Detection, Files: paths}, nil
+	return Result{Detection: plan.Detection, Roles: plan.Roles, Files: paths}, nil
 }

@@ -57,5 +57,6 @@ type Plan struct {
 
 type Result struct {
 	Detection Detection
+	Roles     []Role
 	Files     []string
 }
