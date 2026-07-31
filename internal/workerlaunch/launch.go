@@ -23,7 +23,14 @@ type Launcher interface {
 // Capabilities are explicitly advertised by an adapter. A missing capability
 // must never be inferred from the presence of a runtime session identifier.
 type Capabilities struct {
-	SessionResume bool `json:"session_resume"`
+	Headless         bool `json:"headless"`
+	Interactive      bool `json:"interactive"`
+	StructuredOutput bool `json:"structured_output"`
+	WorkingDirectory bool `json:"working_directory"`
+	Environment      bool `json:"environment"`
+	Sandbox          bool `json:"sandbox"`
+	Approval         bool `json:"approval"`
+	SessionResume    bool `json:"session_resume"`
 }
 
 type CapabilityProvider interface {

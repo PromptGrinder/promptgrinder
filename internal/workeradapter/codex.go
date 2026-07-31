@@ -17,7 +17,10 @@ type Codex struct {
 }
 
 func (Codex) Capabilities() workerlaunch.Capabilities {
-	return workerlaunch.Capabilities{SessionResume: false}
+	return workerlaunch.Capabilities{
+		Headless: true, StructuredOutput: true, WorkingDirectory: true,
+		Sandbox: true, Approval: true, SessionResume: false,
+	}
 }
 
 func (c Codex) Preflight(_ context.Context, request workerlaunch.LaunchRequest) error {

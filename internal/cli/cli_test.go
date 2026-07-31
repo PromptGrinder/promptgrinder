@@ -20,6 +20,7 @@ import (
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/worker"
 	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerlaunch"
 	"promptgrinder/internal/workerstate"
 )
 
@@ -57,6 +58,20 @@ func TestCLIHelpUsesPromptGrinder(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("promptgrinder")) {
 		t.Fatalf("help = %q", out.String())
+	}
+}
+
+func TestNamedWorkerLaunchersRegisterRuntimeAdapters(t *testing.T) {
+	launchers := namedWorkerLaunchers(pgruntime.Service{})
+	for _, name := range []string{"codex", "antigravity"} {
+		launcher, ok := launchers[name]
+		if !ok {
+			t.Fatalf("runtime %q is not registered", name)
+		}
+		provider, ok := launcher.(workerlaunch.CapabilityProvider)
+		if !ok || !provider.Capabilities().Headless {
+			t.Fatalf("runtime %q capabilities are unavailable", name)
+		}
 	}
 }
 

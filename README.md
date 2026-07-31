@@ -212,6 +212,30 @@ PromptGrinder stores state under
 telemetry. Task content is handled by Codex under its own configuration and
 terms. See [`SECURITY.md`](SECURITY.md) and [`SUPPORT.md`](SUPPORT.md).
 
+### Named-worker runtimes
+
+Named workers select a runtime by symbolic key in `.ai/workers.yaml`.
+PromptGrinder currently registers `codex` and `antigravity` for named-worker
+launches. Existing `run` and `run-folder` workflows continue to use the Codex
+engine.
+
+Antigravity uses its documented non-interactive JSON mode. Install `agy`
+separately and either place it on `PATH` or configure its executable:
+
+```yaml
+runtime:
+  antigravity:
+    executable: /Users/example/.local/bin/agy
+    sandbox: true
+    mode: accept-edits
+```
+
+Supported Antigravity options are `executable`, `model`, `agent`, `effort`,
+`mode`, `sandbox`, `print_timeout`, and
+`dangerously_skip_permissions`. PromptGrinder does not advertise Antigravity
+session resume because the CLI does not currently document a conversation ID
+in headless results; resume therefore starts a new retained task attempt.
+
 ## Platform support
 
 The `v1.0.0-rc.1` release target is:

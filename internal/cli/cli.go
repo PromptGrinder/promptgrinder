@@ -1019,9 +1019,7 @@ Examples:
 			runtimeService := pgruntime.NewService(cfg)
 			starter := workerstart.Service{
 				Home: cfg.HomeDir, Config: cfg,
-				Launchers: map[string]workerlaunch.Launcher{
-					"codex": workeradapter.Codex{Manager: runtimeService.Worker},
-				},
+				Launchers: namedWorkerLaunchers(runtimeService),
 			}
 			result, err := starter.Start(cmd.Context(), registry.Root, definition.ID, workerStartRuntime)
 			if err != nil {
@@ -1121,7 +1119,7 @@ Examples:
 			}
 			cfg := service.Defaults().Config
 			runtimeService := pgruntime.NewService(cfg)
-			launchers := map[string]workerlaunch.Launcher{"codex": workeradapter.Codex{Manager: runtimeService.Worker}}
+			launchers := namedWorkerLaunchers(runtimeService)
 			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: launchers}
 			state, err := workerstate.New(cfg.HomeDir).Ensure(definition)
 			if err != nil {
@@ -1350,7 +1348,7 @@ Examples:
 				return taskCommandError(stdout, err, taskControlJSON, compactJSON)
 			}
 			runtimeService := pgruntime.NewService(cfg)
-			launchers := map[string]workerlaunch.Launcher{"codex": workeradapter.Codex{Manager: runtimeService.Worker}}
+			launchers := namedWorkerLaunchers(runtimeService)
 			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: launchers}
 			result, err := (workercontrol.Service{Home: cfg.HomeDir, StartNew: func(ctx context.Context, id string) error {
 				_, startErr := starter.Start(ctx, registry.Root, id, "")
@@ -1414,9 +1412,7 @@ Examples:
 			}
 			cfg := service.Defaults().Config
 			runtimeService := pgruntime.NewService(cfg)
-			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: map[string]workerlaunch.Launcher{
-				"codex": workeradapter.Codex{Manager: runtimeService.Worker},
-			}}
+			starter := workerstart.Service{Home: cfg.HomeDir, Config: cfg, Launchers: namedWorkerLaunchers(runtimeService)}
 			schedulerService := pgscheduler.Service{
 				Home: cfg.HomeDir, Config: cfg,
 				Dispatch: func(ctx context.Context, dispatch pgscheduler.Dispatch) error {
@@ -2757,5 +2753,12 @@ func setPlainEnvForRun(plain bool) func() {
 			return
 		}
 		_ = os.Unsetenv("PROMPTGRINDER_PLAIN")
+	}
+}
+
+func namedWorkerLaunchers(runtimeService pgruntime.Service) map[string]workerlaunch.Launcher {
+	return map[string]workerlaunch.Launcher{
+		"codex":       workeradapter.Codex{Manager: runtimeService.Worker},
+		"antigravity": workeradapter.Antigravity{},
 	}
 }

@@ -20,3 +20,18 @@ workers:
       forbidden:
         - android/**
         - infrastructure/production/**
+
+  documentation:
+    display_name: Documentation Engineer
+    role: Maintain accurate project documentation.
+    runtime: antigravity
+    branch:
+      prefix: worker/documentation
+    worktree:
+      default: .
+    paths:
+      allowed:
+        - docs/**
+        - README.md
+      forbidden:
+        - infrastructure/production/**
