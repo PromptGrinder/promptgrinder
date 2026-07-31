@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -425,12 +426,13 @@ func TestRunPromptFolderUsesRepoPathForWorkerRepository(t *testing.T) {
 func TestRunPromptFolderForegroundForcesHeadlessAfterRepoConfig(t *testing.T) {
 	repo := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
+	fakeCodex := testsupport.FakeCodex(t)
 	writeFile(t, repo, ".git", "gitdir: nowhere\n")
 	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(repo, ".ai", "config.yaml")
-	configBytes := []byte("terminal:\n  adapter: iterm\n  mode: normal\n")
+	configBytes := []byte("engine:\n  codex:\n    executable: " + strconv.Quote(fakeCodex) + "\nterminal:\n  adapter: iterm\n  mode: normal\n")
 	if err := os.WriteFile(configPath, configBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +450,7 @@ func TestRunPromptFolderForegroundForcesHeadlessAfterRepoConfig(t *testing.T) {
 			EngineName:    "codex",
 			Executable:    "promptgrinder",
 			UseRepoConfig: true,
-			BaseConfig:    config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "normal", HomeDir: home},
+			BaseConfig:    config.Config{Engine: "codex", CodexExecutable: fakeCodex, TerminalAdapter: "terminal", TerminalMode: "normal", HomeDir: home},
 			NewExecutor: func(cfg config.Config) (execution.Executor, error) {
 				configuredLaunches++
 				if cfg.TerminalAdapter != "headless" || cfg.TerminalMode != "normal" {
