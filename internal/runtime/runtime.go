@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/engine/codex"
 	"promptgrinder/internal/execution"
+	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/runfolder"
 	"promptgrinder/internal/scheduler"
@@ -292,6 +294,13 @@ func (s Service) runSharedPaths(ordered []string, options RunOptions, manager wo
 	}
 	rollbackArmed := options.RollbackOnFailure && options.CommitEach && options.RequireCleanGit
 	for index, path := range ordered {
+		baseline, err := workerpathpolicy.Capture(repoRoot)
+		if err != nil {
+			return summary, fmt.Errorf("capture worker Git baseline: %w", err)
+		}
+		if options.CommitEach && len(filterRuntimeStateEntries(baseline.Entries)) != 0 {
+			return summary, fmt.Errorf("working tree is dirty; automatic commits require a clean baseline (use --commit-each=false to retain unrelated changes)")
+		}
 		if rollbackArmed {
 			clean, err := sharedGitClean(repoRoot)
 			if err != nil {
@@ -354,8 +363,27 @@ func (s Service) runSharedPaths(ordered []string, options RunOptions, manager wo
 			summary.Failed = append(summary.Failed, err)
 			return summary, err
 		}
+		changes, err := workerpathpolicy.AttributedChanges(repoRoot, baseline)
+		if err != nil {
+			return summary, fmt.Errorf("attribute worker changes: %w", err)
+		}
+		changes = filterRuntimeStatePaths(changes)
+		policy, err := ordinaryTaskPolicy(path)
+		if err != nil {
+			return summary, err
+		}
+		violations, err := workerpathpolicy.Violations(policy, changes)
+		if err != nil {
+			return summary, err
+		}
+		if len(violations) != 0 {
+			err := fmt.Errorf("path policy violation at completion: %d path(s); changes retained for review", len(violations))
+			reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
+			summary.Failed = append(summary.Failed, err)
+			return summary, err
+		}
 		if options.CommitEach {
-			commitSHA, err := commitSharedChanges(repoRoot, "PromptGrinder: complete "+filepath.Base(path))
+			commitSHA, err := commitSharedChanges(repoRoot, "PromptGrinder: complete "+filepath.Base(path), baseline, changes)
 			if err != nil {
 				reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
 				summary.Failed = append(summary.Failed, err)
@@ -451,27 +479,153 @@ func sharedGitChangedFiles(repoRoot string) ([]string, error) {
 	return changed, nil
 }
 
-func commitSharedChanges(repoRoot, message string) (string, error) {
-	changed, err := sharedGitChangedFiles(repoRoot)
-	if err != nil || len(changed) == 0 {
-		return "", err
+func commitSharedChanges(repoRoot, message string, attributed ...any) (string, error) {
+	var baseline workerpathpolicy.Snapshot
+	var changed []string
+	if len(attributed) == 2 {
+		baseline, _ = attributed[0].(workerpathpolicy.Snapshot)
+		changed, _ = attributed[1].([]string)
+	} else {
+		var err error
+		baseline, err = workerpathpolicy.Capture(repoRoot)
+		if err != nil {
+			return "", err
+		}
+		changed, err = sharedGitChangedFiles(repoRoot)
+		if err != nil {
+			return "", err
+		}
+		// Compatibility for callers that only request committing an already
+		// cleanly attributed tree: treat current changes as the approved set.
+		baseline.Entries = map[string]string{}
 	}
-	if out, err := exec.Command("git", "-C", repoRoot, "add", "-A").CombinedOutput(); err != nil {
+	if len(changed) == 0 {
+		return "", nil
+	}
+	current, err := workerpathpolicy.AttributedChanges(repoRoot, baseline)
+	if err != nil || !samePaths(filterRuntimeStatePaths(current), changed) {
+		return "", fmt.Errorf("worktree changed during worker attribution; refusing automatic commit")
+	}
+	args := []string{"-C", repoRoot, "add", "--all", "--"}
+	for _, name := range changed {
+		args = append(args, ":(literal)"+name)
+	}
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git add failed: %s", strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("git", "-C", repoRoot, "diff", "--cached", "--name-only").Output(); err == nil {
-		for _, name := range strings.Split(string(out), "\n") {
-			name = strings.TrimSpace(name)
-			if isPromptGrinderStatePath(name) {
-				_ = exec.Command("git", "-C", repoRoot, "reset", "-q", "--", name).Run()
-			}
-		}
+	staged, err := runtimeChangedPathSet(repoRoot, "diff", "--cached", "--name-status", "-z", "--find-renames")
+	if err != nil || !samePaths(staged, changed) {
+		return "", fmt.Errorf("staged change set does not exactly match approved worker changes")
+	}
+	current, err = workerpathpolicy.AttributedChanges(repoRoot, baseline)
+	if err != nil || !samePaths(filterRuntimeStatePaths(current), changed) {
+		return "", fmt.Errorf("index or worktree changed before commit; refusing automatic commit")
 	}
 	cmd := exec.Command("git", "-C", repoRoot, "-c", "user.name=PromptGrinder", "-c", "user.email=promptgrinder@example.invalid", "commit", "-m", message)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git commit failed: %s", strings.TrimSpace(string(out)))
 	}
-	return sharedGitSHA(repoRoot)
+	sha, err := sharedGitSHA(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	committed, err := runtimeChangedPathSet(repoRoot, "diff", "--name-status", "-z", "--find-renames", baseline.Head, sha)
+	if err != nil || !samePaths(committed, changed) {
+		return "", fmt.Errorf("created commit does not exactly match approved worker changes")
+	}
+	return sha, nil
+}
+
+func ordinaryTaskPolicy(taskPath string) (workerdomain.WorkerPolicy, error) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return workerdomain.WorkerPolicy{}, err
+	}
+	task, err := markdown.Parse(string(data))
+	if err != nil {
+		return workerdomain.WorkerPolicy{}, err
+	}
+	stringsFor := func(key string) []string {
+		var out []string
+		if list, ok := task.Metadata[key].([]any); ok {
+			for _, item := range list {
+				if value, ok := item.(string); ok {
+					out = append(out, value)
+				}
+			}
+		}
+		return out
+	}
+	return workerdomain.WorkerPolicy{AllowedPaths: stringsFor("allowed_paths"), ForbiddenPaths: stringsFor("forbidden_paths")}, nil
+}
+
+func filterRuntimeStateEntries(entries map[string]string) map[string]string {
+	out := map[string]string{}
+	for name, value := range entries {
+		if !isPromptGrinderStatePath(name) {
+			out[name] = value
+		}
+	}
+	return out
+}
+func filterRuntimeStatePaths(paths []string) []string {
+	out := paths[:0]
+	for _, name := range paths {
+		if !isPromptGrinderStatePath(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+func samePaths(a, b []string) bool {
+	a = append([]string(nil), a...)
+	b = append([]string(nil), b...)
+	sort.Strings(a)
+	sort.Strings(b)
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+func runtimeGitPaths(repo string, args ...string) ([]string, error) {
+	out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).Output()
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name != "" {
+			paths = append(paths, filepath.ToSlash(name))
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+func runtimeChangedPathSet(repo string, args ...string) ([]string, error) {
+	out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).Output()
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Split(string(out), "\x00")
+	var paths []string
+	for i := 0; i < len(fields) && fields[i] != ""; {
+		status := fields[i]
+		i++
+		count := 1
+		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+			count = 2
+		}
+		for j := 0; j < count && i < len(fields) && fields[i] != ""; j, i = j+1, i+1 {
+			paths = append(paths, filepath.ToSlash(fields[i]))
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func rollbackSharedFailure(repoRoot, checkpointSHA string, armed bool, cause error) error {
@@ -905,11 +1059,18 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 	if malformedSuccess {
 		exitCode = 1
 	}
+	ordinaryPolicyErr := enforceOrdinaryWorkerPathPolicy(worker)
+	if ordinaryPolicyErr != nil {
+		exitCode = 1
+	}
 	if err := s.Store.MarkFinished(recordPath, exitCode); err != nil {
 		return err
 	}
 	if err := s.enforceNamedWorkerPathPolicy(worker); err != nil {
 		return err
+	}
+	if ordinaryPolicyErr != nil {
+		return ordinaryPolicyErr
 	}
 	if !resultParsed {
 		if malformedSuccess {
@@ -944,6 +1105,41 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 	}
 	if malformedSuccess {
 		return fmt.Errorf("Codex exited successfully but produced no parseable final message; inspect with promptgrinder logs %s, then retry the task", worker.ID)
+	}
+	return nil
+}
+
+func enforceOrdinaryWorkerPathPolicy(worker state.Worker) error {
+	raw, _ := worker.Metadata["ordinary_path_baseline"].(string)
+	if raw == "" {
+		return nil
+	}
+	var baseline workerpathpolicy.Snapshot
+	if err := json.Unmarshal([]byte(raw), &baseline); err != nil {
+		return fmt.Errorf("load ordinary-worker path baseline: %w", err)
+	}
+	paths, err := workerpathpolicy.AttributedChanges(worker.RepositoryPath, baseline)
+	if err != nil {
+		return fmt.Errorf("check ordinary-worker path policy: %w", err)
+	}
+	values := func(key string) []string {
+		var out []string
+		if list, ok := worker.Metadata[key].([]any); ok {
+			for _, item := range list {
+				if value, ok := item.(string); ok {
+					out = append(out, value)
+				}
+			}
+		}
+		return out
+	}
+	policy := workerdomain.WorkerPolicy{AllowedPaths: values("ordinary_allowed_paths"), ForbiddenPaths: values("ordinary_forbidden_paths")}
+	violations, err := workerpathpolicy.Violations(policy, paths)
+	if err != nil {
+		return err
+	}
+	if len(violations) != 0 {
+		return fmt.Errorf("path policy violation at completion: %d path(s); changes retained for review", len(violations))
 	}
 	return nil
 }

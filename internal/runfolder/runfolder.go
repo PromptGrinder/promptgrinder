@@ -22,6 +22,8 @@ import (
 	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 type PromptType string
@@ -620,14 +622,24 @@ func startSupervisorHeartbeat(options Options, sequence *SequenceState) func(str
 func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, options Options, launcher Launcher) (PromptState, error) {
 	started := time.Now().UTC()
 	promptState := PromptState{Prompt: prompt.Name, PromptType: prompt.Type, Status: "running", StartedAt: &started}
-	if options.RequireCleanGit {
-		clean, err := gitClean(repoRoot)
+	policy, err := taskPathPolicy(prompt.Path)
+	if err != nil {
+		return promptState, err
+	}
+	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0
+	var baseline workerpathpolicy.Snapshot
+	if needsGitTracking {
+		baseline, err = workerpathpolicy.Capture(repoRoot)
 		if err != nil {
-			return promptState, err
+			return promptState, fmt.Errorf("capture worker Git baseline: %w", err)
 		}
-		if !clean {
-			return promptState, fmt.Errorf("working tree is dirty")
-		}
+		baseline.Entries = withoutPromptGrinderPaths(baseline.Entries)
+	}
+	// Focused automatic commits are only attributable from a clean baseline.
+	// --require-clean-git=false remains useful for non-committing runs, but is
+	// deliberately not an unsafe acknowledgement for automatic commits.
+	if (options.RequireCleanGit || options.CommitEach) && len(baseline.Entries) != 0 {
+		return promptState, fmt.Errorf("working tree is dirty; automatic commits require a clean baseline (use --commit-each=false to retain unrelated changes)")
 	}
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHABefore, _ = gitSHA(repoRoot)
@@ -707,12 +719,27 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 		promptState.FinishedAt = &finished
 		return promptState, fmt.Errorf("%s failed with worker status %s", prompt.Name, worker.Status)
 	}
+	var changed []string
+	if needsGitTracking {
+		changed, err = attributedWorkerChanges(repoRoot, baseline)
+	}
+	if err != nil {
+		return promptState, fmt.Errorf("attribute worker changes: %w", err)
+	}
+	violations, err := workerpathpolicy.Violations(policy, changed)
+	if err != nil {
+		return promptState, fmt.Errorf("evaluate task path policy: %w", err)
+	}
+	if len(violations) != 0 {
+		promptState.FilesChanged = changed
+		return promptState, fmt.Errorf("path policy violation at completion: %s; changes retained for review", formatViolations(violations))
+	}
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHAAfter, _ = gitSHA(repoRoot)
-		promptState.FilesChanged, _ = gitChangedFiles(repoRoot)
+		promptState.FilesChanged = changed
 	}
 	if options.CommitEach && len(promptState.FilesChanged) > 0 {
-		commit, err := gitCommit(repoRoot, "PromptGrinder: complete "+prompt.Name)
+		commit, err := gitCommitFocused(repoRoot, "PromptGrinder: complete "+prompt.Name, baseline, promptState.FilesChanged)
 		if err != nil {
 			finished := time.Now().UTC()
 			promptState.FinishedAt = &finished
@@ -720,12 +747,67 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 		}
 		promptState.CommitSHA = commit
 		promptState.GitSHAAfter, _ = gitSHA(repoRoot)
-		promptState.FilesChanged, _ = gitChangedFiles(repoRoot)
 	}
 	finished := time.Now().UTC()
 	promptState.Status = "completed"
 	promptState.FinishedAt = &finished
 	return promptState, nil
+}
+
+func taskPathPolicy(taskPath string) (workerdomain.WorkerPolicy, error) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return workerdomain.WorkerPolicy{}, err
+	}
+	task, err := markdown.Parse(string(data))
+	if err != nil {
+		return workerdomain.WorkerPolicy{}, err
+	}
+	toStrings := func(key string) []string {
+		var out []string
+		if values, ok := task.Metadata[key].([]any); ok {
+			for _, value := range values {
+				if text, ok := value.(string); ok {
+					out = append(out, text)
+				}
+			}
+		}
+		return out
+	}
+	policy := workerdomain.WorkerPolicy{AllowedPaths: toStrings("allowed_paths"), ForbiddenPaths: toStrings("forbidden_paths")}
+	return policy, nil
+}
+
+func withoutPromptGrinderPaths(entries map[string]string) map[string]string {
+	out := make(map[string]string, len(entries))
+	for name, identity := range entries {
+		if !isPromptGrinderStatePath(name) {
+			out[name] = identity
+		}
+	}
+	return out
+}
+
+func attributedWorkerChanges(repo string, baseline workerpathpolicy.Snapshot) ([]string, error) {
+	paths, err := workerpathpolicy.AttributedChanges(repo, baseline)
+	if err != nil {
+		return nil, err
+	}
+	result := paths[:0]
+	for _, name := range paths {
+		if !isPromptGrinderStatePath(name) {
+			result = append(result, name)
+		}
+	}
+	return result, nil
+}
+
+func formatViolations(violations []workerpathpolicy.Violation) string {
+	parts := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		parts = append(parts, fmt.Sprintf("%s (%s)", violation.Path, violation.Reason))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func assemblePrompt(path, specContext string) (string, error) {
@@ -1525,23 +1607,106 @@ func gitChangedFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-func gitCommit(dir, message string) (string, error) {
-	if out, err := exec.Command("git", "-C", dir, "add", "-A").CombinedOutput(); err != nil {
+func gitCommitFocused(dir, message string, baseline workerpathpolicy.Snapshot, approved []string) (string, error) {
+	if len(approved) == 0 {
+		return "", nil
+	}
+	beforeStage, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		return "", fmt.Errorf("re-check worktree before staging: %w", err)
+	}
+	actual, err := attributedWorkerChanges(dir, baseline)
+	if err != nil {
+		return "", err
+	}
+	if !equalStrings(actual, approved) || beforeStage.Head != baseline.Head {
+		return "", fmt.Errorf("worktree changed during worker attribution; refusing automatic commit")
+	}
+	args := []string{"-C", dir, "add", "--all", "--"}
+	for _, name := range approved {
+		args = append(args, ":(literal)"+name)
+	}
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git add failed: %s", strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("git", "-C", dir, "diff", "--cached", "--name-only").Output(); err == nil {
-		for _, name := range strings.Split(string(out), "\n") {
-			name = strings.TrimSpace(name)
-			if isPromptGrinderStatePath(name) {
-				_ = exec.Command("git", "-C", dir, "reset", "-q", "--", name).Run()
-			}
-		}
+	staged, err := gitChangedPathSet(dir, "diff", "--cached", "--name-status", "-z", "--find-renames")
+	if err != nil || !equalStrings(staged, approved) {
+		return "", fmt.Errorf("staged change set does not exactly match approved worker changes")
+	}
+	preCommit, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		return "", fmt.Errorf("re-check worktree before commit: %w", err)
+	}
+	actual, err = attributedWorkerChanges(dir, baseline)
+	if err != nil || preCommit.Head != baseline.Head || !equalStrings(actual, approved) {
+		return "", fmt.Errorf("index or worktree changed before commit; refusing automatic commit")
 	}
 	cmd := exec.Command("git", "-C", dir, "-c", "user.name=PromptGrinder", "-c", "user.email=promptgrinder@example.invalid", "commit", "-m", message)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git commit failed: %s", strings.TrimSpace(string(out)))
 	}
-	return gitSHA(dir)
+	commit, err := gitSHA(dir)
+	if err != nil {
+		return "", err
+	}
+	committed, err := gitChangedPathSet(dir, "diff", "--name-status", "-z", "--find-renames", baseline.Head, commit)
+	if err != nil || !equalStrings(committed, approved) {
+		return "", fmt.Errorf("created commit does not exactly match approved worker changes")
+	}
+	return commit, nil
+}
+
+func gitNullPaths(dir string, args ...string) ([]string, error) {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name != "" {
+			paths = append(paths, filepath.ToSlash(name))
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func gitChangedPathSet(dir string, args ...string) ([]string, error) {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Split(string(out), "\x00")
+	var paths []string
+	for i := 0; i < len(fields) && fields[i] != ""; {
+		status := fields[i]
+		i++
+		count := 1
+		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+			count = 2
+		}
+		for j := 0; j < count && i < len(fields) && fields[i] != ""; j, i = j+1, i+1 {
+			paths = append(paths, filepath.ToSlash(fields[i]))
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func equalStrings(a, b []string) bool {
+	a = append([]string(nil), a...)
+	b = append([]string(nil), b...)
+	sort.Strings(a)
+	sort.Strings(b)
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func isPromptGrinderStatePath(name string) bool {

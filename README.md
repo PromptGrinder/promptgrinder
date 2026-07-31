@@ -143,6 +143,14 @@ execute sequential work. A failed sequential task stops the sequence.
 PromptGrinder does not provide a command that pushes commits, creates pull
 requests, publishes releases, or merges branches.
 
+Automatic per-task commits are conservative: `--commit-each=true` requires a
+clean Git baseline even if `--require-clean-git=false` is supplied, stages only
+the paths attributed to that worker (including deletions), and refuses a commit
+when the index, worktree, or HEAD changes unexpectedly. PromptGrinder state and
+output paths are never included. Start from a clean worktree and use
+`--require-clean-git`; use `--commit-each=false` unless focused automatic
+commits are intended.
+
 ## Examples
 
 - [`examples/minimal.md`](examples/minimal.md) — the smallest useful work order.
@@ -261,6 +269,10 @@ from task instructions:
 - `forbidden_paths` is a list of repository-relative patterns and may be empty;
 - `validation` is a nonempty string or nonempty list of commands or
   instructions.
+
+`allowed_paths` and `forbidden_paths` are enforced for ordinary `run` and
+`run-folder` workers as well as named workers. Forbidden patterns win. Keep
+executable instructions in the Markdown body and use only supported metadata.
 
 The four semantic fields are rendered, in the order shown above, into a
 `# Task Semantics (v1)` preamble sent to the engine. The Markdown body following

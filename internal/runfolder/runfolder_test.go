@@ -958,6 +958,53 @@ func TestRequireCleanGitFailsWhenDirty(t *testing.T) {
 	}
 }
 
+func TestCommitEachRefusesIncidentBaselineWithoutLaunchingOrStaging(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "tracked.txt", "initial")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	if err := os.MkdirAll(filepath.Join(dir, "exports"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "mobile-android", ".idea"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, filepath.Join(dir, "exports"), "report.txt", "unrelated")
+	writePromptFile(t, filepath.Join(dir, "mobile-android", ".idea"), "workspace.xml", "unrelated")
+	launcher := &fakeLauncher{}
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir(), CommitEach: true}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "clean baseline") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(launcher.calls) != 0 {
+		t.Fatalf("worker launched: %#v", launcher.calls)
+	}
+	out, commandErr := exec.Command("git", "-C", dir, "diff", "--cached", "--name-only").Output()
+	if commandErr != nil || len(out) != 0 {
+		t.Fatalf("index=%q err=%v", out, commandErr)
+	}
+}
+
+func TestRunFolderPathPolicyRejectsWorkerCreatedUnallowedPath(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\nforbidden_paths: []\nacceptance_criteria: safe\nvalidation: inspect\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{onLaunch: func(string) { writePromptFile(t, dir, "outside.txt", "evidence") }}
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "path policy violation") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "outside.txt")); statErr != nil {
+		t.Fatalf("evidence missing: %v", statErr)
+	}
+	out, _ := exec.Command("git", "-C", dir, "diff", "--cached", "--name-only").Output()
+	if len(out) != 0 {
+		t.Fatalf("violation staged: %q", out)
+	}
+}
+
 func writePromptFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {

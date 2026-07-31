@@ -62,7 +62,13 @@ func Validate(policy workerdomain.WorkerPolicy) error {
 func Capture(repo string) (Snapshot, error) {
 	head, err := gitBytes(repo, "rev-parse", "HEAD")
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("snapshot Git HEAD: %w", err)
+		// An initialized repository may not have its first commit yet. Use Git's
+		// canonical empty-tree object so attribution and policy checks still have
+		// a stable, non-empty baseline without creating Git metadata.
+		if _, insideErr := gitBytes(repo, "rev-parse", "--is-inside-work-tree"); insideErr != nil {
+			return Snapshot{}, fmt.Errorf("snapshot Git HEAD: %w", err)
+		}
+		head = []byte("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
 	}
 	raw, err := gitBytes(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {

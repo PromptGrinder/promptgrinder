@@ -44,6 +44,11 @@ Add focused tests for behavior changes. Public commands, JSON meanings,
 persisted formats, and successful task files are compatibility surfaces.
 Breaking changes require an explicit migration plan.
 
+When exercising automatic commits, start with a clean worktree, pass
+`--require-clean-git`, and leave `--commit-each=false` unless the test is
+specifically proving focused commits. Put worker instructions in the task body
+and use only supported frontmatter metadata.
+
 ## Pull requests
 
 Explain the user-facing result, verification performed, compatibility or

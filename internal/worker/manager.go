@@ -3,6 +3,7 @@ package worker
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/terminal"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 type ExecutorFactory func(config.Config) (execution.Executor, error)
@@ -236,6 +238,13 @@ func (m Manager) launchData(absTask string, data []byte, suppliedMetadata map[st
 	}
 	if m.CaptureCodexSession {
 		metadata["codex_capture_session"] = true
+	}
+	if snapshot, snapshotErr := workerpathpolicy.Capture(repoRoot); snapshotErr == nil {
+		if encoded, encodeErr := json.Marshal(snapshot); encodeErr == nil {
+			metadata["ordinary_path_baseline"] = string(encoded)
+			metadata["ordinary_allowed_paths"] = taskMetadata["allowed_paths"]
+			metadata["ordinary_forbidden_paths"] = taskMetadata["forbidden_paths"]
+		}
 	}
 	validateCtx, err := validationContext(repoRoot, absTask, engineName, metadata, cfg)
 	if err != nil {
