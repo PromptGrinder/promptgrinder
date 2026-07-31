@@ -27,13 +27,14 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
 	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_1", Folder: "my prompts", Inventory: inventory(), Total: 6})
 	r.Update(runfolder.ProgressEvent{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "running"})
-	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "failed", Duration: 65*time.Second + 600*time.Millisecond, WorkerID: "worker-1", LogPath: "/tmp/worker.log"})
+	unsafe := false
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "failed", Duration: 65*time.Second + 600*time.Millisecond, WorkerID: "worker-1", LogPath: "/tmp/worker.log", Reason: "STATUS is BLOCKED, not PASS", CompletionStatus: "BLOCKED", NextPromptSafe: &unsafe})
 	r.Finish(false)
 	r.Close()
 	r.Close()
 
 	got := out.String()
-	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "Status: promptgrinder sequence seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "failed in 1m 6s", "worker: worker-1", "log: /tmp/worker.log", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
+	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "Status: promptgrinder sequence seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "failed in 1m 6s", "worker: worker-1", "log: /tmp/worker.log", "Reason: STATUS is BLOCKED, not PASS", "Completion: STATUS=BLOCKED NEXT_PROMPT_SAFE=no", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
@@ -43,6 +44,17 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 	if strings.Count(got, "Prompts:\n") != 1 {
 		t.Fatalf("inventory emitted more than once: %q", got)
+	}
+}
+
+func TestRunFolderRendererPrintsPreflightFailureReason(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_dirty", Folder: "tasks", Inventory: []runfolder.ProgressPrompt{{Name: "10-task.md", Type: runfolder.TypeImplement, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-task.md", PromptType: runfolder.TypeImplement, Status: "failed", Reason: "working tree is dirty"})
+	r.Finish(false)
+	if got := out.String(); !strings.Contains(got, "Reason: working tree is dirty") {
+		t.Fatalf("failure reason missing from immediate output: %q", got)
 	}
 }
 

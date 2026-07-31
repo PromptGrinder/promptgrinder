@@ -2325,6 +2325,12 @@ func printRunFolderProgress(stdout io.Writer, event pgruntime.RunFolderProgressE
 			fmt.Fprintf(stdout, "\nLog: %s", event.LogPath)
 		}
 		fmt.Fprintln(stdout)
+		if event.Reason != "" {
+			fmt.Fprintf(stdout, "Reason: %s\n", event.Reason)
+		}
+		if event.CompletionStatus != "" || event.NextPromptSafe != nil {
+			fmt.Fprintf(stdout, "Completion: STATUS=%s NEXT_PROMPT_SAFE=%s\n", valueOrDash(event.CompletionStatus), sequenceBool(event.NextPromptSafe))
+		}
 	case "run.completed":
 		fmt.Fprintf(stdout, "Sequence %s completed: %d/%d prompt(s)\n", event.SequenceID, event.Completed, event.Total)
 	}

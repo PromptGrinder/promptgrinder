@@ -217,6 +217,7 @@ func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent)
 		fmt.Fprintf(r.w, " (log: %s)", event.LogPath)
 	}
 	fmt.Fprintln(r.w)
+	writeFailureDetails(r.w, event)
 }
 
 func (r *RunFolderRenderer) renderDashboardLocked() {
@@ -249,11 +250,45 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 			line += " (log: " + detail.LogPath + ")"
 		}
 		lines = append(lines, line)
+		if item.Status == "failed" {
+			lines = append(lines, failureDetailLines(detail)...)
+		}
 	}
 	for _, line := range lines {
 		fmt.Fprint(r.w, "\033[2K"+line+"\n")
 	}
 	r.lines = len(lines)
+}
+
+func writeFailureDetails(w io.Writer, event runfolder.ProgressEvent) {
+	for _, line := range failureDetailLines(event) {
+		fmt.Fprintln(w, line)
+	}
+}
+
+func failureDetailLines(event runfolder.ProgressEvent) []string {
+	if event.Status != "failed" && event.Type != "prompt.failed" {
+		return nil
+	}
+	lines := make([]string, 0, 2)
+	if event.Reason != "" {
+		lines = append(lines, "  Reason: "+event.Reason)
+	}
+	if event.CompletionStatus != "" || event.NextPromptSafe != nil {
+		status, safe := "-", "-"
+		if event.CompletionStatus != "" {
+			status = event.CompletionStatus
+		}
+		if event.NextPromptSafe != nil {
+			if *event.NextPromptSafe {
+				safe = "yes"
+			} else {
+				safe = "no"
+			}
+		}
+		lines = append(lines, fmt.Sprintf("  Completion: STATUS=%s NEXT_PROMPT_SAFE=%s", status, safe))
+	}
+	return lines
 }
 
 func stateIcon(status string) string {
