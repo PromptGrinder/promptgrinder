@@ -107,13 +107,42 @@ func TestRoleMergeValidatesWholeSelectionBeforeWriting(t *testing.T) {
 	root, current, plan := mergeFixture(t)
 	path := filepath.Join(root, ".promptgrinder", "roles", "backend.yaml")
 	before, _ := os.ReadFile(path)
-	plan.Items[1].Recommendation.Value = []any{"invalid", "append"}
+	for i := range plan.Items {
+		if plan.Items[i].Recommendation.ID == "desc" {
+			plan.Items[i].Recommendation.Value = []any{"invalid", "description"}
+		}
+	}
 	if _, err := (RoleMergeService{}).Apply(root, current, plan, ApprovalSelection{Mode: ApprovalApplyAll}); err == nil {
 		t.Fatal("expected invalid plan")
 	}
 	after, _ := os.ReadFile(path)
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("validation failure changed file")
+	}
+}
+
+func TestRoleMergeAppliesMultiValueAppendAsOneReviewableChange(t *testing.T) {
+	root, current, plan := mergeFixture(t)
+	for i := range plan.Items {
+		if plan.Items[i].Recommendation.ID == "gate" {
+			plan.Items[i].Recommendation.Value = []any{"go vet ./...", "go test -race ./...", "go vet ./..."}
+		}
+	}
+	if _, err := (RoleMergeService{}).Apply(root, current, plan, ApprovalSelection{Mode: ApprovalApplySelected, RecommendationIDs: []string{"gate"}}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".promptgrinder", "roles", "backend.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	for _, want := range []string{"go test ./...", "go vet ./...", "go test -race ./..."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("role missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Count(text, "go vet ./...") != 1 {
+		t.Fatalf("duplicate append was not removed:\n%s", text)
 	}
 }
 

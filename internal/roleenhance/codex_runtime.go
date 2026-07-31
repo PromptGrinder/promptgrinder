@@ -39,7 +39,7 @@ func (r CodexRuntime) Advise(ctx context.Context, request []byte) ([]byte, error
 	if err := os.WriteFile(schemaPath, []byte(advisorResponseJSONSchema), 0o600); err != nil {
 		return nil, fmt.Errorf("write advisor schema: %w", err)
 	}
-	prompt := append([]byte("Return only recommendations supported by the supplied evidence. Do not infer technologies or paths. The JSON request follows.\n"), request...)
+	prompt := append([]byte(advisorInstructions), request...)
 	cmd := exec.CommandContext(ctx, executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--output-schema", schemaPath, "--output-last-message", outputPath, "-")
 	cmd.Dir = temp
 	cmd.Stdin = bytes.NewReader(prompt)
@@ -61,6 +61,15 @@ func (r CodexRuntime) Advise(ctx context.Context, request []byte) ([]byte, error
 	}
 	return response, nil
 }
+
+const advisorInstructions = `Return only recommendations supported by the supplied evidence.
+Do not infer technologies or paths.
+For quality_gates, use exact executable command text copied verbatim from repository evidence; never paraphrase a command as prose.
+For runtime.preferred, use an exact runtime value already present in the supplied project or roles.
+An append recommendation may contain one string or an array of strings; every value must independently satisfy these grounding rules.
+Every evidence citation must use a collected path. Set evidence.fact to an empty string when citing a source excerpt. Only use a nonempty evidence.fact when copying the exact key, value, or key=value from a supplied evidence fact; never put prose in evidence.fact.
+The JSON request follows.
+`
 
 const maxAdvisorDiagnosticBytes = 4096
 

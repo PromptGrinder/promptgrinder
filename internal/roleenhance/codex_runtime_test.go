@@ -34,6 +34,14 @@ func TestAdvisorResponseSchemaRequiresEveryCitationProperty(t *testing.T) {
 	}
 }
 
+func TestAdvisorInstructionsRequireVerbatimQualityGateCommands(t *testing.T) {
+	for _, required := range []string{"exact executable command text", "copied verbatim", "never paraphrase", "every value", "Set evidence.fact to an empty string", "never put prose in evidence.fact"} {
+		if !strings.Contains(advisorInstructions, required) {
+			t.Fatalf("advisor instructions missing %q", required)
+		}
+	}
+}
+
 func TestAdvisorResponseSchemaUsesCodexSupportedCompositionKeywords(t *testing.T) {
 	var schema any
 	if err := json.Unmarshal([]byte(advisorResponseJSONSchema), &schema); err != nil {

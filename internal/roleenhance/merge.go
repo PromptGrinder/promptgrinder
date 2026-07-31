@@ -215,7 +215,7 @@ func proposedValue(old any, r Recommendation) (any, error) {
 		}
 		return vals, nil
 	}
-	if len(vals) != 1 {
+	if r.Operation == OperationRemove && len(vals) != 1 {
 		return nil, fmt.Errorf("recommendation %q requires one string value", r.ID)
 	}
 	current, ok := old.([]string)
@@ -223,15 +223,22 @@ func proposedValue(old any, r Recommendation) (any, error) {
 		return nil, fmt.Errorf("recommendation %q requires a list field", r.ID)
 	}
 	out := append([]string(nil), current...)
-	value := vals[0]
 	if r.Operation == OperationAppend {
-		for _, v := range out {
-			if v == value {
-				return out, nil
+		for _, value := range vals {
+			found := false
+			for _, existing := range out {
+				if existing == value {
+					found = true
+					break
+				}
+			}
+			if !found {
+				out = append(out, value)
 			}
 		}
-		return append(out, value), nil
+		return out, nil
 	}
+	value := vals[0]
 	if r.Operation == OperationRemove {
 		for i, v := range out {
 			if v == value {

@@ -209,8 +209,8 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 	if !ok || len(values) == 0 {
 		return fmt.Errorf("recommendation %q has invalid value for field %q", r.ID, r.Field)
 	}
-	if r.Operation == OperationAppend && len(values) != 1 {
-		return fmt.Errorf("recommendation %q append requires one string value", r.ID)
+	if r.Operation == OperationRemove && len(values) != 1 {
+		return fmt.Errorf("recommendation %q removal requires one string value", r.ID)
 	}
 	corpus := groundingCorpus(current, evidence)
 	for _, value := range values {
@@ -301,11 +301,24 @@ func evidenceHasPath(e Evidence, proposed string) bool {
 }
 
 func groundingCorpus(current CurrentState, evidence Evidence) string {
-	b, _ := json.Marshal(struct {
-		Current  CurrentState `json:"current"`
-		Evidence Evidence     `json:"evidence"`
-	}{current, evidence})
-	return strings.ToLower(string(b))
+	var values []string
+	values = append(values, current.Project.Name, current.Project.GeneratedBy)
+	values = append(values, current.Project.Languages...)
+	values = append(values, current.Project.Frameworks...)
+	values = append(values, current.Project.Roles...)
+	for _, role := range current.Roles {
+		values = append(values, role.ID, role.Name, role.Description, role.Runtime.Preferred)
+		values = append(values, role.Technology...)
+		values = append(values, role.AllowedPaths...)
+		values = append(values, role.QualityGates...)
+	}
+	for _, source := range evidence.Sources {
+		values = append(values, string(source.Kind), source.Path, source.Excerpt)
+	}
+	for _, fact := range evidence.Facts {
+		values = append(values, string(fact.Kind), fact.Path, fact.Key, fact.Value, fact.Key+"="+fact.Value)
+	}
+	return strings.ToLower(strings.Join(values, "\n"))
 }
 
 func roleIndex(current CurrentState) map[string]RoleSnapshot {

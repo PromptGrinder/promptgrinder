@@ -174,3 +174,24 @@ func TestValidateRecommendationsAllowsGoGroundedByCollectedModule(t *testing.T) 
 		t.Fatalf("technology without go.mod evidence error = %v", err)
 	}
 }
+
+func TestValidateRecommendationsAllowsGroundedMultiValueAppend(t *testing.T) {
+	current, evidence := advisorFixture()
+	recommendation := Recommendation{ID: "gates", RoleID: "backend", Field: "quality_gates", Operation: OperationAppend, Value: []any{"go test ./...", "go test"}, Confidence: ConfidenceHigh, Explanation: "repository evidence contains both commands", Evidence: []Citation{{Path: "README.md"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("grounded multi-value append rejected: %v", err)
+	}
+	recommendation.Operation = OperationRemove
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err == nil || !strings.Contains(err.Error(), "removal requires one string") {
+		t.Fatalf("multi-value removal error = %v", err)
+	}
+}
+
+func TestValidateRecommendationsGroundsQuotedCommandAgainstRawEvidence(t *testing.T) {
+	current, evidence := advisorFixture()
+	evidence.Sources = append(evidence.Sources, EvidenceSource{Kind: EvidenceRepository, Path: ".github/workflows/ci.yml", Excerpt: `run: test -z "$(gofmt -l .)"`})
+	recommendation := Recommendation{ID: "format", RoleID: "backend", Field: "quality_gates", Operation: OperationAppend, Value: `test -z "$(gofmt -l .)"`, Confidence: ConfidenceHigh, Explanation: "exact CI command", Evidence: []Citation{{Path: ".github/workflows/ci.yml"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("quoted command from raw evidence rejected: %v", err)
+	}
+}
