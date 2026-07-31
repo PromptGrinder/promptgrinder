@@ -767,6 +767,9 @@ func TestCLIRunFolderUsesConfiguredDefaults(t *testing.T) {
 	if service.runFolderOptions.Template != "codex" || service.runFolderOptions.EngineOverride != "codex" || service.runFolderOptions.RepoPath != "/repo" {
 		t.Fatalf("run folder options = %#v", service.runFolderOptions)
 	}
+	if service.runFolderOptions.ExecutionPolicy != pgruntime.RunFolderExecutionForeground {
+		t.Fatalf("execution policy = %q", service.runFolderOptions.ExecutionPolicy)
+	}
 }
 
 func TestCLIEnginesHuman(t *testing.T) {

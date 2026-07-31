@@ -91,6 +91,11 @@ type RunFolderProgressEvent = runfolder.ProgressEvent
 type SequenceProgress = runfolder.SequenceProgress
 type SequenceState = runfolder.SequenceState
 
+const (
+	RunFolderExecutionConfigured = runfolder.ExecutionConfigured
+	RunFolderExecutionForeground = runfolder.ExecutionForeground
+)
+
 type TerminalCandidate struct {
 	WorkerID string `json:"worker_id"`
 	Status   string `json:"status"`
@@ -630,6 +635,14 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 	manager := s.Worker
 	manager.EngineOverride = options.EngineOverride
 	manager.RepositoryOverride = repoRoot
+	switch options.ExecutionPolicy {
+	case runfolder.ExecutionConfigured:
+	case runfolder.ExecutionForeground:
+		manager.TerminalAdapterOverride = "headless"
+		manager.TerminalModeOverride = "normal"
+	default:
+		return RunFolderSummary{}, fmt.Errorf("unknown run-folder execution policy %q", options.ExecutionPolicy)
+	}
 	return runfolder.Run(path, options, promptLauncher{manager: manager})
 }
 

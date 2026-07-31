@@ -840,6 +840,7 @@ Examples:
 			if runFolderDetach {
 				return startDetachedRunFolder(stdout, service.Defaults().HomeDir, args[0], options)
 			}
+			options.ExecutionPolicy = pgruntime.RunFolderExecutionForeground
 			options.Progress = func(event pgruntime.RunFolderProgressEvent) {
 				printRunFolderProgress(stdout, event)
 			}

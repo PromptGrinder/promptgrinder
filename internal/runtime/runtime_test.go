@@ -6,17 +6,47 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/engine/codex"
 	"promptgrinder/internal/execution"
+	"promptgrinder/internal/runfolder"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/terminal"
 	"promptgrinder/internal/testsupport"
 	"promptgrinder/internal/worker"
 )
+
+type synchronousTerminal struct {
+	store     state.Store
+	name      string
+	exitCodes []int
+	mu        sync.Mutex
+	launched  []string
+}
+
+func (t *synchronousTerminal) Name() string                     { return t.name }
+func (t *synchronousTerminal) Command(scriptPath string) string { return scriptPath }
+func (t *synchronousTerminal) Launch(scriptPath string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	workerID := filepath.Base(filepath.Dir(scriptPath))
+	t.launched = append(t.launched, workerID)
+	exitCode := 0
+	if len(t.exitCodes) >= len(t.launched) {
+		exitCode = t.exitCodes[len(t.launched)-1]
+	}
+	return t.store.MarkFinished(t.store.RecordPath(workerID), exitCode)
+}
+
+func (t *synchronousTerminal) launchCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.launched)
+}
 
 func TestRunFolderCreatesMultipleWorkers(t *testing.T) {
 	root := t.TempDir()
@@ -377,6 +407,154 @@ func TestRunPromptFolderUsesRepoPathForWorkerRepository(t *testing.T) {
 	}
 	if workers[0].TaskPath != filepath.Join(promptDir, "10-implement-a.md") {
 		t.Fatalf("TaskPath = %q", workers[0].TaskPath)
+	}
+}
+
+func TestRunPromptFolderForegroundForcesHeadlessAfterRepoConfig(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writeFile(t, repo, ".git", "gitdir: nowhere\n")
+	if err := os.MkdirAll(filepath.Join(repo, ".ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(repo, ".ai", "config.yaml")
+	configBytes := []byte("terminal:\n  adapter: iterm\n  mode: normal\n")
+	if err := os.WriteFile(configPath, configBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, repo, "10-implement-first.md", "# First\n")
+	writeFile(t, repo, "20-test-second.md", "# Second\n")
+
+	store := state.NewStore(home)
+	headless := &synchronousTerminal{store: store, name: "headless"}
+	configuredLaunches := 0
+	service := Service{
+		Store: store,
+		Worker: worker.Manager{
+			Store:         store,
+			Engine:        codex.Engine{},
+			EngineName:    "codex",
+			Executable:    "promptgrinder",
+			UseRepoConfig: true,
+			BaseConfig:    config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "normal", HomeDir: home},
+			NewExecutor: func(cfg config.Config) (execution.Executor, error) {
+				configuredLaunches++
+				if cfg.TerminalAdapter != "headless" || cfg.TerminalMode != "normal" {
+					t.Fatalf("executor config = %s/%s", cfg.TerminalAdapter, cfg.TerminalMode)
+				}
+				return execution.Executor{Store: store, Terminal: &synchronousTerminal{store: store, name: cfg.TerminalAdapter}}, nil
+			},
+			SelectTerminalAdapter: func(adapter, mode string) (terminal.TerminalAdapter, error) {
+				if adapter != "headless" || mode != "normal" {
+					t.Fatalf("foreground selection = %s/%s", adapter, mode)
+				}
+				return headless, nil
+			},
+		},
+	}
+
+	summary, err := service.RunPromptFolder(repo, RunFolderOptions{
+		HomeDir:         home,
+		RepoPath:        repo,
+		ExecutionPolicy: RunFolderExecutionForeground,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuredLaunches != 2 || headless.launchCount() != 2 {
+		t.Fatalf("executor calls = %d, headless launches = %d", configuredLaunches, headless.launchCount())
+	}
+	if summary.Sequence == nil || summary.Sequence.Status != "completed" || len(summary.Sequence.Items) != 2 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	for _, item := range summary.Sequence.Items {
+		if item.Status != "succeeded" {
+			t.Fatalf("item = %#v", item)
+		}
+	}
+	workers, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workers) != 2 || workers[0].TerminalAdapter != "headless" || workers[1].TerminalAdapter != "headless" {
+		t.Fatalf("workers = %#v", workers)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(configBytes) {
+		t.Fatalf("repository config changed:\n%s", after)
+	}
+}
+
+func TestRunPromptFolderConfiguredPolicyAndNormalRunRetainAdapter(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writeFile(t, repo, ".git", "gitdir: nowhere\n")
+	writeFile(t, repo, "10-implement-folder.md", "# Folder\n")
+	writeFile(t, repo, "normal.md", "# Normal\n")
+	store := state.NewStore(home)
+	configured := &synchronousTerminal{store: store, name: "iterm"}
+	service := Service{
+		Store: store,
+		Worker: worker.Manager{
+			Store: store, Engine: codex.Engine{}, EngineName: "codex", Executable: "promptgrinder",
+			RepositoryOverride: repo,
+			BaseConfig:         config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "iterm", TerminalMode: "normal", HomeDir: home},
+			NewExecutor:        runtimeTestExecutorFactory(store, configured),
+		},
+	}
+
+	if _, err := service.RunPromptFolder(repo, RunFolderOptions{HomeDir: home, RepoPath: repo, Fresh: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RunPath(filepath.Join(repo, "normal.md")); err != nil {
+		t.Fatal(err)
+	}
+	if configured.launchCount() != 2 {
+		t.Fatalf("configured launches = %d, want 2", configured.launchCount())
+	}
+}
+
+func TestRunPromptFolderForegroundFailureStopsAndPersistsResumeState(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writeFile(t, repo, ".git", "gitdir: nowhere\n")
+	writeFile(t, repo, "10-implement-first.md", "# First\n")
+	writeFile(t, repo, "20-test-fails.md", "# Fails\n")
+	writeFile(t, repo, "30-verify-never.md", "# Never\n")
+	store := state.NewStore(home)
+	headless := &synchronousTerminal{store: store, name: "headless", exitCodes: []int{0, 1, 0}}
+	service := Service{
+		Store: store,
+		Worker: worker.Manager{
+			Store: store, Engine: codex.Engine{}, EngineName: "codex", Executable: "promptgrinder",
+			BaseConfig:            config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "normal", HomeDir: home},
+			NewExecutor:           runtimeTestExecutorFactory(store, terminal.DryRunAdapter{}),
+			SelectTerminalAdapter: func(string, string) (terminal.TerminalAdapter, error) { return headless, nil },
+		},
+	}
+
+	summary, err := service.RunPromptFolder(repo, RunFolderOptions{HomeDir: home, RepoPath: repo, ExecutionPolicy: RunFolderExecutionForeground})
+	if err == nil {
+		t.Fatal("expected prompt failure")
+	}
+	if headless.launchCount() != 2 {
+		t.Fatalf("launches = %d, want exactly two before stop", headless.launchCount())
+	}
+	if summary.Sequence == nil || summary.Sequence.Status != "failed" {
+		t.Fatalf("sequence = %#v", summary.Sequence)
+	}
+	if summary.Sequence.Items[0].Status != "succeeded" || summary.Sequence.Items[1].Status != "failed" || summary.Sequence.Items[2].Status != "pending" {
+		t.Fatalf("items = %#v", summary.Sequence.Items)
+	}
+	persisted, loadErr := runfolder.LoadSequence(home, summary.Sequence.SequenceID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if persisted.Status != "failed" || persisted.Items[1].Status != "failed" || persisted.Items[2].Status != "pending" {
+		t.Fatalf("persisted = %#v", persisted)
 	}
 }
 

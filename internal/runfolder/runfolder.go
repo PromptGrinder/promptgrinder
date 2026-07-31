@@ -53,7 +53,18 @@ type Options struct {
 	Progress                func(ProgressEvent)
 	SupervisorID            string
 	SupervisorLogPath       string
+	ExecutionPolicy         ExecutionPolicy
 }
+
+// ExecutionPolicy controls where run-folder workers are launched. The zero
+// value preserves the configured terminal adapter, as required by detached
+// supervisors. Foreground runs execute each worker in the invoking process.
+type ExecutionPolicy string
+
+const (
+	ExecutionConfigured ExecutionPolicy = ""
+	ExecutionForeground ExecutionPolicy = "foreground"
+)
 
 type Launcher interface {
 	LaunchPrompt(path, content, sessionID string) (state.Worker, error)

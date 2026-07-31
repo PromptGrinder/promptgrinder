@@ -16,24 +16,29 @@ import (
 	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/terminal"
 )
 
 type ExecutorFactory func(config.Config) (execution.Executor, error)
+type TerminalAdapterSelector func(string, string) (terminal.TerminalAdapter, error)
 
 type Manager struct {
-	Store               state.Store
-	Engine              engine.Engine
-	Registry            engine.Registry
-	EngineName          string
-	EngineOverride      string
-	SandboxOverride     string
-	RepositoryOverride  string
-	CodexSessionID      string
-	CaptureCodexSession bool
-	Executable          string
-	UseRepoConfig       bool
-	BaseConfig          config.Config
-	NewExecutor         ExecutorFactory
+	Store                   state.Store
+	Engine                  engine.Engine
+	Registry                engine.Registry
+	EngineName              string
+	EngineOverride          string
+	SandboxOverride         string
+	RepositoryOverride      string
+	CodexSessionID          string
+	CaptureCodexSession     bool
+	Executable              string
+	UseRepoConfig           bool
+	BaseConfig              config.Config
+	NewExecutor             ExecutorFactory
+	TerminalAdapterOverride string
+	TerminalModeOverride    string
+	SelectTerminalAdapter   TerminalAdapterSelector
 }
 
 type LaunchResult struct {
@@ -610,10 +615,33 @@ func (m Manager) createWorker(repoRoot, taskPath, engineName, requestedEngine st
 }
 
 func (m Manager) executor(cfg config.Config) (execution.Executor, error) {
-	if m.NewExecutor != nil {
-		return m.NewExecutor(cfg)
+	if m.TerminalAdapterOverride != "" {
+		cfg.TerminalAdapter = m.TerminalAdapterOverride
+		cfg.TerminalMode = m.TerminalModeOverride
+		if cfg.TerminalMode == "" {
+			cfg.TerminalMode = "normal"
+		}
 	}
-	return execution.Executor{Store: m.Store}, nil
+	executor := execution.Executor{Store: m.Store}
+	if m.NewExecutor != nil {
+		var err error
+		executor, err = m.NewExecutor(cfg)
+		if err != nil {
+			return executor, err
+		}
+	}
+	if m.TerminalAdapterOverride != "" {
+		selector := m.SelectTerminalAdapter
+		if selector == nil {
+			selector = terminal.SelectAdapter
+		}
+		adapter, err := selector(cfg.TerminalAdapter, cfg.TerminalMode)
+		if err != nil {
+			return execution.Executor{}, err
+		}
+		executor.Terminal = adapter
+	}
+	return executor, nil
 }
 
 func newWorkerID() (string, error) {
