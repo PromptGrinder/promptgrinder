@@ -1,0 +1,4 @@
+interface:
+  display_name: "PromptGrinder Development"
+  short_description: "Build and verify PromptGrinder changes"
+  default_prompt: "Use $promptgrinder-development to implement and verify a PromptGrinder change."
