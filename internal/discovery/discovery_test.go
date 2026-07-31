@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +27,7 @@ func TestTechnologyDetectorAndRoleGenerator(t *testing.T) {
 		}, languages: []string{"Java"}, technologies: []string{"Spring Boot"}, roles: []string{"backend-feature", "backend-sonar", "backend-test"}},
 		{name: "gradle quarkus", files: map[string]string{"service/build.gradle.kts": `plugins { id("io.quarkus") kotlin("jvm") }`}, languages: []string{"Kotlin"}, technologies: []string{"Quarkus"}, roles: []string{"backend-feature", "backend-sonar"}},
 		{name: "android", files: map[string]string{"app/build.gradle.kts": `plugins { id("com.android.application") }`, "app/src/main/AndroidManifest.xml": `<manifest/>`}, languages: []string{"Kotlin"}, technologies: []string{"Android"}, roles: []string{"android-test", "android-ui"}},
+		{name: "android manifest only", files: map[string]string{"app/src/main/AndroidManifest.xml": `<manifest/>`}, technologies: []string{"Android"}, roles: []string{"android-test", "android-ui"}},
 		{name: "frontend variants", files: map[string]string{"web/package.json": `{"dependencies":{"next":"1","@angular/core":"1"},"devDependencies":{"vite":"1"}}`}, languages: []string{"JavaScript"}, technologies: []string{"Angular", "Frontend", "Next.js", "Vite"}, roles: []string{"frontend-feature"}},
 		{name: "infrastructure", files: map[string]string{"Dockerfile": "FROM scratch", "compose.yaml": "services: {}", "infra/main.tf": "resource {}", "helm/app/Chart.yaml": "name: app", "k8s/app.yaml": "apiVersion: v1\nkind: Service\n"}, languages: []string{"HCL"}, technologies: []string{"Docker", "Docker Compose", "Helm", "Kubernetes", "Terraform"}, roles: []string{"infrastructure"}},
 		{name: "ci", files: map[string]string{".github/workflows/test.yml": "name: test"}, technologies: []string{"GitHub Actions"}, roles: []string{"ci"}},
@@ -141,12 +143,24 @@ func TestDiscoverWritesOnlyPromptGrinderAndLeavesIdenticalFilesUntouched(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	projectPath := filepath.Join(root, ".promptgrinder", "project.yaml")
+	oldTime := time.Unix(1_600_000_000, 0)
+	if err := os.Chtimes(projectPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Discover(root); err != nil {
 		t.Fatalf("second discovery: %v", err)
 	}
 	after, _ := os.ReadFile(filepath.Join(root, ".promptgrinder", "project.yaml"))
 	if !bytes.Equal(before, after) {
 		t.Fatal("existing project file was changed")
+	}
+	info, err := os.Stat(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(oldTime) {
+		t.Fatalf("existing project file modification time changed: %v", info.ModTime())
 	}
 	keep, _ := os.ReadFile(filepath.Join(root, "keep.txt"))
 	if string(keep) != "unchanged" {
@@ -184,6 +198,25 @@ func TestWritePlanRejectsPathsOutsidePromptGrinder(t *testing.T) {
 				t.Fatal("expected unsafe path error")
 			}
 		})
+	}
+}
+
+func TestWritePlanRejectsSymlinkedPromptGrinderDirectory(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, ".promptgrinder")); err != nil {
+		t.Fatal(err)
+	}
+	plan := Plan{Files: []File{{Path: ".promptgrinder/project.yaml", Content: []byte("name: x\n")}}}
+	if err := WritePlan(root, plan); err == nil {
+		t.Fatal("expected symlinked target directory to be rejected")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("files were written outside the repository: %v", entries)
 	}
 }
 

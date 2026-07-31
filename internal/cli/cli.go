@@ -283,15 +283,20 @@ func newRootCommand(service Service, stdout, stderr io.Writer, getwd func() (str
 		RunE: func(cmd *cobra.Command, args []string) error {
 			currentPath, err := getwd()
 			if err != nil {
-				return StructuredError{Err: fmt.Errorf("determine current repository: %w", err), Code: ExitInvalidInput}
+				wrapped := fmt.Errorf("determine current repository: %w", err)
+				fmt.Fprintf(stderr, "Error: %v\n", wrapped)
+				return StructuredError{Err: wrapped, Code: ExitInvalidInput}
 			}
 			rootPath, err := findRepositoryRoot(currentPath)
 			if err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
 				return StructuredError{Err: err, Code: ExitInvalidInput}
 			}
 			result, err := discover(rootPath)
 			if err != nil {
-				return StructuredError{Err: fmt.Errorf("discover repository: %w", err), Code: ExitInvalidInput}
+				wrapped := fmt.Errorf("discover repository: %w", err)
+				fmt.Fprintf(stderr, "Error: %v\n", wrapped)
+				return StructuredError{Err: wrapped, Code: ExitInvalidInput}
 			}
 			fmt.Fprintln(stdout, "Discovered:")
 			if len(result.Roles) == 0 {

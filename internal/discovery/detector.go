@@ -93,7 +93,6 @@ func (TechnologyDetector) Detect(root string) (Detection, error) {
 				backendRoots.add(dir)
 			}
 		case lower == "androidmanifest.xml":
-			languages.add("Kotlin")
 			technologies.add("Android")
 			androidRoots.add(androidProjectRoot(rel))
 		case lower == "package.json":

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -125,7 +126,8 @@ func TestDiscoverCommandPrintsStableSectionsAndUsesInjectedDiscovery(t *testing.
 
 func TestDiscoverCommandOutsideRepositoryIsInvalidInput(t *testing.T) {
 	called := false
-	cmd := newRootCommand(&fakeService{}, &bytes.Buffer{}, &bytes.Buffer{}, func() (string, error) {
+	errOut := &bytes.Buffer{}
+	cmd := newRootCommand(&fakeService{}, &bytes.Buffer{}, errOut, func() (string, error) {
 		return t.TempDir(), nil
 	}, func(string) (discovery.Result, error) {
 		called = true
@@ -138,6 +140,31 @@ func TestDiscoverCommandOutsideRepositoryIsInvalidInput(t *testing.T) {
 	}
 	if called {
 		t.Fatal("discovery was called outside a repository")
+	}
+	if !strings.Contains(errOut.String(), "Error: current directory is not inside a repository:") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+}
+
+func TestDiscoverCommandReportsGenerationConflict(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	errOut := &bytes.Buffer{}
+	cmd := newRootCommand(&fakeService{}, &bytes.Buffer{}, errOut, func() (string, error) {
+		return repo, nil
+	}, func(string) (discovery.Result, error) {
+		return discovery.Result{}, errors.New(`refusing to overwrite conflicting target ".promptgrinder/project.yaml"`)
+	})
+	cmd.SetArgs([]string{"discover"})
+	err := cmd.Execute()
+	if code, ok := ExitCode(err); !ok || code != ExitInvalidInput {
+		t.Fatalf("exit code = %d %v, want %d (error %v)", code, ok, ExitInvalidInput, err)
+	}
+	want := "Error: discover repository: refusing to overwrite conflicting target \".promptgrinder/project.yaml\"\n"
+	if errOut.String() != want {
+		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
 	}
 }
 
