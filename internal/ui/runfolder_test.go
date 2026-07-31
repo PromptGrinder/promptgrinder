@@ -33,7 +33,7 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	r.Close()
 
 	got := out.String()
-	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "failed in 1m 6s", "worker: worker-1", "log: /tmp/worker.log", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
+	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "Status: promptgrinder sequence seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "failed in 1m 6s", "worker: worker-1", "log: /tmp/worker.log", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}

@@ -196,6 +196,7 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 	fmt.Fprintln(r.w, "Mode: foreground")
 	if r.sequenceID != "" {
 		fmt.Fprintln(r.w, "Sequence: "+r.sequenceID)
+		fmt.Fprintln(r.w, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
 	}
 	fmt.Fprintln(r.w, "Prompts:")
 	for i, item := range r.items {
@@ -228,6 +229,7 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	lines := []string{"Mode: foreground"}
 	if r.sequenceID != "" {
 		lines = append(lines, "Sequence: "+r.sequenceID)
+		lines = append(lines, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
 	}
 	lines = append(lines, "Prompts:")
 	for i, item := range r.items {
