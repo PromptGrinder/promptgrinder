@@ -144,10 +144,10 @@ func TestAiRoleAdvisorDoesNotWriteProjectFiles(t *testing.T) {
 	}
 }
 
-func TestValidateRecommendationsRejectsRemovalAndSecrets(t *testing.T) {
+func TestValidateRecommendationsAllowsGroundedRemovalAndRejectsSecrets(t *testing.T) {
 	current, evidence := advisorFixture()
 	base := Recommendation{ID: "x", RoleID: "backend", Field: "technology", Operation: OperationRemove, Value: "Go", Confidence: ConfidenceHigh, Explanation: "cleanup", Evidence: []Citation{{Path: "go.mod"}}}
-	if err := ValidateRecommendations(current, evidence, []Recommendation{base}); err == nil || !strings.Contains(err.Error(), "unsupported") {
+	if err := ValidateRecommendations(current, evidence, []Recommendation{base}); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	base.Operation, base.Field, base.Value = OperationSet, "description", "API_KEY=supersecretvalue"

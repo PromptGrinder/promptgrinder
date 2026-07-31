@@ -95,12 +95,7 @@ func (a AiRoleAdvisor) Recommend(ctx context.Context, current CurrentState, evid
 	if err := ValidateRecommendations(current, evidence, response.Recommendations); err != nil {
 		return ReviewPlan{}, err
 	}
-	items := make([]ReviewItem, len(response.Recommendations))
-	roles := roleIndex(current)
-	for i, recommendation := range response.Recommendations {
-		items[i] = ReviewItem{Recommendation: recommendation, OldValue: fieldValue(roles[recommendation.RoleID], recommendation.Field)}
-	}
-	return StableReviewPlan(items)
+	return (RoleDiffGenerator{}).Generate(current, response.Recommendations)
 }
 
 // advisorLauncher lets the established runtime capability negotiation remain
@@ -168,10 +163,10 @@ var secretLooking = regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|passwo
 var supportedOperations = map[string]map[Operation]bool{
 	"name":              {OperationSet: true},
 	"description":       {OperationSet: true},
-	"technology":        {OperationSet: true, OperationAppend: true},
-	"allowed_paths":     {OperationSet: true, OperationAppend: true},
+	"technology":        {OperationSet: true, OperationAppend: true, OperationRemove: true},
+	"allowed_paths":     {OperationSet: true, OperationAppend: true, OperationRemove: true},
 	"runtime.preferred": {OperationSet: true},
-	"quality_gates":     {OperationSet: true, OperationAppend: true},
+	"quality_gates":     {OperationSet: true, OperationAppend: true, OperationRemove: true},
 }
 
 func ValidateRecommendations(current CurrentState, evidence Evidence, recommendations []Recommendation) error {
@@ -183,9 +178,6 @@ func ValidateRecommendations(current CurrentState, evidence Evidence, recommenda
 		operations, ok := supportedOperations[recommendation.Field]
 		if !ok || !operations[recommendation.Operation] {
 			return fmt.Errorf("recommendation %q has unsupported operation %q for field %q", recommendation.ID, recommendation.Operation, recommendation.Field)
-		}
-		if recommendation.Operation == OperationRemove {
-			return fmt.Errorf("recommendation %q uses unsupported destructive removal", recommendation.ID)
 		}
 		if strings.TrimSpace(recommendation.Explanation) == "" {
 			return fmt.Errorf("recommendation %q requires a nonempty explanation", recommendation.ID)

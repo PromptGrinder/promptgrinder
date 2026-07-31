@@ -17,6 +17,7 @@ import (
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/discovery"
 	"promptgrinder/internal/engine"
+	"promptgrinder/internal/roleenhance"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
 	"promptgrinder/internal/state"
@@ -89,7 +90,7 @@ func TestV1PublicRootCommandContract(t *testing.T) {
 	sort.Strings(got)
 	want := []string{
 		"cancel", "complete", "defaults", "discover", "doctor", "engines", "events", "fail", "list",
-		"logs", "prune", "reconcile", "review", "run", "run-folder", "scheduler", "sequence",
+		"logs", "prune", "reconcile", "review", "roles", "run", "run-folder", "scheduler", "sequence",
 		"sequences", "setup", "status", "task", "terminals", "validate", "worker", "workers",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -165,6 +166,80 @@ func TestDiscoverCommandReportsGenerationConflict(t *testing.T) {
 	want := "Error: discover repository: refusing to overwrite conflicting target \".promptgrinder/project.yaml\"\n"
 	if errOut.String() != want {
 		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
+	}
+}
+
+type fakeRoleAdvisor struct {
+	plan  roleenhance.ReviewPlan
+	calls int
+}
+
+func (f *fakeRoleAdvisor) Recommend(context.Context, roleenhance.CurrentState, roleenhance.Evidence) (roleenhance.ReviewPlan, error) {
+	f.calls++
+	return f.plan, nil
+}
+
+func roleEnhanceCLIRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".promptgrinder", "roles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".promptgrinder", "project.yaml"), []byte("name: test\nroles: [backend]\ngenerated_by: promptgrinder discover\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".promptgrinder", "roles", "backend.yaml"), []byte("id: backend\nname: Backend\ndescription: old\ntechnology: [Go]\nallowed_paths: [internal]\nruntime: {preferred: local}\nquality_gates: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestRolesEnhanceReviewOnlyAndApplySelected(t *testing.T) {
+	root := roleEnhanceCLIRepo(t)
+	path := filepath.Join(root, ".promptgrinder", "roles", "backend.yaml")
+	before, _ := os.ReadFile(path)
+	advisor := &fakeRoleAdvisor{plan: roleenhance.ReviewPlan{Items: []roleenhance.ReviewItem{{Recommendation: roleenhance.Recommendation{ID: "desc", RoleID: "backend", Operation: roleenhance.OperationSet, Field: "description", Value: "Own APIs", Confidence: roleenhance.ConfidenceHigh, Explanation: "documented ownership", Evidence: []roleenhance.Citation{{Path: "README.md"}}}, OldValue: "old"}}}}
+	out := &bytes.Buffer{}
+	cmd := newRootCommandWithRoleAdvisor(&fakeService{}, out, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+	cmd.SetArgs([]string{"roles", "enhance"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(path)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("default review wrote file")
+	}
+	for _, want := range []string{"[desc] backend", "Old: \"old\"", "Proposed: \"Own APIs\"", "Confidence: high", "Reason: documented ownership", "README.md", "no files written"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	cmd = newRootCommandWithRoleAdvisor(&fakeService{}, out, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+	cmd.SetArgs([]string{"roles", "enhance", "--apply-selected", "desc"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	after, _ = os.ReadFile(path)
+	if !strings.Contains(string(after), "description: Own APIs") {
+		t.Fatalf("role=%s", after)
+	}
+}
+
+func TestRolesEnhanceRejectsAmbiguousFlagsBeforeAdvisor(t *testing.T) {
+	root := roleEnhanceCLIRepo(t)
+	advisor := &fakeRoleAdvisor{}
+	cmd := newRootCommandWithRoleAdvisor(&fakeService{}, &bytes.Buffer{}, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+	cmd.SetArgs([]string{"roles", "enhance", "--apply-all", "--reject-all"})
+	err := cmd.Execute()
+	if code, ok := ExitCode(err); !ok || code != ExitInvalidInput {
+		t.Fatalf("err=%v code=%d", err, code)
+	}
+	if advisor.calls != 0 {
+		t.Fatal("advisor called for invalid flags")
 	}
 }
 
