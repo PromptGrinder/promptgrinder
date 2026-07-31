@@ -780,6 +780,44 @@ func TestFinishWorkerPrefersCompleteCodexCaptureOverUnflushedLog(t *testing.T) {
 	}
 }
 
+func TestFinishWorkerPersistsCompletionBeforeTerminalStatus(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	store := state.NewStore(home)
+	worker := state.Worker{
+		ID:             "wrk_ordered_completion",
+		RecordPath:     store.RecordPath("wrk_ordered_completion"),
+		RepositoryPath: "/repo",
+		TaskPath:       "/repo/task.md",
+		PromptPath:     filepath.Join(store.WorkerDir("wrk_ordered_completion"), "prompt.md"),
+		Engine:         "codex",
+		Status:         state.StatusRunning,
+		LogPath:        filepath.Join(store.WorkerDir("wrk_ordered_completion"), "worker.log"),
+		Metadata:       map[string]any{},
+	}
+	if err := store.Save(worker); err != nil {
+		t.Fatal(err)
+	}
+	complete := "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"STATUS: PASS\\nSUMMARY:\\n- Finished.\\nNEXT_PROMPT_SAFE: yes\"}}\n"
+	if err := os.WriteFile(codex.CapturedOutputPath(worker.RecordPath), []byte(complete), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := Service{Store: store, Registry: engine.NewRegistry(codex.Engine{})}
+
+	if err := service.FinishWorker(worker.RecordPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(worker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != state.StatusSucceeded {
+		t.Fatalf("status = %s", loaded.Status)
+	}
+	if loaded.EngineResult == nil || loaded.EngineResult.CompletionStatus != "PASS" || loaded.EngineResult.NextPromptSafe == nil || !*loaded.EngineResult.NextPromptSafe {
+		t.Fatalf("terminal worker exposed without final completion result: %#v", loaded.EngineResult)
+	}
+}
+
 func TestTerminalCandidatesSkipClosedWorkers(t *testing.T) {
 	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
 	open := state.Worker{

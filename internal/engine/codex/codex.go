@@ -100,6 +100,12 @@ func (e Engine) Build(ctx execution.Context, prompt []byte, executablePath strin
 func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResult {
 	result := state.EngineResult{}
 	scanner := bufio.NewScanner(bytes.NewReader(log))
+	// Codex command-execution events can contain large aggregated output in a
+	// single JSONL record. The Scanner default is only 64 KiB; hitting it used
+	// to stop parsing silently and leave an earlier progress message looking
+	// like the final answer. Keep a bounded but practical maximum so the final
+	// agent message remains discoverable after large tool results.
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		var event struct {
 			Type     string `json:"type"`

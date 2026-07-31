@@ -460,6 +460,22 @@ func TestParseResultRejectsDuplicateCompletionFields(t *testing.T) {
 	}
 }
 
+func TestParseResultFindsFinalCompletionAfterLargeCommandEvent(t *testing.T) {
+	largeOutput := strings.Repeat("x", 256*1024)
+	opening := `{"type":"item.completed","item":{"type":"agent_message","text":"Focused tests passed; running the final gate."}}` + "\n"
+	command := `{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"` + largeOutput + `"}}` + "\n"
+	completion := `{"type":"item.completed","item":{"type":"agent_message","text":"STATUS: PASS\nSUMMARY:\n- Final gate passed.\nNEXT_PROMPT_SAFE: yes"}}` + "\n"
+
+	result := (Engine{}).ParseResult(execution.Context{}, []byte(opening+command+completion))
+
+	if result.CompletionStatus != "PASS" || result.NextPromptSafe == nil || !*result.NextPromptSafe {
+		t.Fatalf("completion = status %q safe %v summary %q", result.CompletionStatus, result.NextPromptSafe, result.Summary)
+	}
+	if !strings.Contains(result.Summary, "Final gate passed") {
+		t.Fatalf("summary = %q", result.Summary)
+	}
+}
+
 func TestExecuteWorkerTimeout(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "fake-codex")

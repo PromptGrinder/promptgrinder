@@ -1063,6 +1063,18 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 	if ordinaryPolicyErr != nil {
 		exitCode = 1
 	}
+	// Persist the parsed engine result before publishing a terminal worker
+	// status. Ordered runners poll worker.json and must never observe
+	// succeeded/failed with a stale or missing completion report.
+	if resultParsed {
+		worker.EngineResult = &result
+		if worker.SummaryPath == "" {
+			worker.SummaryPath = filepath.Join(filepath.Dir(s.Store.WorkersDir), "summaries", "workers", worker.ID+".md")
+		}
+		if err := s.Store.Save(worker); err != nil {
+			return err
+		}
+	}
 	if err := s.Store.MarkFinished(recordPath, exitCode); err != nil {
 		return err
 	}
@@ -1080,13 +1092,6 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 	}
 	worker, err = s.Store.LoadPath(recordPath)
 	if err != nil {
-		return err
-	}
-	worker.EngineResult = &result
-	if worker.SummaryPath == "" {
-		worker.SummaryPath = filepath.Join(filepath.Dir(s.Store.WorkersDir), "summaries", "workers", worker.ID+".md")
-	}
-	if err := s.Store.Save(worker); err != nil {
 		return err
 	}
 	if result.Summary != "" {

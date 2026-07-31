@@ -58,7 +58,7 @@ the selected runtime performs the engineering work.
 
 ## Installation
 
-PromptGrinder `v1.0.0-rc.2` supports macOS on Apple silicon and Intel. It
+PromptGrinder `v1.0.0-rc.2.1` supports macOS on Apple silicon and Intel. It
 requires Git and an installed, authenticated
 [Codex CLI](https://developers.openai.com/codex/cli/).
 
@@ -67,19 +67,19 @@ requires Git and an installed, authenticated
 Download the archive for your Mac from the
 [GitHub releases page](https://github.com/PromptGrinder/promptgrinder/releases):
 
-- Apple silicon: `promptgrinder_v1.0.0-rc.2_darwin_arm64.tar.gz`
-- Intel: `promptgrinder_v1.0.0-rc.2_darwin_amd64.tar.gz`
+- Apple silicon: `promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz`
+- Intel: `promptgrinder_v1.0.0-rc.2.1_darwin_amd64.tar.gz`
 
 Download `checksums.txt` from the same release, then verify and install. This
 example uses the Apple silicon archive:
 
 ```sh
-grep 'promptgrinder_v1.0.0-rc.2_darwin_arm64.tar.gz' checksums.txt |
+grep 'promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz' checksums.txt |
   shasum -a 256 -c -
-tar -xzf promptgrinder_v1.0.0-rc.2_darwin_arm64.tar.gz
+tar -xzf promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz
 install -d "$HOME/.local/bin"
 install -m 0755 \
-  promptgrinder_v1.0.0-rc.2_darwin_arm64/promptgrinder \
+  promptgrinder_v1.0.0-rc.2.1_darwin_arm64/promptgrinder \
   "$HOME/.local/bin/promptgrinder"
 promptgrinder --version
 ```
@@ -443,7 +443,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.2` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.2.1` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -489,9 +489,10 @@ general development, slice authoring, CI, and release qualification.
 
 - [Worker runtime use cases](docs/product/worker-runtime-use-cases.md)
 - [Release policy](docs/RELEASE_POLICY.md)
-- [RC.2 qualification](docs/release/v1.0.0-rc.2-qualification.md)
-- [RC.2 final gate](docs/release/v1.0.0-rc.2-final-gate.md)
-- [RC.2 candidate notes](docs/release/v1.0.0-rc.2-release-notes.md)
+- [RC.2.1 qualification](docs/release/v1.0.0-rc.2.1-qualification.md)
+- [RC.2.1 final gate](docs/release/v1.0.0-rc.2.1-final-gate.md)
+- [RC.2.1 candidate notes](docs/release/v1.0.0-rc.2.1-release-notes.md)
+- [Historical RC.2 notes](docs/release/v1.0.0-rc.2-release-notes.md)
 - [Historical RC.1 qualification](docs/release/qualification.md)
 - [Historical RC.1 notes](docs/release/v1.0.0-rc.1-release-notes.md)
 - [Support](SUPPORT.md)
