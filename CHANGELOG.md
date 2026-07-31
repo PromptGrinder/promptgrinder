@@ -4,6 +4,17 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.2.1 candidate
+
+- Fixed ordered-folder completion parsing when a Codex JSONL command event is
+  larger than the scanner's default token limit. Final `STATUS` and
+  `NEXT_PROMPT_SAFE` fields are now found after large tool output.
+- Persisted parsed completion evidence before publishing a terminal worker
+  status, preventing an ordered runner from observing stale completion data.
+
+RC.2.1 is a compatible runtime bug-fix candidate. It is not tagged, qualified,
+or published yet.
+
 ### v1.0.0-rc.2 candidate
 
 - Added persistent project-owned worker definitions, task assignment and FIFO
