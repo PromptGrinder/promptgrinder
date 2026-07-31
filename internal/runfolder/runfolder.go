@@ -670,6 +670,16 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 		engineExitCode := *worker.EngineResult.EngineExitCode
 		promptState.ExitCode = &engineExitCode
 	}
+	if worker.EngineResult != nil {
+		promptState.CompletionStatus, promptState.NextPromptSafe, promptState.CompletionReason = state.ParseOrderedCompletionReport(worker.EngineResult.Summary)
+		promptState.Worker.EngineResult.CompletionStatus = promptState.CompletionStatus
+		promptState.Worker.EngineResult.NextPromptSafe = promptState.NextPromptSafe
+		promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
+		if semanticErr := promptState.Worker.EngineResult.OrderedCompletionError(); semanticErr != nil {
+			promptState.CompletionReason = semanticErr.Error()
+			promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
+		}
+	}
 	engineFailed := exitCode != 0
 	if worker.EngineResult != nil && worker.EngineResult.EngineExitCode != nil {
 		engineFailed = *worker.EngineResult.EngineExitCode != 0
@@ -679,16 +689,8 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 		promptState.FinishedAt = &finished
 		return promptState, fmt.Errorf("%s failed with worker status %s", prompt.Name, worker.Status)
 	}
-	if worker.EngineResult != nil {
-		promptState.CompletionStatus, promptState.NextPromptSafe, promptState.CompletionReason = state.ParseOrderedCompletionReport(worker.EngineResult.Summary)
-		promptState.Worker.EngineResult.CompletionStatus = promptState.CompletionStatus
-		promptState.Worker.EngineResult.NextPromptSafe = promptState.NextPromptSafe
-		promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
-	}
 	if worker.EngineResult == nil {
 		promptState.CompletionReason = "worker produced no structured completion result"
-	} else if err := worker.EngineResult.OrderedCompletionError(); err != nil {
-		promptState.CompletionReason = err.Error()
 	}
 	if promptState.CompletionReason != "" {
 		if promptState.Worker.EngineResult == nil {

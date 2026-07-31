@@ -142,6 +142,27 @@ func TestOrderedCompletionParsingIsAdapterIndependent(t *testing.T) {
 	}
 }
 
+func TestEngineFailurePersistsOrderedCompletionFields(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	unsafe := false
+	engineExitCode := 23
+	launcher := &fakeLauncher{result: &state.EngineResult{
+		Summary:        "STATUS: BLOCKED\nNEXT_PROMPT_SAFE: no",
+		EngineExitCode: &engineExitCode,
+		NextPromptSafe: &unsafe,
+	}}
+
+	summary, err := Run(dir, Options{HomeDir: home, EngineOverride: "replaceable-adapter"}, launcher)
+	if err == nil {
+		t.Fatal("expected engine failure")
+	}
+	item := summary.Sequence.Items[0]
+	if item.ExitCode == nil || *item.ExitCode != engineExitCode || item.CompletionStatus != "BLOCKED" || item.NextPromptSafe == nil || *item.NextPromptSafe || item.CompletionReason != "STATUS is BLOCKED, not PASS" {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
 func boolPtr(value bool) *bool { return &value }
 
 func TestRunFolderReusesPersistedCodexSession(t *testing.T) {
