@@ -8,12 +8,17 @@ on:
 permissions:
   contents: read
 
-env:
-  PROMPTGRINDER_HOME: /tmp/promptgrinder-test-home
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  quality:
+    name: Static quality and modules
     runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-quality-home
     steps:
       # Reviewed 2026-07-26; Dependabot should propose action updates.
       - uses: actions/checkout@v6
@@ -25,41 +30,147 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
-
-      - name: Public documentation and examples
-        run: |
-          mkdir -p "$RUNNER_TEMP/promptgrinder-ci-bin"
-
-          cat > "$RUNNER_TEMP/promptgrinder-ci-bin/codex" <<'EOF'
-          #!/bin/sh
-          echo "error: CI Codex stub must not be executed" >&2
-          exit 99
-          EOF
-
-          chmod +x "$RUNNER_TEMP/promptgrinder-ci-bin/codex"
-          export PATH="$RUNNER_TEMP/promptgrinder-ci-bin:$PATH"
-
-          test -x "$(command -v codex)"
-          test ! -e docs/features
-          test -s README.md
-          test -s AUTHORS.md
-          test -s CITATION.cff
-          test -s examples/minimal.md
-          test -s examples/multi-step.md
-          test -s examples/shared-context.md
-          test -s examples/smoke/read-only.md
-          go run ./cmd/promptgrinder validate examples/minimal.md
-          go run ./cmd/promptgrinder validate examples/shared-context.md
-          go run ./cmd/promptgrinder validate examples/smoke/read-only.md
-          go run ./cmd/promptgrinder run --dry-run examples/smoke/read-only.md
       - name: Module integrity
         run: go mod verify
-      - name: Tests
-        run: go test -count=1 ./...
-      - name: Race tests
-        run: go test -race -count=1 ./...
-      - name: Cross-build supported artifacts
+
+  tests:
+    name: Go tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-tests-home
+    steps:
+      # Reviewed 2026-07-26; Dependabot should propose action updates.
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go test -shuffle=on -count=1 ./...
+
+  race:
+    name: Race tests
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-race-home
+    steps:
+      # Reviewed 2026-07-26; Dependabot should propose action updates.
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go test -race -count=1 ./...
+
+  acceptance:
+    name: Compiled CLI acceptance
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-acceptance-home
+    steps:
+      # Reviewed 2026-07-26; Dependabot should propose action updates.
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Exercise the compiled public boundary
+        run: go test -count=1 -v ./acceptance
+
+  examples:
+    name: Public documentation and examples
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-examples-home
+    steps:
+      # Reviewed 2026-07-26; Dependabot should propose action updates.
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build CLI and install a fail-closed Codex stub
         run: |
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/promptgrinder-arm64 ./cmd/promptgrinder
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -o /tmp/promptgrinder-amd64 ./cmd/promptgrinder
-          file /tmp/promptgrinder-arm64 /tmp/promptgrinder-amd64
+          mkdir -p "$RUNNER_TEMP/promptgrinder-example-bin"
+          go build -trimpath -o "$RUNNER_TEMP/promptgrinder-example-bin/promptgrinder" ./cmd/promptgrinder
+          cat > "$RUNNER_TEMP/promptgrinder-example-bin/codex" <<'EOF'
+          #!/bin/sh
+          : > "$RUNNER_TEMP/codex-was-invoked"
+          echo "error: dry-run invoked the CI Codex stub" >&2
+          exit 99
+          EOF
+          chmod +x "$RUNNER_TEMP/promptgrinder-example-bin/codex"
+      - name: Check public metadata and runnable examples
+        env:
+          PATH: ${{ runner.temp }}/promptgrinder-example-bin:/usr/bin:/bin:/usr/sbin:/sbin
+        run: |
+          cli="$RUNNER_TEMP/promptgrinder-example-bin/promptgrinder"
+          test ! -e docs/features
+          for file in README.md AUTHORS.md CITATION.cff LICENSE SECURITY.md SUPPORT.md \
+            examples/minimal.md examples/multi-step.md examples/shared-context.md \
+            examples/smoke/read-only.md examples/workers.yaml; do
+            test -s "$file"
+          done
+
+          "$cli" validate examples/minimal.md
+          "$cli" validate examples/smoke/read-only.md
+          "$cli" run --dry-run examples/minimal.md
+          "$cli" run --dry-run examples/smoke/read-only.md
+
+          # multi-step.md and shared-context.md are descriptive walkthroughs,
+          # not prompt files. Exercise their referenced prompt fixtures instead.
+          fixture_repo="$RUNNER_TEMP/example-repository"
+          multi="$fixture_repo/multi-step-prompts"
+          shared="$fixture_repo/shared-context-prompts"
+          mkdir -p "$multi" "$shared"
+          git init -q "$fixture_repo"
+          printf '# Implement\n\nMake the smallest code change and add focused tests.\n' > "$multi/10-implement.md"
+          printf '# Test\n\nRun relevant tests and fix regressions from the change.\n' > "$multi/20-test.md"
+          printf '# Review\n\nReview correctness and run final verification.\n' > "$multi/30-review.md"
+          printf '# Add a note\n\nAppend a Status section to README.md.\n' > "$shared/10-add-note.md"
+          printf '# Review the note\n\nReview the Status section for accuracy.\n' > "$shared/20-review-note.md"
+
+          for prompt in "$multi"/*.md "$shared"/*.md; do
+            "$cli" validate "$prompt"
+          done
+          "$cli" run --shared-context --dry-run "$multi/*.md"
+          "$cli" run --shared-context --dry-run "$shared/*.md"
+
+          test ! -e "$RUNNER_TEMP/codex-was-invoked"
+          test ! -e "$PROMPTGRINDER_HOME"
+
+  artifacts:
+    name: Supported macOS artifacts
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-artifact-home
+    steps:
+      # Reviewed 2026-07-26; Dependabot should propose action updates.
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Cross-build and inspect Darwin binaries
+        run: |
+          output="$RUNNER_TEMP/promptgrinder-artifacts"
+          mkdir -p "$output"
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$output/promptgrinder-darwin-arm64" ./cmd/promptgrinder
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -o "$output/promptgrinder-darwin-amd64" ./cmd/promptgrinder
+          test -s "$output/promptgrinder-darwin-arm64"
+          test -s "$output/promptgrinder-darwin-amd64"
+          file "$output/promptgrinder-darwin-arm64" | grep -q 'Mach-O 64-bit executable arm64'
+          file "$output/promptgrinder-darwin-amd64" | grep -q 'Mach-O 64-bit executable x86_64'
+
+          case "$(uname -m)" in
+            arm64) native="$output/promptgrinder-darwin-arm64" ;;
+            x86_64) native="$output/promptgrinder-darwin-amd64" ;;
+            *) echo "unsupported native architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          "$native" --version
+          "$native" --help | grep -q promptgrinder
+          "$native" validate examples/minimal.md
