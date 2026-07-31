@@ -62,12 +62,15 @@ func (s *Store) enqueue(root string, definition workerdomain.WorkerDefinition, s
 	if err != nil {
 		return workerdomain.Task{}, fmt.Errorf("parse task source %s: %w", sourceReference, err)
 	}
+	if err := markdown.Validate(parsed, sourceReference); err != nil {
+		return workerdomain.Task{}, err
+	}
 	taskID := strings.TrimSuffix(filepath.Base(sourceReference), filepath.Ext(sourceReference))
 	now := s.now().UTC()
 	task := workerdomain.Task{
 		Version: workerdomain.SchemaVersion, ID: taskID,
 		ProjectID: definition.ProjectID, WorkerID: definition.ID,
-		Instructions: parsed.Body, ContentSnapshot: content,
+		Instructions: string(markdown.Render(parsed)), ContentSnapshot: content,
 		SourceReference: filepath.ToSlash(sourceReference),
 		Status:          workerdomain.TaskStatusPending, CreatedAt: now, UpdatedAt: now,
 	}

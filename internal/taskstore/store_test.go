@@ -31,7 +31,7 @@ func TestAssignmentSnapshotsMarkdownAndUpdatesWorkerState(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := filepath.Join(root, "tasks", "sonar-001.md")
-	original := "---\npriority: high\n---\n# Fix sonar\n\nKeep the audit trail.\n"
+	original := "---\nacceptance_criteria: audit trail remains\n---\n# Fix sonar\n\nKeep the audit trail.\n"
 	if err := os.WriteFile(source, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,8 @@ func TestAssignmentSnapshotsMarkdownAndUpdatesWorkerState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.ID != "sonar-001" || task.Instructions != "# Fix sonar\n\nKeep the audit trail.\n" ||
+	wantInstructions := "# Task Semantics (v1)\n\n## Acceptance Criteria\n\n- audit trail remains\n\n# Fix sonar\n\nKeep the audit trail.\n"
+	if task.ID != "sonar-001" || task.Instructions != wantInstructions ||
 		task.ContentSnapshot != original || task.AttemptCount != 0 ||
 		task.Status != workerdomain.TaskStatusAssigned {
 		t.Fatalf("assigned task = %#v", task)

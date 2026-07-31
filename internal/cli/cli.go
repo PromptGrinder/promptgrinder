@@ -706,11 +706,15 @@ Examples:
 
 	var validateJSON bool
 	var validateEngine string
+	var validateRender bool
 	validateCmd := &cobra.Command{
 		Use:   "validate <task.md>",
 		Short: "Validate a Markdown task without launching a worker.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if validateRender && validateJSON {
+				return StructuredError{Err: fmt.Errorf("--render cannot be combined with --json"), Code: ExitInvalidInput}
+			}
 			plan, err := service.Validate(args[0], validateEngine)
 			if validateJSON {
 				if writeErr := writeJSON(stdout, plan, compactJSON); writeErr != nil {
@@ -725,11 +729,16 @@ Examples:
 				printValidationPlan(stdout, plan)
 				return StructuredError{Err: err, Code: ExitInvalidInput}
 			}
+			if validateRender {
+				_, err := io.WriteString(stdout, plan.RenderedPrompt)
+				return err
+			}
 			printValidationPlan(stdout, plan)
 			return nil
 		},
 	}
 	validateCmd.Flags().BoolVar(&validateJSON, "json", false, "print machine-readable JSON")
+	validateCmd.Flags().BoolVar(&validateRender, "render", false, "print the exact prompt bytes the engine would receive")
 	validateCmd.Flags().StringVar(&validateEngine, "engine", "", "override the task engine for validation")
 	root.AddCommand(validateCmd)
 

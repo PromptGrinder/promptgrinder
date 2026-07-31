@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/state"
 )
 
@@ -228,6 +229,29 @@ func TestSharedContextPreservesActiveFrontmatter(t *testing.T) {
 	}
 	if !strings.Contains(launcher.calls[0].Content, "# Active Prompt\n\nactive prompt") {
 		t.Fatalf("assembled prompt missing active body:\n%s", launcher.calls[0].Content)
+	}
+}
+
+func TestSpecificationAndTaskSemanticsRenderExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "00-specification.md", "---\nacceptance_criteria: spec rule\n---\nspec body")
+	writePromptFile(t, dir, "10-implement-a.md", "---\nvalidation: task check\n---\ntask body")
+	launcher := &fakeLauncher{}
+	if _, err := Run(dir, Options{}, launcher); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := markdown.Parse(launcher.calls[0].Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := markdown.Validate(parsed, launcher.calls[0].Path); err != nil {
+		t.Fatal(err)
+	}
+	rendered := string(markdown.Render(parsed))
+	for _, value := range []string{"spec rule", "task check"} {
+		if strings.Count(rendered, value) != 1 {
+			t.Fatalf("%q count in prompt = %d\n%s", value, strings.Count(rendered, value), rendered)
+		}
 	}
 }
 

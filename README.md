@@ -160,7 +160,7 @@ requests, publishes releases, or merges branches.
 | `run-folder <folder>` | Run numbered work orders sequentially |
 | `discover` | Detect repository technologies and generate `.promptgrinder/` project roles |
 | `roles enhance` | Review grounded role recommendations; apply with `--apply-all` or `--apply-selected <id>` |
-| `validate <task.md>` | Validate a work order without creating a worker |
+| `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
 | `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
 | `setup` | Preview or create PromptGrinder-owned first-use files |
 | `list` | List workers |
@@ -215,6 +215,39 @@ PromptGrinder provides orchestration controls, not a security guarantee:
 - worker state, events, logs, and summaries remain inspectable locally;
 - shared-context workflows require Git and a clean worktree by default;
 - no hosted PromptGrinder service is required.
+
+### Task frontmatter contract v1
+
+Frontmatter is a strict, versioned contract. Unknown top-level keys and unknown
+keys nested under `engine` are errors; YAML anchors/aliases and `depends_on` are
+not supported. Errors name the source task. Runtime metadata remains separate
+from task instructions:
+
+- `engine` (a name or mapping with `name`, `model`, `profile`, `sandbox`,
+  `approval`, `web_search`, and `images`), plus the compatible top-level engine
+  keys `sandbox`, `approval`, `web_search`, and `images`;
+- `working_directory`, `timeout`, `labels`, and `env` configure execution or
+  identify the run;
+- `acceptance_criteria` is a nonempty string or nonempty list of strings;
+- `allowed_paths` is a nonempty list of repository-relative patterns;
+- `forbidden_paths` is a list of repository-relative patterns and may be empty;
+- `validation` is a nonempty string or nonempty list of commands or
+  instructions.
+
+The four semantic fields are rendered, in the order shown above, into a
+`# Task Semantics (v1)` preamble sent to the engine. The Markdown body following
+frontmatter is otherwise byte-for-byte unchanged. Validation entries are AI
+instructions only: PromptGrinder never executes them as shell commands.
+Absolute or repository-escaping path patterns, identical allowed/forbidden
+rules, empty required values, wrong types, and secret-looking semantic values
+are rejected. A deterministic warning is emitted when frontmatter is at least
+2048 bytes, rendered task instructions are at most 256 bytes, and frontmatter
+is at least eight times larger; warnings appear in human and JSON validation.
+
+Use `promptgrinder validate --render <task.md>` to inspect the exact prompt
+bytes without launching Codex or creating worker state. `--render` and `--json`
+are intentionally incompatible; ordinary `--json` validation reports the
+warning and execution plan fields.
 
 PromptGrinder passes the selected sandbox and approval settings to Codex; Codex
 performs model execution and tool use. Review work orders and permissions before

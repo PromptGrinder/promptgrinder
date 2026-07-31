@@ -18,7 +18,7 @@ import (
 func TestLaunchCreatesAndPersistsWorker(t *testing.T) {
 	root := t.TempDir()
 	task := filepath.Join(root, "task.md")
-	if err := os.WriteFile(task, []byte("---\npriority: high\n---\n# Task\n"), 0o644); err != nil {
+	if err := os.WriteFile(task, []byte("---\nacceptance_criteria:\n  - exact output\nallowed_paths:\n  - internal/**\nforbidden_paths:\n  - secrets/**\nvalidation: go test ./...\n---\n# Task\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
@@ -42,8 +42,13 @@ func TestLaunchCreatesAndPersistsWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Metadata["priority"] != "high" {
+	if loaded.Metadata["acceptance_criteria"] == nil {
 		t.Fatalf("metadata = %#v", loaded.Metadata)
+	}
+	for _, key := range []string{"acceptance_criteria", "allowed_paths", "forbidden_paths", "validation"} {
+		if _, ok := loaded.ResolvedMetadata[key]; ok {
+			t.Fatalf("semantic key %q became runtime metadata: %#v", key, loaded.ResolvedMetadata)
+		}
 	}
 	if loaded.EventPath != store.EventPath(loaded.ID) {
 		t.Fatalf("event_path = %q, want %q", loaded.EventPath, store.EventPath(loaded.ID))
@@ -65,7 +70,8 @@ func TestLaunchCreatesAndPersistsWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(prompt) != "# Task\n" {
+	wantPrompt := "# Task Semantics (v1)\n\n## Acceptance Criteria\n\n- exact output\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n- secrets/**\n\n## Validation\n\n- go test ./...\n\n# Task\n"
+	if string(prompt) != wantPrompt {
 		t.Fatalf("prompt = %q", string(prompt))
 	}
 }
@@ -429,10 +435,34 @@ func TestValidateRejectsCommonMetadata(t *testing.T) {
 	}
 }
 
+func TestUnsupportedFrontmatterFailsBeforeWorkerCreation(t *testing.T) {
+	for _, test := range []struct{ name, frontmatter, want string }{
+		{"unknown", "mystery: true", `unknown top-level key "mystery"`},
+		{"depends", "depends_on: previous-task", "depends_on is not supported"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			task := filepath.Join(root, "task.md")
+			if err := os.WriteFile(task, []byte("---\n"+test.frontmatter+"\n---\n# Task\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			store := state.NewStore(filepath.Join(t.TempDir(), "home"))
+			manager := Manager{Store: store, Engine: codex.Engine{}, EngineName: "codex", BaseConfig: config.Config{Engine: "codex"}}
+			result := manager.Launch(task)
+			if result.Err == nil || !strings.Contains(result.Err.Error(), test.want) || !strings.Contains(result.Err.Error(), task) {
+				t.Fatalf("err = %v", result.Err)
+			}
+			if _, err := os.Stat(store.WorkersDir); !os.IsNotExist(err) {
+				t.Fatalf("worker state created: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateRedactsSecrets(t *testing.T) {
 	root := t.TempDir()
 	task := filepath.Join(root, "task.md")
-	if err := os.WriteFile(task, []byte("---\nenv:\n  API_KEY: sk-test\n  DESCRIPTION: this-is-a-long-but-public-value\nengine:\n  name: codex\n  model: gpt-5\nprivate_note: sensitive\n---\n# Task\n"), 0o644); err != nil {
+	if err := os.WriteFile(task, []byte("---\nenv:\n  API_KEY: sk-test\n  DESCRIPTION: this-is-a-long-but-public-value\nengine:\n  name: codex\n  model: gpt-5\n---\n# Task\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	manager := Manager{
@@ -452,9 +482,6 @@ func TestValidateRedactsSecrets(t *testing.T) {
 	}
 	if env["DESCRIPTION"] != "this-is-a-long-but-public-value" {
 		t.Fatalf("non-secret value redacted: %#v", env)
-	}
-	if metadata["private_note"] != "[redacted]" {
-		t.Fatalf("private value not redacted: %#v", metadata)
 	}
 }
 

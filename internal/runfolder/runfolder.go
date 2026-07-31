@@ -642,7 +642,14 @@ func readSpecificationContext(prompts []Prompt) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		parts = append(parts, string(data))
+		parsed, err := markdown.Parse(string(data))
+		if err != nil {
+			return "", fmt.Errorf("parse specification %s: %w", prompt.Path, err)
+		}
+		if err := markdown.Validate(parsed, prompt.Path); err != nil {
+			return "", err
+		}
+		parts = append(parts, string(markdown.Render(parsed)))
 	}
 	return strings.Join(parts, "\n\n"), nil
 }

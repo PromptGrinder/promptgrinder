@@ -1018,8 +1018,9 @@ func TestCLIRunUnknownEngineReturnsExitCode2(t *testing.T) {
 
 func TestCLIValidateJSON(t *testing.T) {
 	service := &fakeService{validatePlan: worker.ValidationPlan{
-		Valid:  true,
-		Engine: "codex",
+		Valid:    true,
+		Engine:   "codex",
+		Warnings: []string{"frontmatter is oversized"},
 		ExecutionPlan: map[string]any{
 			"engine": "codex",
 		},
@@ -1035,8 +1036,34 @@ func TestCLIValidateJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("invalid json %q: %v", out.String(), err)
 	}
-	if !decoded.Valid || decoded.Engine != "codex" {
+	if !decoded.Valid || decoded.Engine != "codex" || len(decoded.Warnings) != 1 {
 		t.Fatalf("decoded = %#v", decoded)
+	}
+}
+
+func TestCLIValidateRenderPrintsExactPromptBytes(t *testing.T) {
+	want := "# Task Semantics (v1)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
+	service := &fakeService{validatePlan: worker.ValidationPlan{Valid: true, Engine: "codex", RenderedPrompt: want, ExecutionPlan: map[string]any{}}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", "--render", "task with spaces.md"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != want {
+		t.Fatalf("rendered bytes = %q, want %q", out.String(), want)
+	}
+}
+
+func TestCLIValidateRenderRejectsJSON(t *testing.T) {
+	cmd := NewRootCommand(&fakeService{}, &bytes.Buffer{}, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", "task.md", "--render", "--json"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("err = %v", err)
+	}
+	if code, ok := ExitCode(err); !ok || code != ExitInvalidInput {
+		t.Fatalf("exit code = %d, %t", code, ok)
 	}
 }
 
@@ -1067,8 +1094,9 @@ func TestCLIValidateInvalidReturnsExitCode2(t *testing.T) {
 
 func TestCLIValidateRedactedHumanOutput(t *testing.T) {
 	service := &fakeService{validatePlan: worker.ValidationPlan{
-		Valid:  true,
-		Engine: "codex",
+		Valid:    true,
+		Engine:   "codex",
+		Warnings: []string{"frontmatter is oversized"},
 		ExecutionPlan: map[string]any{
 			"working_directory":  "/repo",
 			"command_preview":    "codex exec --cd /repo",
@@ -1086,7 +1114,7 @@ func TestCLIValidateRedactedHumanOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := out.String()
-	for _, want := range []string{"Valid: true", "Engine: codex", "Command: codex exec --cd /repo", "Worker launch: false"} {
+	for _, want := range []string{"Valid: true", "Engine: codex", "Warning: frontmatter is oversized", "Command: codex exec --cd /repo", "Worker launch: false"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("validate output missing %q: %q", want, output)
 		}
