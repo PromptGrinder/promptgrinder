@@ -64,6 +64,9 @@ func TestBuildScriptUsesInternalCodexExecutor(t *testing.T) {
 	if !strings.Contains(script, "heartbeat_loop &") {
 		t.Fatalf("script does not include heartbeat loop:\n%s", script)
 	}
+	if !strings.Contains(script, `if [ "${PROMPTGRINDER_HEADLESS:-}" != "1" ]; then`) {
+		t.Fatalf("script does not suppress the heartbeat sleep loop in headless execution:\n%s", script)
+	}
 	if !strings.Contains(script, "kill \"$HEARTBEAT_PID\"") {
 		t.Fatalf("script does not stop heartbeat loop:\n%s", script)
 	}

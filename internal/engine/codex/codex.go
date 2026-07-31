@@ -263,8 +263,11 @@ heartbeat_loop() {
 }
 
 heartbeat
-heartbeat_loop &
-HEARTBEAT_PID=$!
+HEARTBEAT_PID=""
+if [ "${PROMPTGRINDER_HEADLESS:-}" != "1" ]; then
+  heartbeat_loop &
+  HEARTBEAT_PID=$!
+fi
 
 if [ ! -x "$CODEX_BIN" ]; then
   echo "Error: validated Codex executable is no longer executable: $CODEX_BIN"
@@ -274,8 +277,10 @@ else
   EXIT_CODE=$?
 fi
 
-kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
-wait "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+if [ -n "$HEARTBEAT_PID" ]; then
+  kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+  wait "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+fi
 heartbeat
 
 "$PROMPTGRINDER_BIN" __worker-finish "$RECORD_PATH" "$EXIT_CODE"
