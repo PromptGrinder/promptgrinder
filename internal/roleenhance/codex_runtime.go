@@ -50,7 +50,7 @@ func (r CodexRuntime) Advise(ctx context.Context, request []byte) ([]byte, error
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if detail := safeAdvisorDiagnostic(stderr.String()); detail != "" {
+		if detail := safeAdvisorDiagnostic(stderr.String(), string(prompt)); detail != "" {
 			return nil, fmt.Errorf("codex advisor execution: %w: %s", err, detail)
 		}
 		return nil, fmt.Errorf("codex advisor execution: %w", err)
@@ -64,22 +64,42 @@ func (r CodexRuntime) Advise(ctx context.Context, request []byte) ([]byte, error
 
 const maxAdvisorDiagnosticBytes = 4096
 
-func safeAdvisorDiagnostic(raw string) string {
-	detail := strings.TrimSpace(raw)
-	if detail == "" {
+func safeAdvisorDiagnostic(raw, submittedPrompt string) string {
+	if submittedPrompt != "" {
+		raw = strings.ReplaceAll(raw, submittedPrompt, "[advisor input omitted]")
+	}
+	raw = secretLooking.ReplaceAllString(raw, "[REDACTED]")
+	lines := strings.Split(raw, "\n")
+	diagnostics := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(strings.Map(func(r rune) rune {
+			if r == '\t' || r >= ' ' {
+				return r
+			}
+			return -1
+		}, line))
+		if isAdvisorDiagnosticLine(line) {
+			diagnostics = append(diagnostics, line)
+		}
+	}
+	if len(diagnostics) == 0 {
 		return ""
 	}
-	detail = secretLooking.ReplaceAllString(detail, "[REDACTED]")
-	detail = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' || r >= ' ' {
-			return r
-		}
-		return -1
-	}, detail)
+	detail := strings.Join(diagnostics, "\n")
 	if len(detail) > maxAdvisorDiagnosticBytes {
-		detail = detail[:maxAdvisorDiagnosticBytes] + "... (truncated)"
+		detail = "... (truncated)\n" + detail[len(detail)-maxAdvisorDiagnosticBytes:]
 	}
 	return detail
+}
+
+func isAdvisorDiagnosticLine(line string) bool {
+	line = strings.ToLower(line)
+	for _, marker := range []string{"error", "failed", "failure", "invalid", "unsupported", "refused", "denied", "timeout"} {
+		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 const advisorResponseJSONSchema = `{
@@ -87,14 +107,14 @@ const advisorResponseJSONSchema = `{
   "additionalProperties":false,
   "required":["schema_version","recommendations"],
   "properties":{
-    "schema_version":{"const":"promptgrinder.role-advisor/v1"},
+    "schema_version":{"type":"string","enum":["promptgrinder.role-advisor/v1"]},
     "recommendations":{"type":"array","items":{
       "type":"object","additionalProperties":false,
       "required":["id","role_id","operation","field","value","confidence","explanation","evidence"],
       "properties":{
         "id":{"type":"string"},"role_id":{"type":"string"},
         "operation":{"enum":["set","append","remove"]},"field":{"type":"string"},
-        "value":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+        "value":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
         "confidence":{"enum":["low","medium","high"]},"explanation":{"type":"string"},
         "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","fact"],"properties":{"path":{"type":"string"},"fact":{"type":"string"}}}}
       }

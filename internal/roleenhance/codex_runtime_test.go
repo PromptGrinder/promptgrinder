@@ -34,10 +34,39 @@ func TestAdvisorResponseSchemaRequiresEveryCitationProperty(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeSurfacesSanitizedStderr(t *testing.T) {
-	fake := testsupport.FakeExecutable(t, "codex", "#!/bin/sh\nprintf '%s\\n' 'invalid output schema: fact must be required' >&2\nprintf '%s\\n' 'api_key=do-not-print' >&2\nexit 17\n")
+func TestAdvisorResponseSchemaUsesCodexSupportedCompositionKeywords(t *testing.T) {
+	var schema any
+	if err := json.Unmarshal([]byte(advisorResponseJSONSchema), &schema); err != nil {
+		t.Fatalf("parse advisor response schema: %v", err)
+	}
+	assertNoJSONSchemaKeyword(t, schema, "const")
+	assertNoJSONSchemaKeyword(t, schema, "oneOf")
+	if !strings.Contains(advisorResponseJSONSchema, `"anyOf"`) {
+		t.Fatal("advisor response schema does not use anyOf for the polymorphic value")
+	}
+}
 
-	_, err := (CodexRuntime{Executable: fake}).Advise(context.Background(), []byte(`{"schema_version":"promptgrinder.role-advisor/v1"}`))
+func assertNoJSONSchemaKeyword(t *testing.T, value any, forbidden string) {
+	t.Helper()
+	switch value := value.(type) {
+	case map[string]any:
+		if _, exists := value[forbidden]; exists {
+			t.Fatalf("advisor response schema contains unsupported keyword %q", forbidden)
+		}
+		for _, child := range value {
+			assertNoJSONSchemaKeyword(t, child, forbidden)
+		}
+	case []any:
+		for _, child := range value {
+			assertNoJSONSchemaKeyword(t, child, forbidden)
+		}
+	}
+}
+
+func TestCodexRuntimeSurfacesSanitizedStderr(t *testing.T) {
+	fake := testsupport.FakeExecutable(t, "codex", "#!/bin/sh\nprintf '%s\\n' 'user' >&2\ncat >&2\nprintf '%s\\n' 'invalid output schema: fact must be required' >&2\nprintf '%s\\n' 'ERROR api_key=do-not-print' >&2\nexit 17\n")
+
+	_, err := (CodexRuntime{Executable: fake}).Advise(context.Background(), []byte(`{"schema_version":"promptgrinder.role-advisor/v1","private_prompt":"do not echo this error evidence"}`))
 	if err == nil {
 		t.Fatal("Advise() error = nil, want execution failure")
 	}
@@ -47,5 +76,8 @@ func TestCodexRuntimeSurfacesSanitizedStderr(t *testing.T) {
 	}
 	if strings.Contains(message, "do-not-print") {
 		t.Fatalf("Advise() error leaked secret: %q", message)
+	}
+	if strings.Contains(message, "do not echo this error evidence") {
+		t.Fatalf("Advise() error leaked advisor input: %q", message)
 	}
 }
