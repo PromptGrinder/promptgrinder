@@ -8,8 +8,9 @@ Before requesting help:
 
 Open a support issue with the PromptGrinder version, macOS version and
 architecture, terminal adapter, Codex version, exact command, redacted
-diagnostics, and expected versus actual result. Never paste tokens, credential
-files, private prompts, or unreviewed full configuration.
+diagnostics, and expected versus actual result. For named-worker failures,
+include the selected runtime and its redacted version output. Never paste
+tokens, credential files, private prompts, or unreviewed full configuration.
 
 Security vulnerabilities belong in
 [private vulnerability reporting](https://github.com/PromptGrinder/promptgrinder/security/advisories/new),

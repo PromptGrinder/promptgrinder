@@ -15,6 +15,13 @@ Thank you for helping improve PromptGrinder.
 
 PromptGrinder requires the Go toolchain pinned in `go.mod`.
 
+Repository-local Codex skills are available under `.agents/skills/`:
+
+- `promptgrinder-development` for implementation and verification;
+- `promptgrinder-slice-authoring` for safe ordered work folders;
+- `promptgrinder-ci` for CI and compiled acceptance behavior;
+- `promptgrinder-release` for release-candidate qualification.
+
 ```sh
 go mod verify
 test -z "$(gofmt -l .)"
@@ -47,7 +54,9 @@ Breaking changes require an explicit migration plan.
 When exercising automatic commits, start with a clean worktree, pass
 `--require-clean-git`, and leave `--commit-each=false` unless the test is
 specifically proving focused commits. Put worker instructions in the task body
-and use only supported frontmatter metadata.
+and use only supported frontmatter metadata. Every ordered runnable prompt must
+end with `STATUS: PASS|PARTIAL|BLOCKED` and `NEXT_PROMPT_SAFE: yes|no`. When the
+outer run uses `--commit-each`, never instruct the nested worker to commit.
 
 ## Pull requests
 

@@ -7,6 +7,12 @@ worker definition in `.ai/workers.yaml`. Its stable ID is a project-scoped
 slug, its runtime is a symbolic registry key, and its identity and policy
 cannot be widened or changed by an assigned task.
 
+RC.2 repository discovery uses a separate, intentionally non-executable model:
+`.promptgrinder/project.yaml` and `.promptgrinder/roles/*.yaml` hold generated
+and enhanced role suggestions. They do not become named workers until a user
+authors an explicit `.ai/workers.yaml` definition. PromptGrinder performs no
+silent conversion or activation between these configuration surfaces.
+
 PromptGrinder-owned mutable worker state and assigned tasks live beneath
 `${PROMPTGRINDER_HOME}/projects/<project-id>/`. Repository definitions and
 local state/task documents carry explicit schema versions. Mutable state is

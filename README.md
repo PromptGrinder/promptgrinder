@@ -8,6 +8,10 @@ Discover the repository and generate project roles:
 
     promptgrinder discover
 
+Discovery is deterministic and writes only a new `.promptgrinder/` tree with
+`project.yaml`, generated role YAML under `roles/`, and `context/`. It never
+overwrites existing files.
+
 Review suggested role improvements without writing them:
 
     promptgrinder roles enhance
@@ -29,10 +33,11 @@ Resume it after a failure or interruption:
 
 ## Overview
 
-PromptGrinder is a local-first macOS CLI for engineers who use the Codex CLI.
-It validates Markdown work orders, runs them individually or in a defined
-sequence, carries context between sequential tasks, and records worker state,
-logs, and events for review.
+PromptGrinder is a local-first engineering orchestration CLI. It coordinates
+replaceable AI runtimes, persistent project-owned workers, deterministic role
+discovery, reviewable task queues, and Markdown work orders. PromptGrinder owns
+identity, policy, lifecycle, state, worktrees, scheduling, and review evidence;
+the selected runtime performs the engineering work.
 
 ### Core capabilities
 
@@ -43,6 +48,12 @@ logs, and events for review.
 - **Deterministic validation:** resolve and validate work orders before launch.
 - **Local-first operation:** keep PromptGrinder orchestration state on your machine.
 - **Codex integration:** execute through the locally installed Codex CLI.
+- **Persistent workers:** define project roles, assign queued tasks, and retain
+  lifecycle and review evidence across attempts.
+- **Runtime abstraction:** launch named workers through Codex or Antigravity
+  without changing their role definitions.
+- **Role discovery and enhancement:** generate deterministic role YAML, then
+  review grounded AI-assisted recommendations before applying selected changes.
 - **macOS terminals:** use Terminal.app, iTerm2, or headless execution.
 
 ## Installation
@@ -209,6 +220,10 @@ finished timestamps; older records without those fields remain readable.
 Detached startup prints the sequence ID and a copyable `promptgrinder sequence
 <id>` command. Detached completion and failure notifications are deterministic
 local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
+Foreground execution stays in the invoking terminal, prints the full prompt
+inventory before launch, and shows live status, elapsed time, worker IDs, logs,
+and immediate failure reasons. `--plain` keeps the same information without
+colors, animation, or terminal control sequences.
 
 For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys
@@ -221,6 +236,11 @@ automation output. The configured Codex executable is used only through a
 bounded, structured advisor request in a temporary directory with a read-only
 sandbox. PromptGrinder validates grounding and performs all YAML merging; the
 advisor never receives the repository path or write access.
+
+The `.promptgrinder/project.yaml` and `.promptgrinder/roles/*.yaml` files are
+discovery and enhancement artifacts in RC.2. Executable named-worker definitions
+remain in `.ai/workers.yaml`; RC.2 does not silently convert or activate a
+suggested role as a worker.
 
 ## Configuration
 
@@ -423,11 +443,14 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.1` release target is:
+The published `v1.0.0-rc.1` release target is macOS on Apple silicon and Intel.
+The in-development `v1.0.0-rc.2` candidate retains that platform target and
+adds the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
 - macOS on Intel (`darwin/amd64`);
-- the Codex CLI as the only execution engine;
+- Codex for one-off `run` and `run-folder` execution;
+- Codex and Antigravity adapters for named-worker execution;
 - Terminal.app, iTerm2, and headless execution.
 
 Exact qualified macOS, Codex, Terminal.app, and iTerm2 versions remain pending
@@ -460,13 +483,18 @@ PROMPTGRINDER_LIVE_TERMINAL=1 \
 
 This may open Terminal.app and iTerm2 and trigger macOS Automation prompts.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) before submitting a change.
+Repository-local Codex development skills live under `.agents/skills/` for
+general development, slice authoring, CI, and release qualification.
 
 ## Documentation and support
 
 - [Worker runtime use cases](docs/product/worker-runtime-use-cases.md)
 - [Release policy](docs/RELEASE_POLICY.md)
-- [Release qualification](docs/release/qualification.md)
-- [Release-candidate notes](docs/release/v1.0.0-rc.1-release-notes.md)
+- [RC.2 qualification](docs/release/v1.0.0-rc.2-qualification.md)
+- [RC.2 final gate](docs/release/v1.0.0-rc.2-final-gate.md)
+- [RC.2 candidate notes](docs/release/v1.0.0-rc.2-release-notes.md)
+- [Historical RC.1 qualification](docs/release/qualification.md)
+- [Historical RC.1 notes](docs/release/v1.0.0-rc.1-release-notes.md)
 - [Support](SUPPORT.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)

@@ -10,14 +10,14 @@ body:
     id: version
     attributes:
       label: PromptGrinder version
-      placeholder: "promptgrinder v1.0.0-rc.1 (revision)"
+      placeholder: "promptgrinder vX.Y.Z (revision)"
     validations:
       required: true
   - type: input
     id: environment
     attributes:
       label: Environment
-      description: macOS version, architecture, terminal adapter, and Codex version
+      description: macOS version, architecture, terminal adapter, and selected runtime version
     validations:
       required: true
   - type: textarea
