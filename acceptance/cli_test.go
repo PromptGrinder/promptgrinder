@@ -168,9 +168,104 @@ func TestCompiledCLIRecordingCodexFailure(t *testing.T) {
 	}
 }
 
+func TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{"review", nil},
+		{"reject-all", []string{"--reject-all"}},
+		{"apply-selected", []string{"--apply-selected", "description"}},
+		{"apply-all", []string{"--apply-all"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "spring boot project")
+			if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			secret := "sk_fixture_value_that_must_not_escape"
+			if err := os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<project><parent><artifactId>spring-boot-starter-parent</artifactId></parent></project>\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("Backend owns Spring Boot APIs.\nAPI_KEY="+secret+"\nRun ./mvnw test.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(t.TempDir(), "advisor request")
+			response := `{"schema_version":"promptgrinder.role-advisor/v1","recommendations":[{"id":"gate","role_id":"backend-feature","operation":"append","field":"quality_gates","value":"./mvnw test","confidence":"high","explanation":"documented test command","evidence":[{"path":"README.md"}]},{"id":"description","role_id":"backend-feature","operation":"set","field":"description","value":"Own Spring Boot APIs","confidence":"high","explanation":"documented ownership","evidence":[{"path":"README.md"}]}]}`
+			script := `#!/bin/sh
+set -eu
+output=
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then output=$argument; fi
+  previous=$argument
+done
+/bin/cat > "$PG_ROLE_RECORD"
+printf '%s' "$PG_ROLE_RESPONSE" > "$output"
+`
+			fake := testsupport.FakeExecutable(t, "codex", script)
+			options := commandOptions{cwd: root, codex: fake, env: []string{"PG_ROLE_RECORD=" + record, "PG_ROLE_RESPONSE=" + response}}
+			discovered := runCLI(t, options, "discover")
+			if discovered.exitCode != 0 {
+				t.Fatalf("discover = %#v", discovered)
+			}
+			rolePath := filepath.Join(root, ".promptgrinder", "roles", "backend-feature.yaml")
+			role, err := os.ReadFile(rolePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			role = append(role, []byte("custom: keep-me\n")...)
+			if err := os.WriteFile(rolePath, role, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			before := append([]byte(nil), role...)
+			args := append([]string{"roles", "enhance"}, test.args...)
+			result := runCLI(t, options, args...)
+			if result.exitCode != 0 || result.stderr != "" {
+				t.Fatalf("enhance = %#v", result)
+			}
+			request, err := os.ReadFile(record)
+			if err != nil || strings.Contains(string(request), secret) {
+				t.Fatalf("unsafe recorded request: %v %s", err, request)
+			}
+			after, err := os.ReadFile(rolePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(result.stdout, "Old:") || !strings.Contains(result.stdout, "Confidence: high") || !strings.Contains(result.stdout, "README.md") || strings.Contains(result.stdout, secret) {
+				t.Fatalf("incomplete or unsafe review:\n%s", result.stdout)
+			}
+			if strings.Contains(string(after), secret) {
+				t.Fatalf("secret fixture reached generated role:\n%s", after)
+			}
+			switch test.name {
+			case "review", "reject-all":
+				if !bytes.Equal(before, after) {
+					t.Fatal("non-apply mode wrote role")
+				}
+				if test.name == "review" {
+					repeated := runCLI(t, options, "roles", "enhance")
+					if repeated.exitCode != 0 || repeated.stdout != result.stdout {
+						t.Fatalf("review output is unstable: first=%#v second=%#v", result, repeated)
+					}
+				}
+			case "apply-selected":
+				if !strings.Contains(string(after), "description: Own Spring Boot APIs") || strings.Contains(string(after), "./mvnw test") {
+					t.Fatalf("selected application changed wrong fields:\n%s", after)
+				}
+			case "apply-all":
+				if !strings.Contains(string(after), "description: Own Spring Boot APIs") || !strings.Contains(string(after), "./mvnw test") || !strings.Contains(string(after), "custom: keep-me") {
+					t.Fatalf("apply-all lost changes:\n%s", after)
+				}
+			}
+		})
+	}
+}
+
 type commandOptions struct {
 	home  string
 	codex string
+	cwd   string
 	env   []string
 }
 
@@ -189,7 +284,10 @@ func runCLI(t *testing.T, options commandOptions, args ...string) commandResult 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	command := exec.CommandContext(ctx, compiledCLI, args...)
-	command.Dir = repoRoot
+	command.Dir = options.cwd
+	if command.Dir == "" {
+		command.Dir = repoRoot
+	}
 	pathValue := os.Getenv("PATH")
 	if options.codex != "" {
 		pathValue = filepath.Dir(options.codex) + string(os.PathListSeparator) + pathValue

@@ -155,6 +155,8 @@ requests, publishes releases, or merges branches.
 | --- | --- |
 | `run <path...>` | Run one or more work orders |
 | `run-folder <folder>` | Run numbered work orders sequentially |
+| `discover` | Detect repository technologies and generate `.promptgrinder/` project roles |
+| `roles enhance` | Review grounded role recommendations; apply with `--apply-all` or `--apply-selected <id>` |
 | `validate <task.md>` | Validate a work order without creating a worker |
 | `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
 | `setup` | Preview or create PromptGrinder-owned first-use files |
@@ -169,6 +171,14 @@ requests, publishes releases, or merges branches.
 Use `promptgrinder --help` and `promptgrinder <command> --help` for the complete
 command and option reference. Add `--json` where supported for structured
 output.
+
+`roles enhance` is review-only by default and with `--reject-all`. It writes
+nothing unless `--apply-all` or `--apply-selected <id>[,<id>...]` is supplied;
+these approval flags are mutually exclusive. Use `--json` for deterministic
+automation output. The configured Codex executable is used only through a
+bounded, structured advisor request in a temporary directory with a read-only
+sandbox. PromptGrinder validates grounding and performs all YAML merging; the
+advisor never receives the repository path or write access.
 
 ## Configuration
 

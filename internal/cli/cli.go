@@ -16,9 +16,11 @@ import (
 
 	"promptgrinder/internal/buildinfo"
 	"promptgrinder/internal/config"
+	"promptgrinder/internal/discovery"
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/firstuse"
 	"promptgrinder/internal/review"
+	"promptgrinder/internal/roleenhance"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
 	pgscheduler "promptgrinder/internal/scheduler"
@@ -252,6 +254,23 @@ type errorJSON struct {
 }
 
 func NewRootCommand(service Service, stdout, stderr io.Writer) *cobra.Command {
+	return newRootCommand(service, stdout, stderr, os.Getwd, discovery.Discover)
+}
+
+// NewRootCommandWithRoleAdvisor supplies the runtime-neutral advisor used by
+// roles enhance. Production integrations and tests can configure it without
+// giving the advisor filesystem access.
+func NewRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, advisor roleenhance.Advisor) *cobra.Command {
+	return newRootCommandWithRoleAdvisor(service, stdout, stderr, os.Getwd, discovery.Discover, advisor)
+}
+
+type discoverFunc func(string) (discovery.Result, error)
+
+func newRootCommand(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc) *cobra.Command {
+	return newRootCommandWithRoleAdvisor(service, stdout, stderr, getwd, discover, nil)
+}
+
+func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc, roleAdvisor roleenhance.Advisor) *cobra.Command {
 	var compactJSON bool
 	var plainOutput bool
 	var themeName string
@@ -268,6 +287,140 @@ func NewRootCommand(service Service, stdout, stderr io.Writer) *cobra.Command {
 	root.PersistentFlags().BoolVar(&compactJSON, "compact", false, "emit compact single-line JSON when used with --json")
 	root.PersistentFlags().BoolVar(&plainOutput, "plain", false, "disable color and decorative box styling")
 	root.PersistentFlags().StringVar(&themeName, "theme", "default", "interactive theme: default, minimal, or loud")
+
+	discoverCmd := &cobra.Command{
+		Use:   "discover",
+		Short: "Discover repository technologies and generate PromptGrinder roles.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			currentPath, err := getwd()
+			if err != nil {
+				wrapped := fmt.Errorf("determine current repository: %w", err)
+				fmt.Fprintf(stderr, "Error: %v\n", wrapped)
+				return StructuredError{Err: wrapped, Code: ExitInvalidInput}
+			}
+			rootPath, err := findRepositoryRoot(currentPath)
+			if err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			result, err := discover(rootPath)
+			if err != nil {
+				wrapped := fmt.Errorf("discover repository: %w", err)
+				fmt.Fprintf(stderr, "Error: %v\n", wrapped)
+				return StructuredError{Err: wrapped, Code: ExitInvalidInput}
+			}
+			fmt.Fprintln(stdout, "Discovered:")
+			if len(result.Roles) == 0 {
+				fmt.Fprintln(stdout, "  (no supported roles)")
+			} else {
+				for _, role := range result.Roles {
+					fmt.Fprintf(stdout, "  %s\n", role.Name)
+				}
+			}
+			fmt.Fprintln(stdout, "Generated:")
+			for _, path := range result.Files {
+				fmt.Fprintf(stdout, "  %s\n", path)
+			}
+			fmt.Fprintln(stdout, "  .promptgrinder/context/")
+			return nil
+		},
+	}
+	root.AddCommand(discoverCmd)
+
+	rolesCmd := &cobra.Command{Use: "roles", Short: "Inspect and enhance discovered roles."}
+	var enhanceApplyAll, enhanceRejectAll, enhanceJSON bool
+	var enhanceSelected []string
+	enhanceCmd := &cobra.Command{
+		Use: "enhance", Short: "Review AI-assisted role recommendations and optionally apply them.", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			modes := 0
+			if enhanceApplyAll {
+				modes++
+			}
+			if enhanceRejectAll {
+				modes++
+			}
+			if cmd.Flags().Changed("apply-selected") {
+				modes++
+			}
+			if modes > 1 {
+				err := fmt.Errorf("--apply-all, --apply-selected, and --reject-all are mutually exclusive")
+				if enhanceJSON {
+					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+				}
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			if cmd.Flags().Changed("apply-selected") && len(enhanceSelected) == 0 {
+				err := fmt.Errorf("--apply-selected requires at least one recommendation ID")
+				if enhanceJSON {
+					return writeJSONCommandError(stdout, "validation_error", err, compactJSON)
+				}
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			cwd, err := getwd()
+			if err != nil {
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			rootPath, err := findRepositoryRoot(cwd)
+			if err != nil {
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			svc := roleenhance.EnhanceService{Advisor: roleAdvisor}
+			current, plan, err := svc.Review(cmd.Context(), rootPath)
+			if err != nil {
+				if enhanceJSON {
+					return writeJSONCommandError(stdout, "roles_enhance_error", err, compactJSON)
+				}
+				fmt.Fprintf(stderr, "Error: enhance roles: %v\n", err)
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			selection := roleenhance.ApprovalSelection{Mode: roleenhance.ApprovalRejectAll}
+			if enhanceApplyAll {
+				selection.Mode = roleenhance.ApprovalApplyAll
+			} else if cmd.Flags().Changed("apply-selected") {
+				selection.Mode = roleenhance.ApprovalApplySelected
+				selection.RecommendationIDs = enhanceSelected
+			}
+			var result roleenhance.MergeResult
+			if selection.Mode != roleenhance.ApprovalRejectAll {
+				result, err = (roleenhance.RoleMergeService{}).Apply(rootPath, current, plan, selection)
+				if err != nil {
+					if enhanceJSON {
+						return writeJSONCommandError(stdout, "merge_conflict", err, compactJSON)
+					}
+					fmt.Fprintf(stderr, "Error: apply role enhancements: %v\n", err)
+					return StructuredError{Err: err, Code: ExitInvalidInput}
+				}
+			} else {
+				for _, item := range plan.Items {
+					result.Rejected = append(result.Rejected, item.Recommendation.ID)
+				}
+			}
+			if enhanceJSON {
+				return writeJSON(stdout, struct {
+					Review roleenhance.ReviewPlan   `json:"review"`
+					Result roleenhance.MergeResult  `json:"result"`
+					Mode   roleenhance.ApprovalMode `json:"mode"`
+				}{plan, result, selection.Mode}, compactJSON)
+			}
+			if err := (roleenhance.ReviewRenderer{}).Render(stdout, plan); err != nil {
+				return err
+			}
+			if selection.Mode == roleenhance.ApprovalRejectAll {
+				fmt.Fprintln(stdout, "\nReview only: no files written.")
+			} else {
+				fmt.Fprintf(stdout, "\nApplied %d recommendation(s) to %d file(s).\n", len(result.Applied), len(result.Files))
+			}
+			return nil
+		},
+	}
+	enhanceCmd.Flags().BoolVar(&enhanceApplyAll, "apply-all", false, "apply every recommendation (removals require individual selection)")
+	enhanceCmd.Flags().StringSliceVar(&enhanceSelected, "apply-selected", nil, "apply only the listed recommendation IDs")
+	enhanceCmd.Flags().BoolVar(&enhanceRejectAll, "reject-all", false, "reject all recommendations and write nothing")
+	enhanceCmd.Flags().BoolVar(&enhanceJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(enhanceCmd)
+	root.AddCommand(rolesCmd)
 
 	var runJSON bool
 	var runEngine string
@@ -1870,6 +2023,22 @@ task at the tail of its original implementing worker's FIFO.`,
 	root.AddCommand(engineCodex)
 
 	return root
+}
+
+func findRepositoryRoot(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve current repository: %w", err)
+	}
+	for current := abs; ; current = filepath.Dir(current) {
+		if _, statErr := os.Stat(filepath.Join(current, ".git")); statErr == nil {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("current directory is not inside a repository: %s", abs)
+		}
+	}
 }
 
 func loadNamedWorker(id string) (*workerregistry.Registry, workerdomain.WorkerDefinition, error) {
