@@ -680,9 +680,10 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 		return promptState, fmt.Errorf("%s failed with worker status %s", prompt.Name, worker.Status)
 	}
 	if worker.EngineResult != nil {
-		promptState.CompletionStatus = worker.EngineResult.CompletionStatus
-		promptState.NextPromptSafe = worker.EngineResult.NextPromptSafe
-		promptState.CompletionReason = worker.EngineResult.CompletionReason
+		promptState.CompletionStatus, promptState.NextPromptSafe, promptState.CompletionReason = state.ParseOrderedCompletionReport(worker.EngineResult.Summary)
+		promptState.Worker.EngineResult.CompletionStatus = promptState.CompletionStatus
+		promptState.Worker.EngineResult.NextPromptSafe = promptState.NextPromptSafe
+		promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
 	}
 	if worker.EngineResult == nil {
 		promptState.CompletionReason = "worker produced no structured completion result"

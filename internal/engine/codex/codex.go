@@ -119,50 +119,8 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 			result.Summary = strings.TrimSpace(event.Item.Text)
 		}
 	}
-	result.CompletionStatus, result.NextPromptSafe, result.CompletionReason = parseCompletionReport(result.Summary)
+	result.CompletionStatus, result.NextPromptSafe, result.CompletionReason = state.ParseOrderedCompletionReport(result.Summary)
 	return result
-}
-
-func parseCompletionReport(summary string) (string, *bool, string) {
-	completionStatus := ""
-	var nextPromptSafe *bool
-	statusCount, safeCount := 0, 0
-	malformed := []string{}
-	for _, line := range strings.Split(summary, "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		switch strings.TrimSpace(key) {
-		case "STATUS":
-			statusCount++
-			value = strings.ToUpper(strings.TrimSpace(value))
-			if value == "PASS" || value == "PARTIAL" || value == "BLOCKED" {
-				completionStatus = value
-			} else {
-				malformed = append(malformed, "STATUS")
-			}
-		case "NEXT_PROMPT_SAFE":
-			safeCount++
-			switch strings.ToLower(strings.TrimSpace(value)) {
-			case "yes":
-				value := true
-				nextPromptSafe = &value
-			case "no":
-				value := false
-				nextPromptSafe = &value
-			default:
-				malformed = append(malformed, "NEXT_PROMPT_SAFE")
-			}
-		}
-	}
-	if statusCount > 1 || safeCount > 1 {
-		return completionStatus, nextPromptSafe, "duplicate completion fields"
-	}
-	if len(malformed) > 0 {
-		return completionStatus, nextPromptSafe, "malformed completion field: " + strings.Join(malformed, ", ")
-	}
-	return completionStatus, nextPromptSafe, ""
 }
 
 func (e Engine) BuildScript(worker state.Worker, executablePath string) string {

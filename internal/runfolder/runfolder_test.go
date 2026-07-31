@@ -118,7 +118,28 @@ func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
 }
 
 func completionResult(status string, safe bool) *state.EngineResult {
-	return &state.EngineResult{Summary: "done", CompletionStatus: status, NextPromptSafe: boolPtr(safe)}
+	safeValue := "no"
+	if safe {
+		safeValue = "yes"
+	}
+	return &state.EngineResult{Summary: "done\nSTATUS: " + status + "\nNEXT_PROMPT_SAFE: " + safeValue, CompletionStatus: status, NextPromptSafe: boolPtr(safe)}
+}
+
+func TestOrderedCompletionParsingIsAdapterIndependent(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	result := &state.EngineResult{
+		Summary:          "STATUS: PASS\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes",
+		CompletionStatus: "PASS",
+		NextPromptSafe:   boolPtr(true),
+	}
+	summary, err := Run(dir, Options{HomeDir: home, EngineOverride: "replaceable-adapter"}, &fakeLauncher{result: result})
+	if err == nil || !strings.Contains(err.Error(), "duplicate completion fields") {
+		t.Fatalf("err = %v", err)
+	}
+	if summary.Sequence.Items[0].CompletionReason != "duplicate completion fields" {
+		t.Fatalf("item = %#v", summary.Sequence.Items[0])
+	}
 }
 
 func boolPtr(value bool) *bool { return &value }

@@ -88,6 +88,51 @@ func (r EngineResult) Empty() bool {
 		len(r.Diagnostics) == 0
 }
 
+// ParseOrderedCompletionReport extracts the semantic completion fields from a
+// final answer. It lives outside any engine adapter so ordered workflows do
+// not depend on adapter-specific enforcement.
+func ParseOrderedCompletionReport(summary string) (string, *bool, string) {
+	completionStatus := ""
+	var nextPromptSafe *bool
+	statusCount, safeCount := 0, 0
+	malformed := []string{}
+	for _, line := range strings.Split(summary, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "STATUS":
+			statusCount++
+			value = strings.ToUpper(strings.TrimSpace(value))
+			if value == "PASS" || value == "PARTIAL" || value == "BLOCKED" {
+				completionStatus = value
+			} else {
+				malformed = append(malformed, "STATUS")
+			}
+		case "NEXT_PROMPT_SAFE":
+			safeCount++
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "yes":
+				value := true
+				nextPromptSafe = &value
+			case "no":
+				value := false
+				nextPromptSafe = &value
+			default:
+				malformed = append(malformed, "NEXT_PROMPT_SAFE")
+			}
+		}
+	}
+	if statusCount > 1 || safeCount > 1 {
+		return completionStatus, nextPromptSafe, "duplicate completion fields"
+	}
+	if len(malformed) > 0 {
+		return completionStatus, nextPromptSafe, "malformed completion field: " + strings.Join(malformed, ", ")
+	}
+	return completionStatus, nextPromptSafe, ""
+}
+
 // OrderedCompletionError validates the completion contract used by ordered
 // workflows. Independent runs may continue to use the looser engine contract.
 func (r EngineResult) OrderedCompletionError() error {
