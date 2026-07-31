@@ -106,6 +106,33 @@ func TestRunFolderRendererUsesSharedStatusColors(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererUsesCompactInteractiveLogLink(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeDefault})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: "10-ok.md", Type: runfolder.TypeImplement, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{
+		Type: "prompt.succeeded", PromptName: "10-ok.md", PromptType: runfolder.TypeImplement,
+		Status: "succeeded", LogPath: "/tmp/worker logs/wrk_1/worker.log",
+	})
+	r.Close()
+	got := out.String()
+	want := "\033]8;;file:///tmp/worker%20logs/wrk_1/worker.log\033\\worker.log\033]8;;\033\\"
+	if !strings.Contains(got, want) {
+		t.Fatalf("interactive log hyperlink missing: %q", got)
+	}
+	if strings.Contains(got, "(log: /tmp/worker logs/") {
+		t.Fatalf("interactive output exposed long log path: %q", got)
+	}
+}
+
+func TestTerminalFileLinkRejectsControlCharacters(t *testing.T) {
+	got := terminalFileLink("/tmp/worker\x1b]8;;https://example.invalid/worker.log")
+	if got != "worker log" || strings.Contains(got, "\x1b") {
+		t.Fatalf("unsafe terminal link = %q", got)
+	}
+}
+
 type fakeTicker struct {
 	ch      chan time.Time
 	stopped atomic.Bool

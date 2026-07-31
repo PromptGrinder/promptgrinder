@@ -3,7 +3,9 @@ package ui
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -247,7 +249,7 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 			line += " (worker: " + detail.WorkerID + ")"
 		}
 		if detail.LogPath != "" {
-			line += " (log: " + detail.LogPath + ")"
+			line += " (log: " + terminalFileLink(detail.LogPath) + ")"
 		}
 		lines = append(lines, line)
 		if item.Status == "failed" {
@@ -258,6 +260,34 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		fmt.Fprint(r.w, "\033[2K"+line+"\n")
 	}
 	r.lines = len(lines)
+}
+
+func terminalFileLink(path string) string {
+	if path == "" {
+		return ""
+	}
+	label := filepath.Base(filepath.Clean(path))
+	if label == "." || label == string(filepath.Separator) || label == "" {
+		label = "worker log"
+	}
+	if hasTerminalControl(path) || hasTerminalControl(label) {
+		return "worker log"
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return label
+	}
+	target := (&url.URL{Scheme: "file", Path: absolute}).String()
+	return "\033]8;;" + target + "\033\\" + label + "\033]8;;\033\\"
+}
+
+func hasTerminalControl(value string) bool {
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func writeFailureDetails(w io.Writer, event runfolder.ProgressEvent) {
