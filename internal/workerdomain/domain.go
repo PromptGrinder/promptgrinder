@@ -22,8 +22,9 @@ var (
 // Project is the stable identity of one repository-scoped PromptGrinder
 // project.
 type Project struct {
-	ID   string `json:"id" yaml:"id"`
-	Name string `json:"name" yaml:"name"`
+	ID                      string `json:"id" yaml:"id"`
+	Name                    string `json:"name" yaml:"name"`
+	RequireSeparateReviewer bool   `json:"require_separate_reviewer,omitempty" yaml:"require_separate_reviewer,omitempty"`
 }
 
 // RuntimeRef selects an execution runtime by symbolic registry key.
@@ -124,7 +125,50 @@ type Task struct {
 	LaunchSetup     string           `json:"launch_setup,omitempty" yaml:"launch_setup,omitempty"`
 	Attempts        []TaskAttempt    `json:"attempts,omitempty" yaml:"attempts,omitempty"`
 	ControlRequests []ControlRequest `json:"control_requests,omitempty" yaml:"control_requests,omitempty"`
+	ReviewHandoffs  []ReviewHandoff  `json:"review_handoffs,omitempty" yaml:"review_handoffs,omitempty"`
 }
+
+// ReviewHandoff is append-only local evidence for one implementation review.
+// Decisions update only the current handoff; rejected handoffs remain present
+// when the task is requeued for a later attempt.
+type ReviewHandoff struct {
+	ID              string            `json:"id" yaml:"id"`
+	ImplementerID   string            `json:"implementer_id" yaml:"implementer_id"`
+	WorkerID        string            `json:"worker_id" yaml:"worker_id"`
+	TaskID          string            `json:"task_id" yaml:"task_id"`
+	Summary         string            `json:"summary" yaml:"summary"`
+	ChangedPaths    []string          `json:"changed_paths" yaml:"changed_paths"`
+	Commits         []string          `json:"commits" yaml:"commits"`
+	Validations     []Validation      `json:"validations" yaml:"validations"`
+	TaskAttempts    []TaskAttempt     `json:"task_attempts" yaml:"task_attempts"`
+	RuntimeEvidence []RuntimeEvidence `json:"runtime_evidence" yaml:"runtime_evidence"`
+	CreatedAt       time.Time         `json:"created_at" yaml:"created_at"`
+	Status          ReviewStatus      `json:"status" yaml:"status"`
+	ReviewerID      string            `json:"reviewer_id,omitempty" yaml:"reviewer_id,omitempty"`
+	DecisionReason  string            `json:"decision_reason,omitempty" yaml:"decision_reason,omitempty"`
+	DecidedAt       *time.Time        `json:"decided_at,omitempty" yaml:"decided_at,omitempty"`
+}
+
+type Validation struct {
+	Command string `json:"command" yaml:"command"`
+	Result  string `json:"result" yaml:"result"`
+}
+
+type RuntimeEvidence struct {
+	AttemptNumber int    `json:"attempt_number" yaml:"attempt_number"`
+	RunID         string `json:"run_id,omitempty" yaml:"run_id,omitempty"`
+	Runtime       string `json:"runtime" yaml:"runtime"`
+	SessionID     string `json:"session_id,omitempty" yaml:"session_id,omitempty"`
+	Disposition   string `json:"disposition" yaml:"disposition"`
+}
+
+type ReviewStatus string
+
+const (
+	ReviewStatusPending  ReviewStatus = "pending"
+	ReviewStatusAccepted ReviewStatus = "accepted"
+	ReviewStatusRejected ReviewStatus = "rejected"
+)
 
 // TaskAttempt is immutable evidence for one runtime invocation. Later attempts
 // append records; they never replace earlier logs, sessions, or process facts.
@@ -157,10 +201,12 @@ const (
 	TaskStatusPaused   TaskStatus = "paused"
 	TaskStatusFailed   TaskStatus = "failed"
 	TaskStatusCanceled TaskStatus = "canceled"
+	TaskStatusReview   TaskStatus = "awaiting_review"
+	TaskStatusAccepted TaskStatus = "accepted"
 )
 
 func (s TaskStatus) Valid() bool {
-	return s == TaskStatusPending || s == TaskStatusAssigned || s == TaskStatusPaused || s == TaskStatusFailed || s == TaskStatusCanceled
+	return s == TaskStatusPending || s == TaskStatusAssigned || s == TaskStatusPaused || s == TaskStatusFailed || s == TaskStatusCanceled || s == TaskStatusReview || s == TaskStatusAccepted
 }
 
 func ValidateSlug(kind, value string) error {
@@ -344,6 +390,32 @@ func (t Task) Validate() error {
 	for i, attempt := range t.Attempts {
 		if attempt.Number != i+1 || attempt.StartedAt.IsZero() || attempt.Runtime == "" || attempt.Disposition == "" {
 			return fmt.Errorf("task attempt %d is invalid", i+1)
+		}
+	}
+	for i, handoff := range t.ReviewHandoffs {
+		if strings.TrimSpace(handoff.ID) == "" || handoff.WorkerID != t.WorkerID || handoff.ImplementerID != t.WorkerID ||
+			handoff.TaskID != t.ID || strings.TrimSpace(handoff.Summary) == "" || handoff.CreatedAt.IsZero() ||
+			(handoff.Status != ReviewStatusPending && handoff.Status != ReviewStatusAccepted && handoff.Status != ReviewStatusRejected) {
+			return fmt.Errorf("review handoff %d is invalid", i+1)
+		}
+		if len(handoff.TaskAttempts) == 0 || len(handoff.RuntimeEvidence) == 0 || len(handoff.Validations) == 0 {
+			return fmt.Errorf("review handoff %d has incomplete evidence", i+1)
+		}
+		for _, changed := range handoff.ChangedPaths {
+			if err := validateRepositoryPath("review changed path", changed, false); err != nil {
+				return err
+			}
+		}
+		for _, validation := range handoff.Validations {
+			if strings.TrimSpace(validation.Command) == "" || strings.TrimSpace(validation.Result) == "" {
+				return fmt.Errorf("review handoff %d has invalid validation evidence", i+1)
+			}
+		}
+		if handoff.Status == ReviewStatusPending && (handoff.ReviewerID != "" || handoff.DecidedAt != nil) {
+			return fmt.Errorf("pending review handoff %d has decision metadata", i+1)
+		}
+		if handoff.Status != ReviewStatusPending && (handoff.ReviewerID == "" || handoff.DecidedAt == nil || strings.TrimSpace(handoff.DecisionReason) == "") {
+			return fmt.Errorf("decided review handoff %d lacks decision metadata", i+1)
 		}
 	}
 	return nil

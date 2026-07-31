@@ -18,6 +18,7 @@ import (
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/firstuse"
+	"promptgrinder/internal/review"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
 	pgscheduler "promptgrinder/internal/scheduler"
@@ -1400,6 +1401,110 @@ Examples:
 	taskCmd.AddCommand(taskAssignCmd, taskEnqueueCmd, taskListCmd, taskShowCmd, taskRetryCmd, taskCancelCmd, queueCmd)
 	root.AddCommand(taskCmd)
 
+	var reviewJSON bool
+	var reviewSummary string
+	var reviewChangedPaths []string
+	var reviewCommits []string
+	var reviewValidations []string
+	var reviewReason string
+	reviewCmd := &cobra.Command{
+		Use:   "review",
+		Short: "Create and decide local task review handoffs.",
+		Long: `Review handoffs are local and never push, open a pull request, merge,
+tag, publish, or release. Rejection preserves all evidence and requeues the
+task at the tail of its original implementing worker's FIFO.`,
+	}
+	reviewSubmitCmd := &cobra.Command{
+		Use: "submit <task-id> <implementer-worker-id>", Short: "Submit complete implementation evidence for local review.", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			validations, err := parseReviewValidations(reviewValidations)
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Submit(registry, args[0], args[1], review.Evidence{
+				Summary: reviewSummary, ChangedPaths: reviewChangedPaths, Commits: reviewCommits, Validations: validations,
+			})
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Task %s is awaiting local review (handoff %s).\n", result.Task.ID, result.Handoff.ID)
+			return nil
+		},
+	}
+	reviewSubmitCmd.Flags().StringVar(&reviewSummary, "summary", "", "completion summary (required)")
+	reviewSubmitCmd.Flags().StringSliceVar(&reviewChangedPaths, "changed-path", nil, "repository-relative changed path (repeatable)")
+	reviewSubmitCmd.Flags().StringSliceVar(&reviewCommits, "commit", nil, "commit identifier recorded as evidence (repeatable)")
+	reviewSubmitCmd.Flags().StringSliceVar(&reviewValidations, "validation", nil, "validation evidence as command=result (repeatable, required)")
+	reviewSubmitCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewShowCmd := &cobra.Command{
+		Use: "show <task-id>", Aliases: []string{"inspect"}, Short: "Inspect the latest local review handoff.", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Inspect(registry, args[0])
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			printReviewHandoff(stdout, result.Handoff)
+			return nil
+		},
+	}
+	reviewShowCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewAcceptCmd := &cobra.Command{
+		Use: "accept <task-id> <reviewer-worker-id>", Short: "Accept a local review without publishing externally.", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Accept(registry, args[0], args[1], reviewReason)
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Accepted task %s locally as reviewer %s. No external publication was performed.\n", result.Task.ID, args[1])
+			return nil
+		},
+	}
+	reviewAcceptCmd.Flags().StringVar(&reviewReason, "reason", "", "review decision reason (required)")
+	reviewAcceptCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewRejectCmd := &cobra.Command{
+		Use: "reject <task-id> <reviewer-worker-id>", Short: "Reject and requeue work while preserving evidence.", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry, err := workerregistry.Load(".")
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			result, err := (review.Service{Home: service.Defaults().Config.HomeDir}).Reject(registry, args[0], args[1], reviewReason)
+			if err != nil {
+				return taskCommandError(stdout, err, reviewJSON, compactJSON)
+			}
+			if reviewJSON {
+				return writeJSON(stdout, result, compactJSON)
+			}
+			fmt.Fprintf(stdout, "Rejected task %s; evidence retained and task requeued to worker %s FIFO tail.\n", result.Task.ID, result.Task.WorkerID)
+			return nil
+		},
+	}
+	reviewRejectCmd.Flags().StringVar(&reviewReason, "reason", "", "review decision reason (required)")
+	reviewRejectCmd.Flags().BoolVar(&reviewJSON, "json", false, "print machine-readable JSON")
+	reviewCmd.AddCommand(reviewSubmitCmd, reviewShowCmd, reviewAcceptCmd, reviewRejectCmd)
+	root.AddCommand(reviewCmd)
+
 	var schedulerOnce bool
 	var schedulerInterval time.Duration
 	schedulerCmd := &cobra.Command{Use: "scheduler", Short: "Dispatch eligible idle named workers."}
@@ -1819,6 +1924,33 @@ func printTask(stdout io.Writer, task workerdomain.Task) {
 	if !strings.HasSuffix(task.Instructions, "\n") {
 		fmt.Fprintln(stdout)
 	}
+}
+
+func parseReviewValidations(values []string) ([]workerdomain.Validation, error) {
+	result := make([]workerdomain.Validation, 0, len(values))
+	for _, value := range values {
+		command, outcome, ok := strings.Cut(value, "=")
+		if !ok || strings.TrimSpace(command) == "" || strings.TrimSpace(outcome) == "" {
+			return nil, fmt.Errorf("validation %q must use command=result", value)
+		}
+		result = append(result, workerdomain.Validation{Command: strings.TrimSpace(command), Result: strings.TrimSpace(outcome)})
+	}
+	return result, nil
+}
+
+func printReviewHandoff(stdout io.Writer, handoff workerdomain.ReviewHandoff) {
+	fmt.Fprintf(stdout, "Review: %s\n", handoff.ID)
+	fmt.Fprintf(stdout, "Task: %s\n", handoff.TaskID)
+	fmt.Fprintf(stdout, "Implementer: %s\n", handoff.ImplementerID)
+	fmt.Fprintf(stdout, "Status: %s\n", handoff.Status)
+	fmt.Fprintf(stdout, "Summary: %s\n", handoff.Summary)
+	fmt.Fprintf(stdout, "Changed paths: %s\n", strings.Join(handoff.ChangedPaths, ", "))
+	fmt.Fprintf(stdout, "Commits: %s\n", strings.Join(handoff.Commits, ", "))
+	fmt.Fprintf(stdout, "Attempts: %d\n", len(handoff.TaskAttempts))
+	fmt.Fprintf(stdout, "Runtime evidence: %d\n", len(handoff.RuntimeEvidence))
+	fmt.Fprintf(stdout, "Validations: %d\n", len(handoff.Validations))
+	fmt.Fprintf(stdout, "Reviewer: %s\n", valueOrDash(handoff.ReviewerID))
+	fmt.Fprintf(stdout, "Decision reason: %s\n", valueOrDash(handoff.DecisionReason))
 }
 
 func printNamedWorkerState(stdout io.Writer, project workerdomain.Project, state workerdomain.WorkerState) {
