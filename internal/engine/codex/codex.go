@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"promptgrinder/internal/config"
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/execution"
 	"promptgrinder/internal/state"
@@ -352,6 +353,10 @@ func ExecuteWorker(recordPath, command string, stdout, stderr io.Writer) (int, e
 	if err != nil {
 		return 1, err
 	}
+	executionContext, err := execution.NewContext(worker, config.Config{}, nil)
+	if err != nil {
+		return 1, err
+	}
 	_ = state.AppendEventForWorker(worker, state.NewEvent(worker.ID, state.EventEngineStarted, state.SeverityInfo, "Engine started", map[string]any{"engine": worker.Engine, "command": spec.String()}))
 	prompt, err := os.ReadFile(worker.PromptPath)
 	if err != nil {
@@ -379,9 +384,7 @@ func ExecuteWorker(recordPath, command string, stdout, stderr io.Writer) (int, e
 		return signalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
 	}
 	cmd.Env = workerEnvironment(worker.Metadata, os.Environ())
-	if sessionID, _ := worker.Metadata["codex_session_id"].(string); sessionID != "" {
-		cmd.Dir = worker.RepositoryPath
-	}
+	cmd.Dir = executionContext.WorkingDirectory
 	capturedOutput, err := os.Create(CapturedOutputPath(recordPath))
 	if err != nil {
 		return 1, fmt.Errorf("create Codex result capture: %w", err)

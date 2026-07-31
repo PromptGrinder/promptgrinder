@@ -525,6 +525,8 @@ func writeCodexWorker(t *testing.T, dir, prompt string, metadata map[string]any)
 	store := state.NewStore(filepath.Join(dir, "state"))
 	worker := testCommandWorker(metadata)
 	worker.ID = "wrk_exec"
+	worker.RepositoryPath = dir
+	worker.TaskPath = filepath.Join(dir, "task.md")
 	worker.RecordPath = store.RecordPath(worker.ID)
 	worker.PromptPath = filepath.Join(store.WorkerDir(worker.ID), "prompt.md")
 	if err := os.MkdirAll(filepath.Dir(worker.PromptPath), 0o755); err != nil {
