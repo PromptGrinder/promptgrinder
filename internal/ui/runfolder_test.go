@@ -28,6 +28,7 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_1", Folder: "my prompts", Inventory: inventory(), Total: 6})
 	r.Update(runfolder.ProgressEvent{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "running"})
 	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "failed", Duration: 65*time.Second + 600*time.Millisecond, WorkerID: "worker-1", LogPath: "/tmp/worker.log"})
+	r.Finish(false)
 	r.Close()
 	r.Close()
 
@@ -53,6 +54,7 @@ func TestRunFolderRendererResumeInventoryAndDurations(t *testing.T) {
 	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_resume", Inventory: items})
 	r.Update(runfolder.ProgressEvent{Type: "prompt.skipped", PromptName: "20-test.md", PromptType: runfolder.TypeTest, Status: "skipped", Duration: 0})
 	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: "40-verify.md", PromptType: runfolder.TypeVerify, Status: "succeeded", Duration: 2*time.Hour + 4*time.Minute + 3*time.Second})
+	r.Finish(true)
 	got := out.String()
 	for _, want := range []string{"10-implement.md [implement] - succeeded", "skipped in <1s", "succeeded in 2h 4m 3s"} {
 		if !strings.Contains(got, want) {

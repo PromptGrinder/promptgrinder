@@ -840,14 +840,23 @@ Examples:
 			if runFolderDetach {
 				return startDetachedRunFolder(stdout, service.Defaults().HomeDir, args[0], options)
 			}
+			theme, themeErr := ui.NormalizeTheme(themeName)
+			if themeErr != nil {
+				return StructuredError{Err: themeErr, Code: ExitInvalidInput}
+			}
+			plain := plainOutput || ui.PlainFromEnv()
+			renderer := ui.NewRunFolderRenderer(stdout, shouldRenderInteractive(stdout, false, false), ui.Options{Theme: theme, Plain: plain})
+			defer renderer.Close()
+			restorePlainEnv := setPlainEnvForRun(plainOutput)
+			defer restorePlainEnv()
 			options.ExecutionPolicy = pgruntime.RunFolderExecutionForeground
 			options.Progress = func(event pgruntime.RunFolderProgressEvent) {
-				printRunFolderProgress(stdout, event)
+				renderer.Update(event)
 			}
 			summary, err := service.RunPromptFolder(args[0], options)
-			printRunFolderSummary(stdout, args[0], summary)
+			renderer.Finish(err == nil)
+			printRunFolderAggregate(stdout, summary)
 			if err != nil {
-				fmt.Fprintf(stdout, "\nResume with:\npromptgrinder run-folder %s --resume\n", args[0])
 				return StructuredError{Err: err, Code: errorExitCode(classifyError(err))}
 			}
 			return nil
@@ -2656,6 +2665,23 @@ func printRunFolderSummary(stdout io.Writer, folder string, summary pgruntime.Ru
 		}
 	}
 	_ = folder
+}
+
+func printRunFolderAggregate(stdout io.Writer, summary pgruntime.RunFolderSummary) {
+	for _, warning := range summary.Warnings {
+		fmt.Fprintf(stdout, "Warning: %s\n", warning)
+	}
+	if summary.Run.Status != "completed" || summary.Sequence == nil {
+		return
+	}
+	fmt.Fprintln(stdout, "Summary:")
+	if summary.Sequence.TokenUsage.Available {
+		fmt.Fprintf(stdout, "Total tokens used: %d\n", summary.Sequence.TokenUsage.Total)
+	} else {
+		fmt.Fprintln(stdout, "Total tokens used: not reported by worker logs")
+	}
+	fmt.Fprintln(stdout, "Executive summary:")
+	fmt.Fprintln(stdout, valueOrDash(summary.Sequence.ExecutiveSummary))
 }
 
 func printTerminalCandidates(stdout io.Writer, candidates []pgruntime.TerminalCandidate) error {

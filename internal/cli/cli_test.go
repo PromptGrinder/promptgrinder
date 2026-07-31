@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1999,6 +2000,99 @@ func TestCLIRunFolderPrintsAggregateSummary(t *testing.T) {
 	}
 }
 
+func TestCLIRunFolderForegroundRendersLifecycleWithoutDuplicateInventory(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("PROMPTGRINDER_PLAIN", "")
+	events := []pgruntime.RunFolderProgressEvent{
+		{Type: "run.started", SequenceID: "seq_cli", Folder: "specs", Inventory: []runfolder.ProgressPrompt{
+			{Name: "00-spec.md", Type: runfolder.TypeSpecification, Status: "pending"},
+			{Name: "10-implement.md", Type: runfolder.TypeImplement, Status: "pending"},
+		}},
+		{Type: "prompt.started", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "running"},
+		{Type: "prompt.skipped", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "skipped"},
+		{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "running"},
+		{Type: "prompt.succeeded", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "succeeded", WorkerID: "wrk_1", LogPath: "/tmp/worker.log", Duration: time.Second},
+		{Type: "run.completed", SequenceID: "seq_cli"},
+	}
+	service := &fakeService{runFolderProgress: events}
+
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		args []string
+		ansi bool
+	}{
+		{name: "tty", out: &ttyBuffer{}, args: []string{"run-folder", "specs"}, ansi: true},
+		{name: "redirected", out: &bytes.Buffer{}, args: []string{"run-folder", "specs"}},
+		{name: "plain tty", out: &ttyBuffer{}, args: []string{"--plain", "run-folder", "specs"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := NewRootCommand(service, tc.out, &bytes.Buffer{})
+			cmd.SetArgs(tc.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			got := tc.out.(interface{ String() string }).String()
+			for _, want := range []string{"Mode: foreground", "Sequence: seq_cli", "00-spec.md [specification] - skipped", "10-implement.md [implement] - succeeded", "worker: wrk_1", "Result: succeeded"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("output missing %q: %q", want, got)
+				}
+			}
+			if !tc.ansi && strings.Count(got, "Prompts:\n") != 1 {
+				t.Fatalf("prompt inventory count = %d: %q", strings.Count(got, "Prompts:\n"), got)
+			}
+			if strings.Contains(got, "\x1b") != tc.ansi {
+				t.Fatalf("ANSI presence = %v, want %v: %q", strings.Contains(got, "\x1b"), tc.ansi, got)
+			}
+		})
+	}
+}
+
+func TestCLIRunFolderForegroundResumeFailureQuotesFolder(t *testing.T) {
+	folder := "tasks/odd path;$(touch nope)'s"
+	service := &fakeService{
+		runFolderErr: errTest("worker launch failed"),
+		runFolderProgress: []pgruntime.RunFolderProgressEvent{
+			{Type: "run.started", SequenceID: "seq_resume", Folder: folder, Inventory: []runfolder.ProgressPrompt{
+				{Name: "10-done.md", Type: runfolder.TypeImplement, Status: "succeeded"},
+				{Name: "20-next.md", Type: runfolder.TypeTest, Status: "pending"},
+			}},
+			{Type: "prompt.started", PromptName: "20-next.md", PromptType: runfolder.TypeTest, Status: "running"},
+			{Type: "prompt.failed", PromptName: "20-next.md", PromptType: runfolder.TypeTest, Status: "failed", WorkerID: "wrk_bad", LogPath: "/tmp/bad.log"},
+		},
+	}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", folder, "--resume"})
+	err := cmd.Execute()
+	if code, ok := ExitCode(err); !ok || code != ExitExecutionFailed {
+		t.Fatalf("exit code = %d %v, want %d", code, ok, ExitExecutionFailed)
+	}
+	got := out.String()
+	for _, want := range []string{"10-done.md [implement] - succeeded", "20-next.md [test] - failed", "Result: failed", `Resume: promptgrinder run-folder 'tasks/odd path;$(touch nope)'"'"'s' --resume`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q: %q", want, got)
+		}
+	}
+	if strings.Count(got, "Prompts:\n") != 1 || strings.ContainsAny(got, "\r\x1b") {
+		t.Fatalf("failure output is not deterministic: %q", got)
+	}
+}
+
+func TestCLIRunFolderForegroundNoColorDisablesTTYControls(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	out := &ttyBuffer{}
+	service := &fakeService{runFolderProgress: []pgruntime.RunFolderProgressEvent{{Type: "run.started", Folder: "specs", Inventory: []runfolder.ProgressPrompt{{Name: "10-a.md", Type: runfolder.TypeImplement, Status: "pending"}}}, {Type: "run.completed"}}}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "specs"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(out.String(), "\r\x1b") {
+		t.Fatalf("NO_COLOR output contains controls: %q", out.String())
+	}
+}
+
 func TestCLIRunFolderEngineOverrideAndUnknownExitCode(t *testing.T) {
 	service := &fakeService{runFolderErr: errTest(`invalid engine "missing": unknown engine`)}
 	cmd := NewRootCommand(service, &bytes.Buffer{}, &bytes.Buffer{})
@@ -2219,6 +2313,7 @@ type fakeService struct {
 	runFolderSummary  pgruntime.RunFolderSummary
 	runFolderErr      error
 	runFolderOptions  pgruntime.RunFolderOptions
+	runFolderProgress []pgruntime.RunFolderProgressEvent
 	defaultsReport    config.DefaultsReport
 	engines           []engine.Descriptor
 	validatePlan      worker.ValidationPlan
@@ -2269,6 +2364,11 @@ func (f *fakeService) RunPathsWithOptions(paths []string, options pgruntime.RunO
 
 func (f *fakeService) RunPromptFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderSummary, error) {
 	f.runFolderOptions = options
+	for _, progress := range f.runFolderProgress {
+		if options.Progress != nil {
+			options.Progress(progress)
+		}
+	}
 	return f.runFolderSummary, f.runFolderErr
 }
 

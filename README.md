@@ -4,23 +4,26 @@
 
 ## Quick Start
 
-Run multiple prompts with shared context:
+Discover the repository and generate project roles:
 
-    promptgrinder run --shared-context "docs/tasks/02[A-E]-*.md"
+    promptgrinder discover
 
-Run every prompt in a folder:
+Review suggested role improvements without writing them:
 
-    promptgrinder run-folder docs/tasks/
+    promptgrinder roles enhance
 
-Validate without executing:
+Validate, then run a prompt:
 
-    promptgrinder validate docs/tasks/
+    promptgrinder validate docs/tasks/10-implement.md
+    promptgrinder run docs/tasks/10-implement.md
 
-Inspect available commands:
+Run an ordered folder in the invoking terminal:
 
-    promptgrinder --help
+    promptgrinder run-folder docs/tasks/ --detach=false
 
-Most users only need these four commands to get started.
+Resume it after a failure or interruption:
+
+    promptgrinder run-folder docs/tasks/ --detach=false --resume
 
 ![PromptGrinder executing five sequential work orders successfully](docs/images/sequential-workflow.png)
 

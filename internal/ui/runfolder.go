@@ -40,6 +40,7 @@ type RunFolderRenderer struct {
 	started     bool
 	bannerShown bool
 	closed      bool
+	finished    bool
 	stop        chan struct{}
 	done        chan struct{}
 	ticker      rendererTicker
@@ -99,9 +100,29 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 		r.active = ""
 		if r.interactive {
 			r.renderDashboardLocked()
-		} else {
-			fmt.Fprintln(r.w, "Result: succeeded")
 		}
+	}
+}
+
+// Finish stops any live animation before appending the stable sequence result
+// and, after failure, a shell-safe resume command.
+func (r *RunFolderRenderer) Finish(success bool) {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
+	r.stopTicker()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.finished {
+		return
+	}
+	r.finished = true
+	if success {
+		fmt.Fprintln(r.w, "Result: succeeded")
+		return
+	}
+	fmt.Fprintln(r.w, "Result: failed")
+	if r.folder != "" {
+		fmt.Fprintln(r.w, "Resume: promptgrinder run-folder "+shellQuote(r.folder)+" --resume")
 	}
 }
 
@@ -195,9 +216,6 @@ func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent)
 		fmt.Fprintf(r.w, " (log: %s)", event.LogPath)
 	}
 	fmt.Fprintln(r.w)
-	if event.Type == "prompt.failed" && r.folder != "" {
-		fmt.Fprintln(r.w, "Resume: promptgrinder run-folder "+shellQuote(r.folder)+" --resume")
-	}
 }
 
 func (r *RunFolderRenderer) renderDashboardLocked() {
