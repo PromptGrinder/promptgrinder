@@ -228,6 +228,10 @@ runtime:
     executable: /Users/example/.local/bin/agy
     sandbox: true
     mode: accept-edits
+    required_capabilities:
+      headless: true
+      structured_output: true
+      working_directory: true
 ```
 
 Supported Antigravity options are `executable`, `model`, `agent`, `effort`,
@@ -235,6 +239,11 @@ Supported Antigravity options are `executable`, `model`, `agent`, `effort`,
 `dangerously_skip_permissions`. PromptGrinder does not advertise Antigravity
 session resume because the CLI does not currently document a conversation ID
 in headless results; resume therefore starts a new retained task attempt.
+All named-worker launches require headless operation, structured output, and
+working-directory selection by default. A runtime may additionally require
+`interactive`, `session_resume`, `sandbox`, `approval`, or `environment` under
+its namespaced `required_capabilities` mapping; PromptGrinder rejects a missing
+capability before adapter preflight or process launch.
 
 ## Platform support
 

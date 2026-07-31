@@ -33,6 +33,45 @@ type Capabilities struct {
 	SessionResume    bool `json:"session_resume"`
 }
 
+// Negotiate verifies that a launcher explicitly advertises every capability
+// required by a launch request. It must run before adapter preflight or launch.
+func Negotiate(launcher Launcher, required Capabilities) error {
+	provider, ok := launcher.(CapabilityProvider)
+	if !ok {
+		return fmt.Errorf("runtime adapter does not advertise capabilities")
+	}
+	available := provider.Capabilities()
+	var missing []string
+	for _, capability := range capabilityValues(required, available) {
+		if capability.required && !capability.available {
+			missing = append(missing, capability.name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("runtime adapter lacks required capabilities: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func capabilityValues(required, available Capabilities) []struct {
+	name                string
+	required, available bool
+} {
+	return []struct {
+		name                string
+		required, available bool
+	}{
+		{"headless", required.Headless, available.Headless},
+		{"interactive", required.Interactive, available.Interactive},
+		{"structured_output", required.StructuredOutput, available.StructuredOutput},
+		{"session_resume", required.SessionResume, available.SessionResume},
+		{"sandbox", required.Sandbox, available.Sandbox},
+		{"approval", required.Approval, available.Approval},
+		{"working_directory", required.WorkingDirectory, available.WorkingDirectory},
+		{"environment", required.Environment, available.Environment},
+	}
+}
+
 type CapabilityProvider interface {
 	Capabilities() Capabilities
 }
@@ -59,8 +98,9 @@ type TaskContext struct {
 // RuntimeConfig keeps adapter-specific configuration namespaced by symbolic
 // runtime name and opaque to the core launch package.
 type RuntimeConfig struct {
-	Name    string         `json:"name"`
-	Options map[string]any `json:"options,omitempty"`
+	Name                 string         `json:"name"`
+	Options              map[string]any `json:"options,omitempty"`
+	RequiredCapabilities Capabilities   `json:"required_capabilities"`
 }
 
 // LaunchRequest contains all PromptGrinder-owned context needed by a runtime.
@@ -152,10 +192,48 @@ func Build(options BuildOptions) (LaunchRequest, error) {
 		Repository: repository, Worktree: worktree, Task: options.Task,
 		Branch: options.Branch, BaseBranch: options.BaseBranch, BaseRevision: options.BaseRevision,
 		Policy:  options.Worker.Policy,
-		Runtime: RuntimeConfig{Name: runtimeName, Options: cloneMap(options.RuntimeOptions[runtimeName])},
+		Runtime: RuntimeConfig{Name: runtimeName},
+	}
+	request.Runtime.Options, request.Runtime.RequiredCapabilities, err = runtimeConfiguration(options.RuntimeOptions[runtimeName])
+	if err != nil {
+		return LaunchRequest{}, fmt.Errorf("runtime %q configuration: %w", runtimeName, err)
 	}
 	request.Context = ContextDocument(request)
 	return request, nil
+}
+
+func runtimeConfiguration(values map[string]any) (map[string]any, Capabilities, error) {
+	options := cloneMap(values)
+	required := Capabilities{
+		Headless: true, StructuredOutput: true, WorkingDirectory: true,
+	}
+	raw, ok := options["required_capabilities"]
+	if !ok {
+		return options, required, nil
+	}
+	delete(options, "required_capabilities")
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return nil, Capabilities{}, fmt.Errorf("required_capabilities must be a mapping")
+	}
+	targets := map[string]*bool{
+		"headless": &required.Headless, "interactive": &required.Interactive,
+		"structured_output": &required.StructuredOutput, "session_resume": &required.SessionResume,
+		"sandbox": &required.Sandbox, "approval": &required.Approval,
+		"working_directory": &required.WorkingDirectory, "environment": &required.Environment,
+	}
+	for name, value := range fields {
+		target, known := targets[name]
+		if !known {
+			return nil, Capabilities{}, fmt.Errorf("unknown required capability %q", name)
+		}
+		enabled, valid := value.(bool)
+		if !valid {
+			return nil, Capabilities{}, fmt.Errorf("required capability %q must be boolean", name)
+		}
+		*target = enabled
+	}
+	return options, required, nil
 }
 
 func firstNonEmpty(values ...string) string {

@@ -118,6 +118,9 @@ func (s Service) Start(ctx context.Context, location, workerID, runtimeOverride 
 	if !ok {
 		return Result{}, fmt.Errorf("project %q worker %q runtime %q is not registered", registry.Project.ID, definition.ID, request.Runtime.Name)
 	}
+	if err := workerlaunch.Negotiate(launcher, request.Runtime.RequiredCapabilities); err != nil {
+		return Result{}, fmt.Errorf("capability negotiation for project %q worker %q task %q runtime %q: %w", registry.Project.ID, definition.ID, task.ID, request.Runtime.Name, err)
+	}
 	if preflight, ok := launcher.(workerlaunch.Preflighter); ok {
 		if err := preflight.Preflight(ctx, request); err != nil {
 			return Result{}, fmt.Errorf("preflight project %q worker %q task %q runtime %q: %w", registry.Project.ID, definition.ID, task.ID, request.Runtime.Name, err)

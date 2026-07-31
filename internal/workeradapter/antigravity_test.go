@@ -70,14 +70,33 @@ func TestAntigravityAdapterRejectsUnknownOptionsAndMalformedOutput(t *testing.T)
 	}
 }
 
-func TestRuntimeAdaptersShareCapabilityContract(t *testing.T) {
-	for name, provider := range map[string]workerlaunch.CapabilityProvider{
+func TestRuntimeAdaptersShareContract(t *testing.T) {
+	for name, launcher := range map[string]workerlaunch.Launcher{
 		"codex": Codex{}, "antigravity": Antigravity{},
 	} {
-		caps := provider.Capabilities()
-		if !caps.Headless || !caps.StructuredOutput || !caps.WorkingDirectory {
-			t.Fatalf("%s capabilities = %#v", name, caps)
-		}
+		t.Run(name, func(t *testing.T) {
+			provider, ok := launcher.(workerlaunch.CapabilityProvider)
+			if !ok {
+				t.Fatal("adapter does not advertise capabilities")
+			}
+			caps := provider.Capabilities()
+			if !caps.Headless || !caps.StructuredOutput || !caps.WorkingDirectory {
+				t.Fatalf("capabilities = %#v", caps)
+			}
+			if err := workerlaunch.Negotiate(launcher, workerlaunch.Capabilities{
+				Headless: true, StructuredOutput: true, WorkingDirectory: true,
+			}); err != nil {
+				t.Fatalf("default named-worker contract: %v", err)
+			}
+			preflight, ok := launcher.(workerlaunch.Preflighter)
+			if !ok {
+				t.Fatal("adapter does not implement process-free preflight")
+			}
+			request := workerlaunch.LaunchRequest{Runtime: workerlaunch.RuntimeConfig{Name: "wrong-runtime"}}
+			if err := preflight.Preflight(context.Background(), request); err == nil {
+				t.Fatal("adapter accepted a request for another runtime")
+			}
+		})
 	}
 	if (Antigravity{}).Capabilities().SessionResume {
 		t.Fatal("Antigravity must not advertise undocumented headless session ID capture")

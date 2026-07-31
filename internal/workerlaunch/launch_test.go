@@ -1,13 +1,24 @@
 package workerlaunch
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"promptgrinder/internal/workerdomain"
 )
+
+type capabilityLauncher struct {
+	capabilities Capabilities
+}
+
+func (l capabilityLauncher) Capabilities() Capabilities { return l.capabilities }
+func (capabilityLauncher) Launch(context.Context, LaunchRequest) (LaunchResult, error) {
+	return LaunchResult{}, nil
+}
 
 func testOptions(root string) BuildOptions {
 	return BuildOptions{
@@ -74,6 +85,73 @@ func TestBuildRuntimePrecedence(t *testing.T) {
 				t.Fatalf("runtime = %q, want %q", request.Runtime.Name, test.want)
 			}
 		})
+	}
+}
+
+func TestBuildSwitchesRuntimeWithoutChangingWorkerDomain(t *testing.T) {
+	options := testOptions(t.TempDir())
+	originalWorker := options.Worker
+	options.RuntimeOverride = "codex"
+	codexRequest, err := Build(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.RuntimeOverride = "antigravity"
+	antigravityRequest, err := Build(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codexRequest.Runtime.Name != "codex" || antigravityRequest.Runtime.Name != "antigravity" {
+		t.Fatalf("runtimes = %q/%q", codexRequest.Runtime.Name, antigravityRequest.Runtime.Name)
+	}
+	if !reflect.DeepEqual(codexRequest.Worker, originalWorker) ||
+		!reflect.DeepEqual(antigravityRequest.Worker, originalWorker) {
+		t.Fatal("runtime selection mutated the worker domain definition")
+	}
+	if codexRequest.Context != antigravityRequest.Context {
+		t.Fatal("runtime selection changed core identity/task context")
+	}
+}
+
+func TestBuildExtractsNamespacedRequiredCapabilities(t *testing.T) {
+	options := testOptions(t.TempDir())
+	options.RuntimeOverride = "codex"
+	options.RuntimeOptions["codex"]["required_capabilities"] = map[string]any{
+		"interactive": true, "session_resume": true, "environment": true,
+		"sandbox": true, "approval": true,
+	}
+	request, err := Build(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := request.Runtime.RequiredCapabilities
+	if !required.Headless || !required.Interactive || !required.StructuredOutput ||
+		!required.SessionResume || !required.Sandbox || !required.Approval ||
+		!required.WorkingDirectory || !required.Environment {
+		t.Fatalf("required capabilities = %#v", required)
+	}
+	if _, leaked := request.Runtime.Options["required_capabilities"]; leaked {
+		t.Fatal("orchestration capability requirements leaked into adapter options")
+	}
+}
+
+func TestNegotiateChecksEveryCapability(t *testing.T) {
+	required := Capabilities{
+		Headless: true, Interactive: true, StructuredOutput: true,
+		SessionResume: true, Sandbox: true, Approval: true,
+		WorkingDirectory: true, Environment: true,
+	}
+	err := Negotiate(capabilityLauncher{capabilities: Capabilities{Headless: true}}, required)
+	if err == nil {
+		t.Fatal("expected capability mismatch")
+	}
+	for _, name := range []string{
+		"interactive", "structured_output", "session_resume", "sandbox",
+		"approval", "working_directory", "environment",
+	} {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("error %q does not identify %q", err, name)
+		}
 	}
 }
 

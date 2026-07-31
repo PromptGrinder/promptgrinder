@@ -24,6 +24,16 @@ type captureLauncher struct {
 	calls        int
 	request      workerlaunch.LaunchRequest
 	result       workerlaunch.LaunchResult
+	capabilities workerlaunch.Capabilities
+}
+
+func (l *captureLauncher) Capabilities() workerlaunch.Capabilities {
+	if l.capabilities == (workerlaunch.Capabilities{}) {
+		return workerlaunch.Capabilities{
+			Headless: true, StructuredOutput: true, WorkingDirectory: true,
+		}
+	}
+	return l.capabilities
 }
 
 func (l *captureLauncher) Preflight(_ context.Context, request workerlaunch.LaunchRequest) error {
@@ -88,6 +98,21 @@ func TestStartPreflightFailureLaunchesNothing(t *testing.T) {
 	}
 }
 
+func TestStartCapabilityMismatchLaunchesNothing(t *testing.T) {
+	repo, home := assignedProject(t)
+	launcher := &captureLauncher{capabilities: workerlaunch.Capabilities{Headless: true}}
+	_, err := (Service{Home: home, Launchers: map[string]workerlaunch.Launcher{"codex": launcher}}).
+		Start(context.Background(), repo, "backend-sonar", "")
+	if err == nil || !strings.Contains(err.Error(), "capability negotiation") ||
+		!strings.Contains(err.Error(), "structured_output") || launcher.calls != 0 {
+		t.Fatalf("err/calls = %v/%d", err, launcher.calls)
+	}
+	state, loadErr := workerstate.New(home).Load("example", "backend-sonar")
+	if loadErr != nil || state.Lifecycle != workerdomain.LifecycleIdle {
+		t.Fatalf("state changed on capability mismatch: %#v, %v", state, loadErr)
+	}
+}
+
 func TestStartLaunchFailurePersistsFailedStateAndRun(t *testing.T) {
 	repo, home := assignedProject(t)
 	launcher := &captureLauncher{
@@ -122,6 +147,12 @@ func TestStartRejectsRestartWhileExecuting(t *testing.T) {
 }
 
 type violatingLauncher struct{}
+
+func (violatingLauncher) Capabilities() workerlaunch.Capabilities {
+	return workerlaunch.Capabilities{
+		Headless: true, StructuredOutput: true, WorkingDirectory: true,
+	}
+}
 
 func (violatingLauncher) Launch(_ context.Context, request workerlaunch.LaunchRequest) (workerlaunch.LaunchResult, error) {
 	if err := os.MkdirAll(filepath.Join(request.Worktree, "secrets"), 0o755); err != nil {
