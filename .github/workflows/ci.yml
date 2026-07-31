@@ -17,8 +17,6 @@ jobs:
     name: Static quality and modules
     runs-on: macos-15
     timeout-minutes: 15
-    env:
-      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-quality-home
     steps:
       # Reviewed 2026-07-26; Dependabot should propose action updates.
       - uses: actions/checkout@v6
@@ -26,6 +24,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Isolate PromptGrinder state
+        run: echo "PROMPTGRINDER_HOME=$RUNNER_TEMP/promptgrinder-quality-home" >> "$GITHUB_ENV"
       - name: Formatting
         run: test -z "$(gofmt -l .)"
       - name: Vet
@@ -37,8 +37,6 @@ jobs:
     name: Go tests
     runs-on: macos-15
     timeout-minutes: 20
-    env:
-      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-tests-home
     steps:
       # Reviewed 2026-07-26; Dependabot should propose action updates.
       - uses: actions/checkout@v6
@@ -46,14 +44,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Isolate PromptGrinder state
+        run: echo "PROMPTGRINDER_HOME=$RUNNER_TEMP/promptgrinder-tests-home" >> "$GITHUB_ENV"
       - run: go test -shuffle=on -count=1 ./...
 
   race:
     name: Race tests
     runs-on: macos-15
     timeout-minutes: 30
-    env:
-      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-race-home
     steps:
       # Reviewed 2026-07-26; Dependabot should propose action updates.
       - uses: actions/checkout@v6
@@ -61,14 +59,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Isolate PromptGrinder state
+        run: echo "PROMPTGRINDER_HOME=$RUNNER_TEMP/promptgrinder-race-home" >> "$GITHUB_ENV"
       - run: go test -race -count=1 ./...
 
   acceptance:
     name: Compiled CLI acceptance
     runs-on: macos-15
     timeout-minutes: 20
-    env:
-      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-acceptance-home
     steps:
       # Reviewed 2026-07-26; Dependabot should propose action updates.
       - uses: actions/checkout@v6
@@ -76,6 +74,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Isolate PromptGrinder state
+        run: echo "PROMPTGRINDER_HOME=$RUNNER_TEMP/promptgrinder-acceptance-home" >> "$GITHUB_ENV"
       - name: Exercise the compiled public boundary
         run: go test -count=1 -v ./acceptance
 
@@ -83,8 +83,6 @@ jobs:
     name: Public documentation and examples
     runs-on: macos-15
     timeout-minutes: 15
-    env:
-      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-examples-home
     steps:
       # Reviewed 2026-07-26; Dependabot should propose action updates.
       - uses: actions/checkout@v6
@@ -92,6 +90,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Isolate PromptGrinder state
+        run: echo "PROMPTGRINDER_HOME=$RUNNER_TEMP/promptgrinder-examples-home" >> "$GITHUB_ENV"
       - name: Build CLI and install a fail-closed Codex stub
         run: |
           mkdir -p "$RUNNER_TEMP/promptgrinder-example-bin"
@@ -104,9 +104,8 @@ jobs:
           EOF
           chmod +x "$RUNNER_TEMP/promptgrinder-example-bin/codex"
       - name: Check public metadata and runnable examples
-        env:
-          PATH: ${{ runner.temp }}/promptgrinder-example-bin:/usr/bin:/bin:/usr/sbin:/sbin
         run: |
+          export PATH="$RUNNER_TEMP/promptgrinder-example-bin:/usr/bin:/bin:/usr/sbin:/sbin"
           cli="$RUNNER_TEMP/promptgrinder-example-bin/promptgrinder"
           test ! -e docs/features
           for file in README.md AUTHORS.md CITATION.cff LICENSE SECURITY.md SUPPORT.md \
@@ -146,8 +145,6 @@ jobs:
     name: Supported macOS artifacts
     runs-on: macos-15
     timeout-minutes: 15
-    env:
-      PROMPTGRINDER_HOME: ${{ runner.temp }}/promptgrinder-artifact-home
     steps:
       # Reviewed 2026-07-26; Dependabot should propose action updates.
       - uses: actions/checkout@v6
@@ -155,6 +152,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Isolate PromptGrinder state
+        run: echo "PROMPTGRINDER_HOME=$RUNNER_TEMP/promptgrinder-artifact-home" >> "$GITHUB_ENV"
       - name: Cross-build and inspect Darwin binaries
         run: |
           output="$RUNNER_TEMP/promptgrinder-artifacts"
