@@ -14,7 +14,7 @@ type ProjectSnapshot struct {
 	Frameworks  []string `yaml:"frameworks" json:"frameworks"`
 	Roles       []string `yaml:"roles" json:"roles"`
 	GeneratedBy string   `yaml:"generated_by" json:"generated_by"`
-	SourcePath  string   `yaml:"-" json:"source_path"`
+	SourcePath  string   `yaml:"-" json:"-"`
 	Raw         []byte   `yaml:"-" json:"-"`
 }
 
@@ -34,7 +34,7 @@ type RoleSnapshot struct {
 	Runtime      RuntimeSnapshot `yaml:"runtime" json:"runtime"`
 	QualityGates []string        `yaml:"quality_gates" json:"quality_gates"`
 	Status       StatusSnapshot  `yaml:"status" json:"status"`
-	SourcePath   string          `yaml:"-" json:"source_path"`
+	SourcePath   string          `yaml:"-" json:"-"`
 	Raw          []byte          `yaml:"-" json:"-"`
 }
 
