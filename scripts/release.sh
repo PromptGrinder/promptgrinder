@@ -14,7 +14,7 @@ if [[ "$output_dir" = /* || "$output_dir" == "." || "$output_dir" == *".."* ]]; 
   exit 2
 fi
 if [[ ! "$version" =~ '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$' ]]; then
-  print -u2 "usage: scripts/release.sh v1.0.0-rc.1 [40-character-revision] [output-directory]"
+  print -u2 "usage: scripts/release.sh <version> [40-character-revision] [output-directory]"
   exit 2
 fi
 if [[ ! "$revision" =~ '^[0-9a-f]{40}$' ]]; then
