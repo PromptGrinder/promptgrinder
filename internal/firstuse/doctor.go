@@ -54,6 +54,7 @@ type DoctorOptions struct {
 	Executable string
 	GOOS       string
 	GOARCH     string
+	Shell      string
 	LookPath   func(string) (string, error)
 	Run        func(context.Context, string, ...string) ([]byte, error)
 }
@@ -94,6 +95,7 @@ func Doctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		pgPath, _ = os.Executable()
 	}
 	checks = append(checks, executableCheck("tool.promptgrinder", "PromptGrinder", pgPath, true, "Reinstall PromptGrinder from a verified release artifact."))
+	checks = append(checks, checkPromptGrinderPath(options, pgPath))
 
 	codexPath := cfg.CodexExecutable
 	codexSource := "PATH"
@@ -143,6 +145,54 @@ func Doctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		}
 	}
 	return report
+}
+
+func checkPromptGrinderPath(o DoctorOptions, executable string) Check {
+	resolved, err := o.LookPath("promptgrinder")
+	if err == nil && resolved != "" {
+		return Check{ID: "shell.promptgrinder_path", Status: Pass, Required: false, Summary: "PromptGrinder is available on PATH.", Evidence: map[string]any{"path": resolved}}
+	}
+	dir := filepath.Dir(executable)
+	if executable == "" || dir == "." {
+		dir = "$HOME/.local/bin"
+	}
+	shell := o.Shell
+	if shell == "" {
+		shell = os.Getenv("SHELL")
+	}
+	profile, remediation := shellPathRemediation(shell, dir)
+	evidence := map[string]any{"shell": shell, "directory": dir}
+	if profile != "" {
+		evidence["profile"] = profile
+	}
+	return Check{
+		ID:          "shell.promptgrinder_path",
+		Status:      Warning,
+		Required:    false,
+		Summary:     "PromptGrinder is running, but new shells cannot find it on PATH.",
+		Evidence:    evidence,
+		Remediation: remediation,
+	}
+}
+
+func shellPathRemediation(shell, dir string) (string, string) {
+	name := filepath.Base(shell)
+	switch name {
+	case "zsh":
+		line := "export PATH=" + shellSingleQuote(dir) + ":\"$PATH\""
+		return "~/.zshrc", "Run `printf '%s\\n' " + shellSingleQuote(line) + " >> ~/.zshrc && source ~/.zshrc`, then rerun `promptgrinder doctor`."
+	case "bash":
+		line := "export PATH=" + shellSingleQuote(dir) + ":\"$PATH\""
+		return "~/.bash_profile", "Run `printf '%s\\n' " + shellSingleQuote(line) + " >> ~/.bash_profile && source ~/.bash_profile`, then rerun `promptgrinder doctor`."
+	case "fish":
+		return "~/.config/fish/config.fish", "Run `fish_add_path " + shellSingleQuote(dir) + "`, then rerun `promptgrinder doctor`."
+	default:
+		return "", "Add " + shellSingleQuote(dir) + " to PATH in your shell startup file, start a new shell, then rerun `promptgrinder doctor`."
+	}
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func checkPlatform(o DoctorOptions) Check {

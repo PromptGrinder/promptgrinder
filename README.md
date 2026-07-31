@@ -74,7 +74,10 @@ promptgrinder --version
 ```
 
 Use the `amd64` archive and directory on Intel. Ensure `$HOME/.local/bin` is on
-`PATH`. Release binaries are currently unsigned and not notarized.
+`PATH`. `promptgrinder doctor` detects the current shell and prints an exact,
+copyable PATH command when it is not. It reports the change but never edits
+`.zshrc`, `.bash_profile`, or another shell profile automatically. Release
+binaries are currently unsigned and not notarized.
 
 ### Build from source
 
