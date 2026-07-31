@@ -170,6 +170,16 @@ jobs:
             x86_64) native="$output/promptgrinder-darwin-amd64" ;;
             *) echo "unsupported native architecture: $(uname -m)" >&2; exit 1 ;;
           esac
+          cat > "$output/codex" <<'EOF'
+          #!/bin/sh
+          : > "$RUNNER_TEMP/artifact-codex-was-invoked"
+          echo "error: artifact smoke test invoked Codex" >&2
+          exit 99
+          EOF
+          chmod +x "$output/codex"
+          export PATH="$output:/usr/bin:/bin:/usr/sbin:/sbin"
+
           "$native" --version
           "$native" --help | grep -q promptgrinder
           "$native" validate examples/minimal.md
+          test ! -e "$RUNNER_TEMP/artifact-codex-was-invoked"
