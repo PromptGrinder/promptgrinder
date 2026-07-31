@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"promptgrinder/internal/workerlaunch"
 )
@@ -43,10 +44,14 @@ func (r CodexRuntime) Advise(ctx context.Context, request []byte) ([]byte, error
 	cmd.Dir = temp
 	cmd.Stdin = bytes.NewReader(prompt)
 	cmd.Stdout = &bytes.Buffer{}
-	cmd.Stderr = &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if detail := safeAdvisorDiagnostic(stderr.String()); detail != "" {
+			return nil, fmt.Errorf("codex advisor execution: %w: %s", err, detail)
 		}
 		return nil, fmt.Errorf("codex advisor execution: %w", err)
 	}
@@ -55,6 +60,26 @@ func (r CodexRuntime) Advise(ctx context.Context, request []byte) ([]byte, error
 		return nil, fmt.Errorf("read codex advisor response: %w", err)
 	}
 	return response, nil
+}
+
+const maxAdvisorDiagnosticBytes = 4096
+
+func safeAdvisorDiagnostic(raw string) string {
+	detail := strings.TrimSpace(raw)
+	if detail == "" {
+		return ""
+	}
+	detail = secretLooking.ReplaceAllString(detail, "[REDACTED]")
+	detail = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r >= ' ' {
+			return r
+		}
+		return -1
+	}, detail)
+	if len(detail) > maxAdvisorDiagnosticBytes {
+		detail = detail[:maxAdvisorDiagnosticBytes] + "... (truncated)"
+	}
+	return detail
 }
 
 const advisorResponseJSONSchema = `{
@@ -71,7 +96,7 @@ const advisorResponseJSONSchema = `{
         "operation":{"enum":["set","append","remove"]},"field":{"type":"string"},
         "value":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
         "confidence":{"enum":["low","medium","high"]},"explanation":{"type":"string"},
-        "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"fact":{"type":"string"}}}}
+        "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","fact"],"properties":{"path":{"type":"string"},"fact":{"type":"string"}}}}
       }
     }}
   }
