@@ -26,8 +26,8 @@ All notable changes are recorded here. This project uses semantic versioning.
 - Added shell-aware `doctor` PATH remediation and repository-local development,
   slice-authoring, CI, and release skills.
 
-RC.2 is feature-complete on the candidate branch but is not tagged, qualified,
-published, or represented by `promptgrinder --version` yet.
+RC.2 is release-prepared on its candidate branch but is not tagged, qualified,
+or published yet.
 
 ## v1.0.0-rc.1
 
