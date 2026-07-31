@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"promptgrinder/internal/workerdomain"
@@ -178,5 +179,65 @@ func TestTaskCreationFailureLeavesExistingWorkerStateUnchanged(t *testing.T) {
 	}
 	if after.Revision != before.Revision || after.ActiveTaskID != "" {
 		t.Fatalf("worker state changed after task write failure: %#v", after)
+	}
+}
+
+func TestConcurrentLaunchAndControlUpdatesPreserveBoth(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.WriteFile(filepath.Join(root, "task.md"), []byte("instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := New(home)
+	task, err := store.Assign(root, definition("example", "backend"), "task.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const updates = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, updates+1)
+	for i := 0; i < updates; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, updateErr := store.UpdateControl("example", "task", func(current *workerdomain.Task) error {
+				current.ControlRequests = append(current.ControlRequests, workerdomain.ControlRequest{
+					ID: "pause", Operation: "pause", RequestedAt: current.UpdatedAt,
+					CompletedAt: current.UpdatedAt, Result: "test",
+				})
+				return nil
+			})
+			errs <- updateErr
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		task.Worktree = root
+		task.Branch = "worker/backend/task"
+		task.BaseBranch = "main"
+		task.BaseRevision = "abc123"
+		task.LaunchSetup = "prepared"
+		_, saveErr := store.SaveLaunchLocation(task)
+		errs <- saveErr
+	}()
+	wg.Wait()
+	close(errs)
+	for updateErr := range errs {
+		if updateErr != nil {
+			t.Fatal(updateErr)
+		}
+	}
+
+	loaded, err := store.Load("example", "task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.ControlRequests) != updates {
+		t.Fatalf("control requests = %d, want %d", len(loaded.ControlRequests), updates)
+	}
+	if loaded.LaunchSetup != "prepared" || loaded.Worktree != root || loaded.Branch != "worker/backend/task" {
+		t.Fatalf("launch location was lost: %#v", loaded)
 	}
 }

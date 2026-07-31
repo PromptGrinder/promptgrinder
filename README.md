@@ -214,6 +214,93 @@ terms. See [`SECURITY.md`](SECURITY.md) and [`SUPPORT.md`](SUPPORT.md).
 
 ### Named-worker runtimes
 
+Named workers are persistent project roles, separate from the one-off execution
+records shown by the top-level `list` and `status` commands. A repository opts
+in by adding `.ai/workers.yaml`:
+
+```yaml
+version: 1
+project:
+  id: example
+  name: Example
+  require_separate_reviewer: true
+
+workers:
+  backend-sonar:
+    display_name: Backend Sonar Engineer
+    role: Resolve backend static-analysis findings safely.
+    runtime: codex
+    branch:
+      prefix: worker/backend-sonar
+    worktree:
+      default: .
+      require_clean: true
+    paths:
+      allowed:
+        - backend/**
+        - tasks/**
+      forbidden:
+        - infrastructure/production/**
+
+  reviewer:
+    display_name: Reviewer
+    role: Review completed worker tasks.
+    runtime: codex
+    branch:
+      prefix: worker/reviewer
+    worktree:
+      default: .
+    paths:
+      allowed:
+        - "**"
+      forbidden:
+        - infrastructure/production/**
+```
+
+Worker definitions contain reviewable identity and policy only. PromptGrinder
+stores assignments, queue entries, attempts, lifecycle state, runtime
+references, and review evidence beneath
+`${PROMPTGRINDER_HOME:-$HOME/.promptgrinder}/projects/<project-id>/`.
+Run these commands anywhere inside the configured Git repository:
+
+```sh
+promptgrinder worker list
+promptgrinder worker show backend-sonar
+promptgrinder worker start backend-sonar --dry-run
+
+promptgrinder task assign backend-sonar tasks/sonar-001.md
+promptgrinder worker start backend-sonar
+promptgrinder worker status backend-sonar
+```
+
+`task assign` makes the task active when the worker is idle; later assignments
+join its FIFO queue. `task enqueue` always queues. Inspect and control queued
+work with `task list`, `task queue list`, `task queue reorder`, and
+`task queue remove`. `scheduler run --once` dispatches at most one eligible
+idle worker; omit `--once` to run the local scheduler loop. Project and runtime
+limits can be set in `.ai/config.yaml`:
+
+```yaml
+scheduler:
+  project_concurrency: 2
+  runtime_concurrency:
+    codex: 2
+    antigravity: 1
+  lease_ttl: 1m
+```
+
+Use `worker pause`, `worker resume`, `task retry`, and `task cancel` for local
+control. Attempts and control evidence are retained. Submit completed evidence
+with `review submit`, then use `review show`, `review accept`, or
+`review reject`; these commands do not push, merge, publish, or otherwise
+perform external Git operations. See [`docs/worker-controls.md`](docs/worker-controls.md)
+for stop and resume semantics.
+
+Path policy is checked against changes attributed to the worker. Forbidden
+rules override allowed rules, and violating changes are retained for human
+review rather than reverted. This orchestration policy complements, but does
+not replace, the runtime sandbox.
+
 Named workers select a runtime by symbolic key in `.ai/workers.yaml`.
 PromptGrinder currently registers `codex` and `antigravity` for named-worker
 launches. Existing `run` and `run-folder` workflows continue to use the Codex

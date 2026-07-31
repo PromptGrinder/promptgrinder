@@ -112,6 +112,11 @@ func (s *Store) enqueue(root string, definition workerdomain.WorkerDefinition, s
 
 // SetStatus atomically updates only scheduler-owned task dispatch metadata.
 func (s *Store) SetStatus(projectID, taskID string, status workerdomain.TaskStatus) (workerdomain.Task, error) {
+	unlock, err := s.lockTask(projectID, taskID)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	defer unlock()
 	task, err := s.Load(projectID, taskID)
 	if err != nil {
 		return workerdomain.Task{}, err
@@ -132,7 +137,7 @@ func (s *Store) SetStatus(projectID, taskID string, status workerdomain.TaskStat
 
 // UpdateControl atomically persists Slice 9 task control metadata.
 func (s *Store) UpdateControl(projectID, taskID string, mutate func(*workerdomain.Task) error) (workerdomain.Task, error) {
-	unlock, err := s.lock(projectID, "task-"+taskID)
+	unlock, err := s.lockTask(projectID, taskID)
 	if err != nil {
 		return workerdomain.Task{}, err
 	}
@@ -192,6 +197,11 @@ func (s *Store) Load(projectID, taskID string) (workerdomain.Task, error) {
 // It is intentionally narrow so task identity and its immutable content
 // snapshot cannot be changed by launch setup.
 func (s *Store) SaveLaunchLocation(task workerdomain.Task) (workerdomain.Task, error) {
+	unlock, err := s.lockTask(task.ProjectID, task.ID)
+	if err != nil {
+		return workerdomain.Task{}, err
+	}
+	defer unlock()
 	current, err := s.Load(task.ProjectID, task.ID)
 	if err != nil {
 		return workerdomain.Task{}, err
@@ -209,6 +219,13 @@ func (s *Store) SaveLaunchLocation(task workerdomain.Task) (workerdomain.Task, e
 		return workerdomain.Task{}, err
 	}
 	return current, nil
+}
+
+func (s *Store) lockTask(projectID, taskID string) (func(), error) {
+	if err := workerdomain.ValidateSlug("task id", taskID); err != nil {
+		return nil, err
+	}
+	return s.lock(projectID, "task-"+taskID)
 }
 
 func (s *Store) List(projectID, workerID string) ([]workerdomain.Task, error) {
