@@ -335,6 +335,36 @@ func TestUnknownWorkerError(t *testing.T) {
 	}
 }
 
+func TestParseOrderedCompletionReportRejectsAmbiguousFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		summary    string
+		wantStatus string
+		wantSafe   *bool
+		wantReason string
+	}{
+		{name: "pass", summary: "SUMMARY:\n- done\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", wantStatus: "PASS", wantSafe: boolPointer(true)},
+		{name: "conflicting status", summary: "STATUS: PASS\nSTATUS: BLOCKED\nNEXT_PROMPT_SAFE: yes", wantStatus: "BLOCKED", wantSafe: boolPointer(true), wantReason: "duplicate completion fields"},
+		{name: "conflicting safety", summary: "STATUS: PASS\nNEXT_PROMPT_SAFE: yes\nNEXT_PROMPT_SAFE: no", wantStatus: "PASS", wantSafe: boolPointer(false), wantReason: "duplicate completion fields"},
+		{name: "malformed status", summary: "STATUS: complete\nNEXT_PROMPT_SAFE: yes", wantSafe: boolPointer(true), wantReason: "malformed completion field: STATUS"},
+		{name: "malformed safety", summary: "STATUS: PASS\nNEXT_PROMPT_SAFE: true", wantStatus: "PASS", wantReason: "malformed completion field: NEXT_PROMPT_SAFE"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, safe, reason := ParseOrderedCompletionReport(test.summary)
+			if status != test.wantStatus || reason != test.wantReason || !equalOptionalBool(safe, test.wantSafe) {
+				t.Fatalf("ParseOrderedCompletionReport() = (%q, %v, %q), want (%q, %v, %q)", status, safe, reason, test.wantStatus, test.wantSafe, test.wantReason)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func equalOptionalBool(left, right *bool) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
 func TestHeartbeatUpdatesLastSeenWithoutChangingStatus(t *testing.T) {
 	store := NewStore(t.TempDir())
 	worker := testWorker(store, "wrk_heartbeat", StatusRunning)
