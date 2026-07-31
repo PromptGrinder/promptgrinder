@@ -1,6 +1,7 @@
 package roleenhance
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -81,6 +82,24 @@ func TestRoleMergeRejectAndStaleConflictDoNotWrite(t *testing.T) {
 	after, _ = os.ReadFile(path)
 	if !reflect.DeepEqual(changed, after) {
 		t.Fatal("conflict changed file")
+	}
+}
+
+func TestRoleMergeRejectsStaleProjectWithoutWriting(t *testing.T) {
+	root, current, plan := mergeFixture(t)
+	rolePath := filepath.Join(root, ".promptgrinder", "roles", "backend.yaml")
+	before, _ := os.ReadFile(rolePath)
+	projectPath := filepath.Join(root, ".promptgrinder", "project.yaml")
+	project, _ := os.ReadFile(projectPath)
+	if err := os.WriteFile(projectPath, append(project, []byte("# changed\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (RoleMergeService{}).Apply(root, current, plan, ApprovalSelection{Mode: ApprovalApplyAll}); err == nil || !strings.Contains(err.Error(), "stale project") {
+		t.Fatalf("err = %v", err)
+	}
+	after, _ := os.ReadFile(rolePath)
+	if !bytes.Equal(before, after) {
+		t.Fatal("stale project changed role")
 	}
 }
 

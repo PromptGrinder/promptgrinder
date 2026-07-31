@@ -175,7 +175,10 @@ output.
 `roles enhance` is review-only by default and with `--reject-all`. It writes
 nothing unless `--apply-all` or `--apply-selected <id>[,<id>...]` is supplied;
 these approval flags are mutually exclusive. Use `--json` for deterministic
-automation output.
+automation output. The configured Codex executable is used only through a
+bounded, structured advisor request in a temporary directory with a read-only
+sandbox. PromptGrinder validates grounding and performs all YAML merging; the
+advisor never receives the repository path or write access.
 
 ## Configuration
 

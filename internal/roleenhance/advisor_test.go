@@ -75,6 +75,7 @@ func TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence(t *testin
 	current, evidence := advisorFixture()
 	for name, test := range map[string]struct{ response, want string }{
 		"framework": {`{"schema_version":"promptgrinder.role-advisor/v1","recommendations":[{"id":"x","role_id":"backend","operation":"append","field":"technology","value":"Django","confidence":"high","explanation":"use it","evidence":[{"path":"README.md"}]}]}`, "ungrounded technology"},
+		"substring": {`{"schema_version":"promptgrinder.role-advisor/v1","recommendations":[{"id":"x","role_id":"backend","operation":"append","field":"technology","value":"ring","confidence":"high","explanation":"use it","evidence":[{"path":"README.md"}]}]}`, "ungrounded technology"},
 		"evidence":  {`{"schema_version":"promptgrinder.role-advisor/v1","recommendations":[{"id":"x","role_id":"backend","operation":"set","field":"description","value":"backend","confidence":"high","explanation":"use it","evidence":[{"path":"invented.md"}]}]}`, "uncollected path"},
 	} {
 		t.Run(name, func(t *testing.T) {

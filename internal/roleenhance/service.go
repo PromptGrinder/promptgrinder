@@ -41,7 +41,20 @@ func (s EnhanceService) Review(ctx context.Context, root string) (CurrentState, 
 	// kind-distinct source records, but remove exact duplicates.
 	evidence.Sources = dedupeSources(evidence.Sources)
 	plan, err := s.Advisor.Recommend(ctx, current, evidence)
-	return current, plan, err
+	if err != nil {
+		return current, ReviewPlan{}, err
+	}
+	recommendations := make([]Recommendation, len(plan.Items))
+	for i := range plan.Items {
+		recommendations[i] = plan.Items[i].Recommendation
+	}
+	// The service boundary, not the advisor implementation, owns validation
+	// and old-value capture. This keeps alternate and test runtimes untrusted.
+	if err := ValidateRecommendations(current, evidence, recommendations); err != nil {
+		return current, ReviewPlan{}, err
+	}
+	validated, err := (RoleDiffGenerator{}).Generate(current, recommendations)
+	return current, validated, err
 }
 
 func dedupeSources(in []EvidenceSource) []EvidenceSource {

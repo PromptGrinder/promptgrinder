@@ -22,6 +22,13 @@ type pendingWrite struct {
 }
 
 func (RoleMergeService) Apply(root string, reviewed CurrentState, plan ReviewPlan, selection ApprovalSelection) (MergeResult, error) {
+	stable, err := StableReviewPlan(plan.Items)
+	if err != nil {
+		return MergeResult{}, fmt.Errorf("invalid review plan: %w", err)
+	}
+	if !reflect.DeepEqual(stable.Items, plan.Items) {
+		return MergeResult{}, fmt.Errorf("invalid review plan: recommendations are not in stable order")
+	}
 	approved, rejected, err := approvedIDs(plan, selection)
 	if err != nil {
 		return MergeResult{}, err
@@ -35,6 +42,9 @@ func (RoleMergeService) Apply(root string, reviewed CurrentState, plan ReviewPla
 		return result, fmt.Errorf("re-read role files: %w", err)
 	}
 	oldRoles, newRoles := roleIndex(reviewed), roleIndex(latest)
+	if !bytes.Equal(reviewed.Project.Raw, latest.Project.Raw) {
+		return result, fmt.Errorf("role enhancement has stale project configuration")
+	}
 	for id := range approved {
 		item := findReviewItem(plan, id)
 		oldRole, ok := oldRoles[item.Recommendation.RoleID]
@@ -115,6 +125,16 @@ func (RoleMergeService) Apply(root string, reviewed CurrentState, plan ReviewPla
 		if err != nil {
 			cleanupTemps(writes)
 			return result, fmt.Errorf("stage %s: %w", writes[i].rel, err)
+		}
+	}
+	// Close the staging-time race before replacing any target. A changed source
+	// aborts the complete batch while every staged file is still disposable.
+	for _, write := range writes {
+		roleID := strings.TrimSuffix(filepath.Base(write.rel), filepath.Ext(write.rel))
+		currentBytes, readErr := readRegular(write.target)
+		if readErr != nil || !bytes.Equal(currentBytes, newRoles[roleID].Raw) {
+			cleanupTemps(writes)
+			return result, fmt.Errorf("role enhancement source changed while staging: %s", write.rel)
 		}
 	}
 	for _, write := range writes {

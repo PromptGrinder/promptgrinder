@@ -7,6 +7,7 @@ import (
 
 	"promptgrinder/internal/cli"
 	"promptgrinder/internal/config"
+	"promptgrinder/internal/roleenhance"
 	pgruntime "promptgrinder/internal/runtime"
 )
 
@@ -28,7 +29,8 @@ func main() {
 	}
 
 	service := pgruntime.NewService(cfg)
-	root := cli.NewRootCommand(service, os.Stdout, os.Stderr)
+	advisor := roleenhance.AiRoleAdvisor{Runtime: roleenhance.CodexRuntime{Executable: cfg.CodexExecutable}}
+	root := cli.NewRootCommandWithRoleAdvisor(service, os.Stdout, os.Stderr, advisor)
 	if err := root.Execute(); err != nil {
 		if code, ok := cli.ExitCode(err); ok {
 			os.Exit(code)

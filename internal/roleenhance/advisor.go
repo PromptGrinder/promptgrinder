@@ -219,7 +219,11 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 			return fmt.Errorf("recommendation %q contains an empty value", r.ID)
 		}
 		switch r.Field {
-		case "technology", "quality_gates", "runtime.preferred":
+		case "technology":
+			if !knownTechnology(current, value) {
+				return fmt.Errorf("recommendation %q proposes ungrounded technology %q", r.ID, value)
+			}
+		case "quality_gates", "runtime.preferred":
 			if !strings.Contains(corpus, strings.ToLower(value)) {
 				return fmt.Errorf("recommendation %q proposes ungrounded %s %q", r.ID, r.Field, value)
 			}
@@ -231,6 +235,22 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 		}
 	}
 	return nil
+}
+
+func knownTechnology(current CurrentState, proposed string) bool {
+	for _, value := range append(append([]string{}, current.Project.Languages...), current.Project.Frameworks...) {
+		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(proposed)) {
+			return true
+		}
+	}
+	for _, role := range current.Roles {
+		for _, value := range role.Technology {
+			if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(proposed)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func stringValues(value any) ([]string, bool) {
