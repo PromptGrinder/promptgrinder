@@ -1,4 +1,4 @@
-# PromptGrinder
+# PromptGrinder — the app that builds itself
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
