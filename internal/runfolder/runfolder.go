@@ -85,15 +85,26 @@ type Summary struct {
 }
 
 type ProgressEvent struct {
-	Type       string     `json:"type"`
-	SequenceID string     `json:"sequence_id"`
-	PromptName string     `json:"prompt_name,omitempty"`
-	PromptType PromptType `json:"prompt_type,omitempty"`
-	Status     string     `json:"status,omitempty"`
-	WorkerID   string     `json:"worker_id,omitempty"`
-	LogPath    string     `json:"log_path,omitempty"`
-	Completed  int        `json:"completed"`
-	Total      int        `json:"total"`
+	Type       string           `json:"type"`
+	SequenceID string           `json:"sequence_id"`
+	PromptName string           `json:"prompt_name,omitempty"`
+	PromptType PromptType       `json:"prompt_type,omitempty"`
+	Status     string           `json:"status,omitempty"`
+	WorkerID   string           `json:"worker_id,omitempty"`
+	LogPath    string           `json:"log_path,omitempty"`
+	Completed  int              `json:"completed"`
+	Total      int              `json:"total"`
+	Folder     string           `json:"folder,omitempty"`
+	Duration   time.Duration    `json:"duration,omitempty"`
+	Inventory  []ProgressPrompt `json:"inventory,omitempty"`
+}
+
+// ProgressPrompt is the prompt metadata needed to render an ordered run
+// inventory. Content is deliberately excluded from progress events.
+type ProgressPrompt struct {
+	Name   string     `json:"name"`
+	Type   PromptType `json:"type"`
+	Status string     `json:"status"`
 }
 
 type persistedProgressEvent struct {
@@ -296,7 +307,19 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			return summary, err
 		}
 	}
-	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
+	inventory := make([]ProgressPrompt, 0, len(prompts))
+	itemStatuses := make(map[string]string, len(sequence.Items))
+	for _, item := range sequence.Items {
+		itemStatuses[item.PromptName] = item.Status
+	}
+	for _, prompt := range prompts {
+		status := itemStatuses[prompt.Name]
+		if status == "" || status == "running" {
+			status = "pending"
+		}
+		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, Type: prompt.Type, Status: status})
+	}
+	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
 	if err := store.ensure(); err != nil {
 		return summary, err
 	}
@@ -365,7 +388,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			_ = store.saveRun(runState)
 			summary.Run = runState
 			summary.Failed = err
-			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), Completed: len(runState.Completed), Total: len(prompts)})
 			return summary, err
 		}
 		if err := store.savePrompt(promptState); err != nil {
@@ -386,7 +409,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			return summary, err
 		}
 		completed[prompt.Name] = true
-		emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "succeeded", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Completed: len(runState.Completed), Total: len(prompts)})
+		emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "succeeded", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), Completed: len(runState.Completed), Total: len(prompts)})
 	}
 	runState.Status = "completed"
 	runState.Current = ""
@@ -407,6 +430,13 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	summary.Sequence = &sequence
 	emitProgress(options, ProgressEvent{Type: "run.completed", SequenceID: sequence.SequenceID, Completed: len(runState.Completed), Total: len(prompts)})
 	return summary, nil
+}
+
+func promptDuration(prompt PromptState) time.Duration {
+	if prompt.StartedAt == nil || prompt.FinishedAt == nil {
+		return 0
+	}
+	return prompt.FinishedAt.Sub(*prompt.StartedAt)
 }
 
 func emitProgress(options Options, event ProgressEvent) {
