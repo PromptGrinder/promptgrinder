@@ -234,10 +234,10 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	}
 	lines = append(lines, "Prompts:")
 	for i, item := range r.items {
-		icon := stateIcon(item.Status)
+		icon := colorizeStatusIcon(stateIcon(item.Status), item.Status, themeColor(r.opts.Theme))
 		duration, detail := "", r.details[item.Name]
 		if item.Name == r.active {
-			icon = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[r.frame%10]
+			icon = colorizeStatusIcon([]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[r.frame%10], "active", themeColor(r.opts.Theme))
 			duration = " " + formatDuration(r.now().Sub(r.activeSince))
 		} else if item.Status == "succeeded" || item.Status == "failed" || item.Status == "skipped" {
 			duration = " " + formatDuration(detail.Duration)

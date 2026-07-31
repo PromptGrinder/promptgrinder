@@ -86,6 +86,26 @@ func TestRunFolderRendererNoColorForcesPlain(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererUsesSharedStatusColors(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeMinimal})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{
+		{Name: "10-ok.md", Type: runfolder.TypeImplement, Status: "pending"},
+		{Name: "20-bad.md", Type: runfolder.TypeTest, Status: "pending"},
+	}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: "10-ok.md", PromptType: runfolder.TypeImplement, Status: "succeeded"})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "20-bad.md", PromptType: runfolder.TypeTest, Status: "failed"})
+	r.Close()
+	got := out.String()
+	if !strings.Contains(got, "\033[36m✓\033[0m") {
+		t.Fatalf("success does not use minimal theme color: %q", got)
+	}
+	if !strings.Contains(got, "\033[31m✗\033[0m") {
+		t.Fatalf("failure does not use shared red color: %q", got)
+	}
+}
+
 type fakeTicker struct {
 	ch      chan time.Time
 	stopped atomic.Bool
