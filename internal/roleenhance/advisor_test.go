@@ -156,3 +156,21 @@ func TestValidateRecommendationsAllowsGroundedRemovalAndRejectsSecrets(t *testin
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestValidateRecommendationsAllowsGoGroundedByCollectedModule(t *testing.T) {
+	current, evidence := advisorFixture()
+	current.Project.Languages = nil
+	for i := range current.Roles {
+		current.Roles[i].Technology = nil
+	}
+	recommendation := Recommendation{ID: "go", RoleID: "backend", Field: "technology", Operation: OperationAppend, Value: "Go", Confidence: ConfidenceHigh, Explanation: "go.mod identifies the repository language", Evidence: []Citation{{Path: "go.mod"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("go.mod-grounded technology rejected: %v", err)
+	}
+
+	evidence.Sources = []EvidenceSource{{Kind: EvidenceDocumentation, Path: "README.md", Excerpt: "mentions Go without a module"}}
+	evidence.Facts = nil
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err == nil || !strings.Contains(err.Error(), "ungrounded technology") {
+		t.Fatalf("technology without go.mod evidence error = %v", err)
+	}
+}

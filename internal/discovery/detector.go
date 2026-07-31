@@ -60,6 +60,9 @@ func (TechnologyDetector) Detect(root string) (Detection, error) {
 		}
 		lower := strings.ToLower(name)
 		switch {
+		case lower == "go.mod":
+			languages.add("Go")
+			tools.add("Go modules")
 		case lower == "pom.xml":
 			languages.add("Java")
 			tools.add("Maven")

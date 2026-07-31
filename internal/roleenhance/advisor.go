@@ -220,7 +220,7 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 		}
 		switch r.Field {
 		case "technology":
-			if !knownTechnology(current, value) {
+			if !knownTechnology(current, evidence, value) {
 				return fmt.Errorf("recommendation %q proposes ungrounded technology %q", r.ID, value)
 			}
 		case "quality_gates", "runtime.preferred":
@@ -237,7 +237,7 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 	return nil
 }
 
-func knownTechnology(current CurrentState, proposed string) bool {
+func knownTechnology(current CurrentState, evidence Evidence, proposed string) bool {
 	for _, value := range append(append([]string{}, current.Project.Languages...), current.Project.Frameworks...) {
 		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(proposed)) {
 			return true
@@ -246,6 +246,18 @@ func knownTechnology(current CurrentState, proposed string) bool {
 	for _, role := range current.Roles {
 		for _, value := range role.Technology {
 			if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(proposed)) {
+				return true
+			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(proposed), "Go") {
+		for _, source := range evidence.Sources {
+			if source.Kind == EvidenceRepository && source.Path == "go.mod" {
+				return true
+			}
+		}
+		for _, fact := range evidence.Facts {
+			if fact.Kind == EvidenceRepository && fact.Path == "go.mod" {
 				return true
 			}
 		}
