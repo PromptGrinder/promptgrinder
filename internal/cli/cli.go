@@ -50,6 +50,7 @@ type Service interface {
 	Defaults() config.DefaultsReport
 	Validate(path, engineOverride string) (worker.ValidationPlan, error)
 	Sequences() ([]pgruntime.SequenceProgress, error)
+	SequenceID(path string, options pgruntime.RunFolderOptions) (string, error)
 	Sequence(sequenceID string) (pgruntime.SequenceState, error)
 	TerminalCandidates() ([]pgruntime.TerminalCandidate, error)
 	CloseTerminals(workerIDs []string) ([]pgruntime.TerminalCandidate, error)
@@ -847,7 +848,7 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options := buildRunFolderOptions(cmd)
 			if runFolderDetach {
-				return startDetachedRunFolder(stdout, service.Defaults().HomeDir, args[0], options)
+				return startDetachedRunFolder(stdout, service, service.Defaults().HomeDir, args[0], options)
 			}
 			theme, themeErr := ui.NormalizeTheme(themeName)
 			if themeErr != nil {
@@ -891,6 +892,7 @@ Examples:
 	root.AddCommand(runFolderSupervisor)
 
 	var sequencesJSON bool
+	var sequencesFolder string
 	sequences := &cobra.Command{
 		Use:   "sequences",
 		Short: "List prompt sequence progress.",
@@ -903,6 +905,20 @@ Examples:
 				}
 				return err
 			}
+			if sequencesFolder != "" {
+				wanted, absErr := filepath.Abs(sequencesFolder)
+				if absErr != nil {
+					return absErr
+				}
+				filtered := items[:0]
+				for _, item := range items {
+					folder, folderErr := filepath.Abs(item.Folder)
+					if folderErr == nil && filepath.Clean(folder) == filepath.Clean(wanted) {
+						filtered = append(filtered, item)
+					}
+				}
+				items = filtered
+			}
 			if sequencesJSON {
 				return writeJSON(stdout, sequencesJSONOutput{Sequences: items}, compactJSON)
 			}
@@ -910,14 +926,15 @@ Examples:
 				fmt.Fprintln(stdout, "No sequences found.")
 				return nil
 			}
-			fmt.Fprintf(stdout, "%-18s %-12s %-8s %-8s %-8s CURRENT\n", "SEQUENCE", "STATUS", "DONE", "FAILED", "PENDING")
+			fmt.Fprintf(stdout, "%-18s %-12s %-8s %-8s %-8s %-20s %-20s %-20s %-20s CURRENT\n", "SEQUENCE", "STATUS", "DONE", "FAILED", "PENDING", "CREATED (UTC)", "STARTED (UTC)", "UPDATED (UTC)", "FINISHED (UTC)")
 			for _, item := range items {
-				fmt.Fprintf(stdout, "%-18s %-12s %-8s %-8d %-8d %s\n", item.SequenceID, item.Status, fmt.Sprintf("%d/%d", item.Succeeded, item.Total), item.Failed, item.Pending, valueOrDash(item.Current))
+				fmt.Fprintf(stdout, "%-18s %-12s %-8s %-8d %-8d %-20s %-20s %-20s %-20s %s\n", item.SequenceID, item.Status, fmt.Sprintf("%d/%d", item.Succeeded, item.Total), item.Failed, item.Pending, formatTime(item.CreatedAt), formatTime(item.StartedAt), formatTime(item.UpdatedAt), formatTime(item.FinishedAt), valueOrDash(item.Current))
 			}
 			return nil
 		},
 	}
 	sequences.Flags().BoolVar(&sequencesJSON, "json", false, "print machine-readable JSON")
+	sequences.Flags().StringVar(&sequencesFolder, "folder", "", "show only sequences for this folder (relative or absolute path)")
 	root.AddCommand(sequences)
 
 	var sequenceJSON bool
@@ -2318,6 +2335,10 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 	fmt.Fprintf(stdout, "Sequence: %s\n", sequence.SequenceID)
 	fmt.Fprintf(stdout, "Status: %s\n", sequence.Status)
 	fmt.Fprintf(stdout, "Folder: %s\n", sequence.Folder)
+	fmt.Fprintf(stdout, "Created (UTC): %s\n", formatTime(sequence.CreatedAt))
+	fmt.Fprintf(stdout, "Started (UTC): %s\n", formatTime(sequence.StartedAt))
+	fmt.Fprintf(stdout, "Updated (UTC): %s\n", formatTime(sequence.UpdatedAt))
+	fmt.Fprintf(stdout, "Finished (UTC): %s\n", formatTime(sequence.FinishedAt))
 	if sequence.EventPath != "" {
 		fmt.Fprintf(stdout, "Events: %s\n", sequence.EventPath)
 	}
@@ -2345,7 +2366,27 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 	for i, item := range sequence.Items {
 		label := sequencePromptLabel(item)
 		fmt.Fprintf(stdout, "%-4d %-44s %-12s %-28s %s\n", i+1, truncate(label, 44), item.Status, valueOrDash(item.WorkerID), valueOrDash(item.LogPath))
+		if item.CompletionStatus != "" || item.NextPromptSafe != nil || item.CompletionReason != "" {
+			fmt.Fprintf(stdout, "     Completion: STATUS=%s NEXT_PROMPT_SAFE=%s", valueOrDash(item.CompletionStatus), sequenceBool(item.NextPromptSafe))
+			if item.ExitCode != nil {
+				fmt.Fprintf(stdout, " engine_exit_code=%d", *item.ExitCode)
+			}
+			if item.CompletionReason != "" {
+				fmt.Fprintf(stdout, " reason=%s", item.CompletionReason)
+			}
+			fmt.Fprintln(stdout)
+		}
 	}
+}
+
+func sequenceBool(value *bool) string {
+	if value == nil {
+		return "-"
+	}
+	if *value {
+		return "yes"
+	}
+	return "no"
 }
 
 func printWorkers(stdout io.Writer, service Service, workers []state.Worker, includeEvents bool) error {
@@ -2413,7 +2454,11 @@ func truncate(value string, max int) string {
 	return value[:max-3] + "..."
 }
 
-func startDetachedRunFolder(stdout io.Writer, homeDir, folder string, options pgruntime.RunFolderOptions) error {
+func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder string, options pgruntime.RunFolderOptions) error {
+	sequenceID, err := service.SequenceID(folder, options)
+	if err != nil {
+		return err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -2458,6 +2503,8 @@ func startDetachedRunFolder(stdout io.Writer, homeDir, folder string, options pg
 		return err
 	}
 	fmt.Fprintf(stdout, "Detached run-folder supervisor started\n")
+	fmt.Fprintf(stdout, "Sequence: %s\n", sequenceID)
+	fmt.Fprintf(stdout, "Status: promptgrinder sequence %s\n", sequenceID)
 	fmt.Fprintf(stdout, "PID: %d\n", cmd.Process.Pid)
 	fmt.Fprintf(stdout, "Log: %s\n", logPath)
 	fmt.Fprintln(stdout, "Progress: promptgrinder sequences")

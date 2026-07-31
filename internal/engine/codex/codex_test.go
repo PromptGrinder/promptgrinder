@@ -449,6 +449,17 @@ func TestParseResultExtractsBlockingCompletionReport(t *testing.T) {
 	}
 }
 
+func TestParseResultRejectsDuplicateCompletionFields(t *testing.T) {
+	log := []byte("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"STATUS: PASS\\nSTATUS: BLOCKED\\nNEXT_PROMPT_SAFE: yes\"}}\n")
+	result := Engine{}.ParseResult(execution.Context{}, log)
+	if result.CompletionReason != "duplicate completion fields" {
+		t.Fatalf("result = %#v", result)
+	}
+	if err := result.OrderedCompletionError(); err == nil {
+		t.Fatal("duplicate semantic fields must not be accepted")
+	}
+}
+
 func TestExecuteWorkerTimeout(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "fake-codex")

@@ -22,12 +22,20 @@ type fakeLauncher struct {
 	logText           string
 	onLaunch          func(path string)
 	reportedSessionID string
+	result            *state.EngineResult
 }
 
 type launchCall struct {
 	Path      string
 	Content   string
 	SessionID string
+}
+
+type recordingNotifier struct{ notifications []Notification }
+
+func (n *recordingNotifier) Notify(notification Notification) error {
+	n.notifications = append(n.notifications, notification)
+	return nil
 }
 
 func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Worker, error) {
@@ -42,9 +50,14 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 		return state.Worker{ID: "wrk_running", Status: state.StatusRunning}, nil
 	}
 	zero := 0
-	worker := state.Worker{ID: "wrk_" + strings.TrimSuffix(filepath.Base(path), ".md"), Status: state.StatusSucceeded, ExitCode: &zero}
+	nextSafe := true
+	worker := state.Worker{ID: "wrk_" + strings.TrimSuffix(filepath.Base(path), ".md"), Status: state.StatusSucceeded, ExitCode: &zero, EngineResult: &state.EngineResult{Summary: "done\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: &nextSafe}}
+	if f.result != nil {
+		copy := *f.result
+		worker.EngineResult = &copy
+	}
 	if f.reportedSessionID != "" {
-		worker.EngineResult = &state.EngineResult{SessionID: f.reportedSessionID}
+		worker.EngineResult.SessionID = f.reportedSessionID
 	}
 	if f.logDir != "" {
 		worker.LogPath = filepath.Join(f.logDir, worker.ID+".log")
@@ -54,6 +67,61 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 	}
 	return worker, nil
 }
+
+func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
+	cases := []struct {
+		name   string
+		result *state.EngineResult
+		reason string
+	}{
+		{name: "blocked", result: completionResult("BLOCKED", false), reason: "STATUS is BLOCKED"},
+		{name: "partial", result: completionResult("PARTIAL", false), reason: "STATUS is PARTIAL"},
+		{name: "missing status", result: &state.EngineResult{Summary: "NEXT_PROMPT_SAFE: yes", NextPromptSafe: boolPtr(true)}, reason: "missing or malformed STATUS"},
+		{name: "unsafe", result: completionResult("PASS", false), reason: "NEXT_PROMPT_SAFE is no"},
+		{name: "empty final", result: &state.EngineResult{}, reason: "empty final answer"},
+		{name: "clarification", result: &state.EngineResult{Summary: "Could you clarify the requirement?"}, reason: "missing or malformed STATUS"},
+		{name: "duplicate", result: &state.EngineResult{Summary: "STATUS: PASS\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: boolPtr(true), CompletionReason: "duplicate completion fields"}, reason: "duplicate completion fields"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, home := t.TempDir(), t.TempDir()
+			writePromptFile(t, dir, "10-implement-first.md", "first")
+			writePromptFile(t, dir, "20-test-never.md", "never")
+			launcher := &fakeLauncher{result: tc.result}
+			summary, err := Run(dir, Options{HomeDir: home}, launcher)
+			if err == nil || !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("err = %v", err)
+			}
+			if len(launcher.calls) != 1 || summary.Sequence.Status != "failed" || summary.Sequence.Items[1].Status != "pending" {
+				t.Fatalf("calls=%d sequence=%#v", len(launcher.calls), summary.Sequence)
+			}
+			item := summary.Sequence.Items[0]
+			if item.WorkerID == "" || item.ExitCode == nil || *item.ExitCode != 0 || item.CompletionReason == "" {
+				t.Fatalf("persisted item = %#v", item)
+			}
+		})
+	}
+}
+
+func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "00-specification.md", "shared")
+	writePromptFile(t, dir, "10-implement-a.md", "task")
+	launcher := &fakeLauncher{}
+	if _, err := Run(dir, Options{HomeDir: t.TempDir()}, launcher); err != nil {
+		t.Fatal(err)
+	}
+	content := launcher.calls[0].Content
+	if strings.Count(content, "# Required Completion Report") != 1 || !strings.Contains(content, "STATUS: PASS") || !strings.Contains(content, "NEXT_PROMPT_SAFE: yes") {
+		t.Fatalf("assembled prompt = %q", content)
+	}
+}
+
+func completionResult(status string, safe bool) *state.EngineResult {
+	return &state.EngineResult{Summary: "done", CompletionStatus: status, NextPromptSafe: boolPtr(safe)}
+}
+
+func boolPtr(value bool) *bool { return &value }
 
 func TestRunFolderReusesPersistedCodexSession(t *testing.T) {
 	dir := t.TempDir()
@@ -109,9 +177,10 @@ func TestClassifyPromptTypes(t *testing.T) {
 	}
 }
 
-func TestDiscoverIncludesOnlyNumberedPrompts(t *testing.T) {
+func TestDiscoverIncludesOnlyRecognizedNumberedPrompts(t *testing.T) {
 	dir := t.TempDir()
 	writePromptFile(t, dir, "10-custom-task.md", "task")
+	writePromptFile(t, dir, "20-implement-task.md", "task")
 	writePromptFile(t, dir, "README.md", "overview")
 	writePromptFile(t, dir, "notes.md", "notes")
 
@@ -119,7 +188,7 @@ func TestDiscoverIncludesOnlyNumberedPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(prompts) != 1 || prompts[0].Name != "10-custom-task.md" {
+	if len(prompts) != 1 || prompts[0].Name != "20-implement-task.md" {
 		t.Fatalf("prompts = %#v", prompts)
 	}
 }
@@ -495,15 +564,12 @@ func TestStopOnFailureAndRetryFailedOnResume(t *testing.T) {
 	}
 }
 
-func TestUnknownPromptRunsWithWarning(t *testing.T) {
+func TestUnknownPromptIsNotRunnable(t *testing.T) {
 	dir := t.TempDir()
 	writePromptFile(t, dir, "10-custom.md", "custom")
-	summary, err := Run(dir, Options{}, &fakeLauncher{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(summary.Warnings) != 1 || !strings.Contains(summary.Warnings[0], "unknown prompt type") {
-		t.Fatalf("warnings = %#v", summary.Warnings)
+	_, err := Run(dir, Options{}, &fakeLauncher{})
+	if err == nil || !strings.Contains(err.Error(), "no Markdown prompts") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -537,6 +603,22 @@ func TestCurrentSequenceReturnsNewestEvenWhenOlderSequenceIsRunning(t *testing.T
 	}
 	if current.SequenceID != newest.SequenceID {
 		t.Fatalf("current = %s, want %s", current.SequenceID, newest.SequenceID)
+	}
+}
+
+func TestOldPersistedSequenceWithoutNewTimestampsLoads(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "state", "sequences")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"sequence_id":"seq_old_format","folder":"/tmp/tasks","status":"completed","items":[]}`
+	if err := os.WriteFile(filepath.Join(root, "seq_old_format.json"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := LoadSequence(home, "seq_old_format")
+	if err != nil || sequence.SequenceID != "seq_old_format" || sequence.CreatedAt != nil || sequence.FinishedAt != nil {
+		t.Fatalf("sequence=%#v err=%v", sequence, err)
 	}
 }
 
@@ -592,7 +674,7 @@ func TestReconcileSequencesPreservesHealthySupervisor(t *testing.T) {
 	store := newSequenceStore(home)
 	oldTime := time.Now().UTC().Add(-48 * time.Hour)
 	now := time.Now().UTC()
-	supervisor := &Supervisor{ID: "sup_live", PID: 123, Status: "running", HeartbeatAt: &now}
+	supervisor := &Supervisor{ID: "sup_live", PID: os.Getpid(), Status: "running", HeartbeatAt: &now}
 	sequence := SequenceState{
 		SequenceID: "seq_live",
 		Status:     "running",
@@ -618,6 +700,30 @@ func TestReconcileSequencesPreservesHealthySupervisor(t *testing.T) {
 	}
 	if len(stale) != 0 {
 		t.Fatalf("stale = %#v", stale)
+	}
+}
+
+func TestReconcileSequencesMarksDeadSupervisorDespiteFreshHeartbeat(t *testing.T) {
+	home := t.TempDir()
+	store := newSequenceStore(home)
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	fresh := time.Now().UTC()
+	supervisor := &Supervisor{ID: "sup_dead", PID: 99999999, Status: "running", HeartbeatAt: &fresh}
+	sequence := SequenceState{SequenceID: "seq_dead", Status: "running", UpdatedAt: &old, Supervisor: supervisor, Items: []SequenceItem{{PromptName: "10-implement-a.md", Status: "running"}}}
+	if err := store.save(sequence); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, "state", "supervisors")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(supervisor)
+	if err := os.WriteFile(filepath.Join(root, "sup_dead.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := ReconcileSequences(home, 24*time.Hour, true)
+	if err != nil || len(stale) != 1 || stale[0].Status != "interrupted" {
+		t.Fatalf("stale=%#v err=%v", stale, err)
 	}
 }
 
@@ -658,6 +764,26 @@ func TestRunPersistsSupervisorLifecycleAndSequenceEvents(t *testing.T) {
 		if !strings.Contains(string(events), want) {
 			t.Fatalf("events = %s, missing %s", events, want)
 		}
+	}
+}
+
+func TestDetachedNotificationsReportSuccessAndFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, fail, want string
+	}{{"success", "", "notification.success"}, {"failure", "10-implement-a.md", "notification.failure"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, home := t.TempDir(), t.TempDir()
+			writePromptFile(t, dir, "10-implement-a.md", "task")
+			notifier := &recordingNotifier{}
+			_, _ = Run(dir, Options{HomeDir: home, SupervisorID: "sup_notify", Notifier: notifier}, &fakeLauncher{failName: tc.fail})
+			if len(notifier.notifications) != 1 || notifier.notifications[0].Type != tc.want {
+				t.Fatalf("notifications = %#v", notifier.notifications)
+			}
+			events, err := os.ReadFile(filepath.Join(home, "events", "sequences", notifier.notifications[0].SequenceID+".jsonl"))
+			if err != nil || !strings.Contains(string(events), `"type":"`+tc.want+`"`) {
+				t.Fatalf("events=%q err=%v", events, err)
+			}
+		})
 	}
 }
 

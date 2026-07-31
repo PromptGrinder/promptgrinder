@@ -39,7 +39,19 @@ func (t *synchronousTerminal) Launch(scriptPath string) error {
 	if len(t.exitCodes) >= len(t.launched) {
 		exitCode = t.exitCodes[len(t.launched)-1]
 	}
-	return t.store.MarkFinished(t.store.RecordPath(workerID), exitCode)
+	if err := t.store.MarkFinished(t.store.RecordPath(workerID), exitCode); err != nil {
+		return err
+	}
+	if exitCode == 0 {
+		worker, err := t.store.Load(workerID)
+		if err != nil {
+			return err
+		}
+		nextSafe := true
+		worker.EngineResult = &state.EngineResult{Summary: "STATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: &nextSafe}
+		return t.store.Save(worker)
+	}
+	return nil
 }
 
 func (t *synchronousTerminal) launchCount() int {

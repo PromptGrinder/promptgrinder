@@ -2138,6 +2138,22 @@ func TestCLIRunFolderEngineOverrideAndUnknownExitCode(t *testing.T) {
 	}
 }
 
+func TestCLIDetachedRunFolderPrintsSequenceInspectionCommand(t *testing.T) {
+	home := t.TempDir()
+	service := &fakeService{sequence: pgruntime.SequenceState{SequenceID: "seq_detached"}, defaultsReport: config.DefaultsReport{HomeDir: home}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "task folder", "--detach"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Sequence: seq_detached", "Status: promptgrinder sequence seq_detached"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output = %q, missing %q", out.String(), want)
+		}
+	}
+}
+
 func TestCLISequences(t *testing.T) {
 	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
 	service := &fakeService{sequences: []pgruntime.SequenceProgress{{
@@ -2178,6 +2194,28 @@ func TestCLISequencesJSON(t *testing.T) {
 	}
 	if len(decoded.Sequences) != 1 || decoded.Sequences[0].SequenceID != "seq_abc123" {
 		t.Fatalf("decoded = %#v", decoded)
+	}
+}
+
+func TestCLISequencesFiltersNormalizedFolderWithSpaces(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "task folder")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	service := &fakeService{sequences: []pgruntime.SequenceProgress{
+		{SequenceID: "seq_match", Folder: folder},
+		{SequenceID: "seq_other", Folder: filepath.Join(root, "other")},
+	}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"sequences", "--folder", "task folder"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "seq_match") || strings.Contains(out.String(), "seq_other") {
+		t.Fatalf("output = %q", out.String())
 	}
 }
 
@@ -2435,6 +2473,13 @@ func (f *fakeService) Validate(path, engineOverride string) (worker.ValidationPl
 
 func (f *fakeService) Sequences() ([]pgruntime.SequenceProgress, error) {
 	return f.sequences, nil
+}
+
+func (f *fakeService) SequenceID(path string, options pgruntime.RunFolderOptions) (string, error) {
+	if f.sequence.SequenceID != "" {
+		return f.sequence.SequenceID, nil
+	}
+	return "seq_test", nil
 }
 
 func (f *fakeService) Sequence(sequenceID string) (pgruntime.SequenceState, error) {

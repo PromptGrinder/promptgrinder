@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -62,6 +63,8 @@ type EngineResult struct {
 	SessionID        string         `json:"session_id,omitempty"`
 	CompletionStatus string         `json:"completion_status,omitempty"`
 	NextPromptSafe   *bool          `json:"next_prompt_safe,omitempty"`
+	CompletionReason string         `json:"completion_reason,omitempty"`
+	EngineExitCode   *int           `json:"engine_exit_code,omitempty"`
 	TokensInput      *int64         `json:"tokens_input,omitempty"`
 	TokensOutput     *int64         `json:"tokens_output,omitempty"`
 	TokensTotal      *int64         `json:"tokens_total,omitempty"`
@@ -75,12 +78,38 @@ func (r EngineResult) Empty() bool {
 		r.SessionID == "" &&
 		r.CompletionStatus == "" &&
 		r.NextPromptSafe == nil &&
+		r.CompletionReason == "" &&
+		r.EngineExitCode == nil &&
 		r.TokensInput == nil &&
 		r.TokensOutput == nil &&
 		r.TokensTotal == nil &&
 		r.Cost == nil &&
 		r.CostCurrency == "" &&
 		len(r.Diagnostics) == 0
+}
+
+// OrderedCompletionError validates the completion contract used by ordered
+// workflows. Independent runs may continue to use the looser engine contract.
+func (r EngineResult) OrderedCompletionError() error {
+	if r.CompletionReason != "" {
+		return errors.New(r.CompletionReason)
+	}
+	if strings.TrimSpace(r.Summary) == "" {
+		return fmt.Errorf("empty final answer")
+	}
+	if r.CompletionStatus != "PASS" {
+		if r.CompletionStatus == "" {
+			return fmt.Errorf("missing or malformed STATUS field")
+		}
+		return fmt.Errorf("STATUS is %s, not PASS", r.CompletionStatus)
+	}
+	if r.NextPromptSafe == nil {
+		return fmt.Errorf("missing or malformed NEXT_PROMPT_SAFE field")
+	}
+	if !*r.NextPromptSafe {
+		return fmt.Errorf("NEXT_PROMPT_SAFE is no")
+	}
+	return nil
 }
 
 func (r EngineResult) RejectsContinuation() bool {

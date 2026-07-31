@@ -168,12 +168,40 @@ requests, publishes releases, or merges branches.
 | `logs <worker-id>` | Read one worker log |
 | `events [worker-id]` | Read or follow worker or global events |
 | `sequence <id\|current>` | Inspect an ordered workflow |
+| `sequences [--folder <path>]` | List ordered workflows, optionally filtered by a normalized relative or absolute folder path |
 | `cancel <worker-id>` | Cancel an active worker |
 | `reconcile` | Inspect stale workers and sequences |
 
 Use `promptgrinder --help` and `promptgrinder <command> --help` for the complete
 command and option reference. Add `--json` where supported for structured
 output.
+
+### Ordered folder completion contract
+
+`run-folder` discovers only recognized numbered Markdown names:
+`00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
+`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. README files,
+notes, completion reports, and unknown numbered file types are never runnable.
+Specifications are shared context unless `--include-specification` is set.
+
+PromptGrinder appends one visible completion-report instruction to every
+runnable ordered prompt, including the first prompt, resumed prompts, prompts
+using shared specifications, and non-Codex engines. A zero engine exit is only
+successful when the final structured result contains exactly one `STATUS:
+PASS` and exactly one `NEXT_PROMPT_SAFE: yes`. Missing, malformed, duplicate,
+blocked, partial, or unsafe reports stop the sequence and are persisted with
+the worker ID, log, engine exit code, completion fields, and semantic reason.
+Independent `run` commands retain their existing engine behavior.
+
+Sequence human and JSON output includes UTC created, started, updated, and
+finished timestamps; older records without those fields remain readable.
+Detached startup prints the sequence ID and a copyable `promptgrinder sequence
+<id>` command. Detached completion and failure notifications are deterministic
+local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
+
+For now, task bodies must contain the actual instructions to execute. Custom
+YAML fields are not an instruction language and unsupported frontmatter keys
+are rejected rather than treated as task content.
 
 `roles enhance` is review-only by default and with `--reject-all`. It writes
 nothing unless `--apply-all` or `--apply-selected <id>[,<id>...]` is supplied;

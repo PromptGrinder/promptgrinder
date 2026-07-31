@@ -632,6 +632,9 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 	defer lease.Release()
 	options.BaseConfig = s.Worker.BaseConfig
 	options.UseRepoConfig = s.Worker.UseRepoConfig
+	if options.SupervisorID != "" && options.Notifier == nil {
+		options.Notifier = runfolder.LocalNotifier{Path: filepath.Join(options.HomeDir, "events", "notifications.jsonl")}
+	}
 	manager := s.Worker
 	manager.EngineOverride = options.EngineOverride
 	manager.RepositoryOverride = repoRoot
@@ -648,6 +651,15 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 
 func (s Service) Sequences() ([]SequenceProgress, error) {
 	return runfolder.ListSequences(filepath.Dir(s.Store.WorkersDir))
+}
+
+func (s Service) SequenceID(path string, options RunFolderOptions) (string, error) {
+	if options.HomeDir == "" {
+		options.HomeDir = filepath.Dir(s.Store.WorkersDir)
+	}
+	options.BaseConfig = s.Worker.BaseConfig
+	options.UseRepoConfig = s.Worker.UseRepoConfig
+	return runfolder.ResolveSequenceID(path, options)
 }
 
 func (s Service) Sequence(sequenceID string) (SequenceState, error) {
@@ -857,6 +869,7 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 		return err
 	}
 	result := state.EngineResult{}
+	engineExitCode := exitCode
 	resultParsed := false
 	adapter, err := s.Registry.Lookup(worker.Engine)
 	if err == nil {
@@ -873,12 +886,19 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 				if ctx, contextErr := execution.NewContext(worker, config.Config{}, nil); contextErr == nil {
 					result = parser.ParseResult(ctx, logData)
 					resultParsed = !result.Empty()
+					if resultParsed || worker.Engine == "codex" {
+						result.EngineExitCode = &engineExitCode
+					}
 				}
 			}
 		}
 	}
 	semanticFailure := exitCode == 0 && result.RejectsContinuation()
 	malformedSuccess := exitCode == 0 && worker.Engine == "codex" && strings.TrimSpace(result.Summary) == ""
+	if malformedSuccess {
+		result.CompletionReason = "empty final answer"
+		resultParsed = true
+	}
 	if semanticFailure {
 		exitCode = 1
 	}
@@ -1027,6 +1047,12 @@ func engineResultEventData(result state.EngineResult) map[string]any {
 	}
 	if result.NextPromptSafe != nil {
 		fields = append(fields, "next_prompt_safe")
+	}
+	if result.CompletionReason != "" {
+		fields = append(fields, "completion_reason")
+	}
+	if result.EngineExitCode != nil {
+		fields = append(fields, "engine_exit_code")
 	}
 	if result.TokensInput != nil {
 		fields = append(fields, "tokens_input")
