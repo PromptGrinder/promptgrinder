@@ -50,6 +50,10 @@ func (b *ttyBuffer) IsTerminal() bool {
 	return true
 }
 
+type ttyInput struct{ *strings.Reader }
+
+func (ttyInput) IsTerminal() bool { return true }
+
 func TestCLIHelpUsesPromptGrinder(t *testing.T) {
 	service := &fakeService{}
 	out := &bytes.Buffer{}
@@ -245,6 +249,144 @@ func TestRolesEnhanceRejectsAmbiguousFlagsBeforeAdvisor(t *testing.T) {
 	if advisor.calls != 0 {
 		t.Fatal("advisor called for invalid flags")
 	}
+}
+
+func TestRolesEnhanceInteractiveMenuBranches(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		want       []string
+		wantRole   string
+		forbidRole string
+	}{
+		{name: "save", input: "s\n", want: []string{"Apply safe changes", "Review changes one by one", "Edit recommendations", "Reject all", "saved for later"}, wantRole: "description: old"},
+		{name: "invalid retry and apply safe", input: "wat\na\n", want: []string{"Invalid choice", "Applied 0 safe change"}, wantRole: "description: old"},
+		{name: "reject", input: "x\ny\n", want: []string{"Review rejected", "No role files were written"}, wantRole: "description: old"},
+		{name: "review replacement confirmation", input: "r\na\nn\nq\n", want: []string{"Explicitly approve this replacement", "saved for later"}, wantRole: "description: old"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := roleEnhanceCLIRepo(t)
+			advisor := interactiveRoleAdvisor()
+			out := &ttyBuffer{}
+			service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: filepath.Join(t.TempDir(), "home")}}}
+			cmd := newRootCommandWithRoleAdvisor(service, out, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+			cmd.SetIn(ttyInput{strings.NewReader(tt.input)})
+			cmd.SetArgs([]string{"--plain", "roles", "enhance"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("output missing %q:\n%s", want, out.String())
+				}
+			}
+			role, _ := os.ReadFile(filepath.Join(root, ".promptgrinder", "roles", "backend.yaml"))
+			if !strings.Contains(string(role), tt.wantRole) {
+				t.Fatalf("role = %s", role)
+			}
+			if strings.Contains(out.String(), "\x1b[") {
+				t.Fatalf("plain output has controls: %q", out.String())
+			}
+			if advisor.calls != 1 {
+				t.Fatalf("advisor calls = %d", advisor.calls)
+			}
+		})
+	}
+}
+
+func TestRolesEnhanceInteractiveEditAndEOFPersistWithoutYAML(t *testing.T) {
+	root := roleEnhanceCLIRepo(t)
+	advisor := interactiveRoleAdvisor()
+	out := &ttyBuffer{}
+	home := filepath.Join(t.TempDir(), "home")
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: home}}}
+	cmd := newRootCommandWithRoleAdvisor(service, out, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+	cmd.SetIn(ttyInput{strings.NewReader("e\n1\n[\"invalid\",\"scalar\"]\ne\n1\n\"Own stable APIs\"\n")})
+	cmd.SetArgs([]string{"--plain", "roles", "enhance"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Edit rejected", "Edit saved", `Proposed: "Own stable APIs"`, "saved for later"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+	role, _ := os.ReadFile(filepath.Join(root, ".promptgrinder", "roles", "backend.yaml"))
+	if !strings.Contains(string(role), "description: old") {
+		t.Fatalf("EOF edit wrote YAML: %s", role)
+	}
+	if advisor.calls != 1 {
+		t.Fatalf("advisor calls = %d", advisor.calls)
+	}
+}
+
+func TestRolesEnhancePipedInputNeverPrompts(t *testing.T) {
+	root := roleEnhanceCLIRepo(t)
+	advisor := interactiveRoleAdvisor()
+	out := &ttyBuffer{}
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: filepath.Join(t.TempDir(), "home")}}}
+	cmd := newRootCommandWithRoleAdvisor(service, out, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+	cmd.SetIn(strings.NewReader("a\n"))
+	cmd.SetArgs([]string{"roles", "enhance"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "Choose an action") || !strings.Contains(out.String(), "promptgrinder roles apply") {
+		t.Fatalf("piped output = %s", out.String())
+	}
+	role, _ := os.ReadFile(filepath.Join(root, ".promptgrinder", "roles", "backend.yaml"))
+	if !strings.Contains(string(role), "description: old") {
+		t.Fatalf("piped execution wrote YAML: %s", role)
+	}
+}
+
+func TestRolesEnhanceJSONTTYNeverPrompts(t *testing.T) {
+	root := roleEnhanceCLIRepo(t)
+	advisor := interactiveRoleAdvisor()
+	out := &ttyBuffer{}
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: filepath.Join(t.TempDir(), "home")}}}
+	cmd := newRootCommandWithRoleAdvisor(service, out, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+	cmd.SetIn(ttyInput{strings.NewReader("a\n")})
+	cmd.SetArgs([]string{"roles", "enhance", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(out.Bytes()) || strings.Contains(out.String(), "Choose an action") {
+		t.Fatalf("JSON TTY output = %s", out.String())
+	}
+	role, _ := os.ReadFile(filepath.Join(root, ".promptgrinder", "roles", "backend.yaml"))
+	if !strings.Contains(string(role), "description: old") {
+		t.Fatalf("JSON execution wrote YAML: %s", role)
+	}
+}
+
+func TestRolesEnhanceCanceledContextSavesWithoutYAML(t *testing.T) {
+	root := roleEnhanceCLIRepo(t)
+	advisor := interactiveRoleAdvisor()
+	out := &ttyBuffer{}
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{HomeDir: filepath.Join(t.TempDir(), "home")}}}
+	cmd := newRootCommandWithRoleAdvisor(service, out, &bytes.Buffer{}, func() (string, error) { return root, nil }, discovery.Discover, advisor)
+	cmd.SetIn(ttyInput{strings.NewReader("a\n")})
+	cmd.SetArgs([]string{"roles", "enhance"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := cmd.ExecuteContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "saved for later") {
+		t.Fatalf("cancel output = %s", out.String())
+	}
+	role, _ := os.ReadFile(filepath.Join(root, ".promptgrinder", "roles", "backend.yaml"))
+	if !strings.Contains(string(role), "description: old") {
+		t.Fatalf("canceled execution wrote YAML: %s", role)
+	}
+}
+
+func interactiveRoleAdvisor() *fakeRoleAdvisor {
+	return &fakeRoleAdvisor{plan: roleenhance.ReviewPlan{Items: []roleenhance.ReviewItem{
+		{Recommendation: roleenhance.Recommendation{ID: "desc", RoleID: "backend", Operation: roleenhance.OperationSet, Field: "description", Value: "Own APIs", Confidence: roleenhance.ConfidenceHigh, Explanation: "documented ownership", Evidence: []roleenhance.Citation{{Path: "README.md"}}}},
+	}}}
 }
 
 func TestCLIWorkerListAndShowTextAndJSON(t *testing.T) {

@@ -133,3 +133,83 @@ func TestReviewLifecycleSafeExcludesRemovalAndStaleWritesNothing(t *testing.T) {
 		t.Fatalf("loaded=%+v err=%v", loaded, loadErr)
 	}
 }
+
+func TestReviewLifecycleDecisionsAndEditsPersistWithoutAdvisorOrYAML(t *testing.T) {
+	root := lifecycleRepo(t)
+	advisor := &countingAdvisor{plan: lifecyclePlan()}
+	lifecycle := ReviewLifecycle{Home: filepath.Join(t.TempDir(), "home"), Advisor: advisor}
+	review, err := lifecycle.Enhance(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolePath := filepath.Join(root, ".promptgrinder", "roles", "backend.yaml")
+	before, _ := os.ReadFile(rolePath)
+	var descriptionID, removalID string
+	for _, item := range review.Items {
+		if item.Safety == SafetyRemoval {
+			removalID = item.ID
+		} else {
+			descriptionID = item.ID
+		}
+	}
+	lifecycle.Advisor = &countingAdvisor{err: errors.New("advisor must not run")}
+	review, err = lifecycle.EditValue(root, review.ID, descriptionID, "  Own stable APIs  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findStoredItem(review, descriptionID).ProposedValue; got != "Own stable APIs" || len(review.Edits) != 1 {
+		t.Fatalf("edited review = %+v", review)
+	}
+	review, err = lifecycle.Decide(root, review.ID, descriptionID, ReviewDecisionApproved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Status != ReviewStatusPartiallyDecided {
+		t.Fatalf("partial decision status = %s", review.Status)
+	}
+	review, err = lifecycle.Decide(root, review.ID, removalID, ReviewDecisionRejected)
+	if err != nil || review.Status != ReviewStatusDecided {
+		t.Fatalf("review=%+v err=%v", review, err)
+	}
+	refined, err := lifecycle.Refine(root, review.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findStoredItem(refined, descriptionID).ProposedValue != "Own stable APIs" {
+		t.Fatalf("refine lost edit: %+v", refined)
+	}
+	after, _ := os.ReadFile(rolePath)
+	if string(before) != string(after) {
+		t.Fatal("decision or edit wrote role YAML")
+	}
+	if advisor.calls != 1 {
+		t.Fatalf("advisor calls = %d", advisor.calls)
+	}
+}
+
+func TestReviewLifecycleRejectsInvalidStructuredEdit(t *testing.T) {
+	root := lifecycleRepo(t)
+	lifecycle := ReviewLifecycle{Home: filepath.Join(t.TempDir(), "home"), Advisor: &countingAdvisor{plan: lifecyclePlan()}}
+	review, err := lifecycle.Enhance(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptionID string
+	for _, item := range review.Items {
+		if item.Field == "description" {
+			descriptionID = item.ID
+		}
+	}
+	if _, err := lifecycle.EditValue(root, review.ID, descriptionID, []string{"one", "two"}); err == nil || !strings.Contains(err.Error(), "requires one scalar") {
+		t.Fatalf("invalid edit error = %v", err)
+	}
+}
+
+func findStoredItem(review RoleReview, id string) StoredReviewItem {
+	for _, item := range review.Items {
+		if item.ID == id {
+			return item
+		}
+	}
+	return StoredReviewItem{}
+}

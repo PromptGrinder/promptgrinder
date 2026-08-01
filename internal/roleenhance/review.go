@@ -23,6 +23,7 @@ const (
 	ReviewStatusProposed         ReviewStatus = "proposed"
 	ReviewStatusRefined          ReviewStatus = "refined"
 	ReviewStatusPartiallyDecided ReviewStatus = "partially_decided"
+	ReviewStatusDecided          ReviewStatus = "decided"
 	ReviewStatusApplied          ReviewStatus = "applied"
 	ReviewStatusRejected         ReviewStatus = "rejected"
 	ReviewStatusStale            ReviewStatus = "stale"
@@ -103,6 +104,13 @@ type StoredReviewItem struct {
 	AppliedAt                 *time.Time           `json:"applied_at,omitempty"`
 }
 
+type ReviewEdit struct {
+	ItemID   string    `json:"item_id"`
+	OldValue any       `json:"old_value"`
+	NewValue any       `json:"new_value"`
+	EditedAt time.Time `json:"edited_at"`
+}
+
 type RoleReview struct {
 	SchemaVersion           int                `json:"schema_version"`
 	Revision                uint64             `json:"revision"`
@@ -118,6 +126,7 @@ type RoleReview struct {
 	Sources                 []ReviewSource     `json:"sources"`
 	OriginalRecommendations []Recommendation   `json:"original_recommendations"`
 	Items                   []StoredReviewItem `json:"items"`
+	Edits                   []ReviewEdit       `json:"edits,omitempty"`
 	Evidence                PersistedEvidence  `json:"evidence"`
 }
 
@@ -264,11 +273,19 @@ func (r RoleReview) Validate() error {
 			return fmt.Errorf("review item %q contains a non-JSON value", item.ID)
 		}
 	}
+	for _, edit := range r.Edits {
+		if !seen[edit.ItemID] || edit.EditedAt.IsZero() || !edit.EditedAt.Equal(edit.EditedAt.UTC()) || !jsonValue(edit.OldValue) || !jsonValue(edit.NewValue) {
+			return fmt.Errorf("invalid review edit for %q", edit.ItemID)
+		}
+	}
 	if (r.Status == ReviewStatusProposed || r.Status == ReviewStatusRefined) && decided != 0 {
 		return fmt.Errorf("undecided review status contains decisions")
 	}
 	if r.Status == ReviewStatusPartiallyDecided && (decided == 0 || pending == 0) {
 		return fmt.Errorf("partially decided review must contain pending and decided items")
+	}
+	if r.Status == ReviewStatusDecided && (pending != 0 || decided == 0 || r.DecidedAt == nil) {
+		return fmt.Errorf("decided review must contain only decided items")
 	}
 	if (r.Status == ReviewStatusApplied || r.Status == ReviewStatusRejected) && (pending != 0 || r.DecidedAt == nil) {
 		return fmt.Errorf("terminal review has incomplete decisions")
@@ -308,7 +325,7 @@ func (r RoleReview) Validate() error {
 
 func validStatus(s ReviewStatus) bool {
 	switch s {
-	case ReviewStatusProposed, ReviewStatusRefined, ReviewStatusPartiallyDecided, ReviewStatusApplied, ReviewStatusRejected, ReviewStatusStale:
+	case ReviewStatusProposed, ReviewStatusRefined, ReviewStatusPartiallyDecided, ReviewStatusDecided, ReviewStatusApplied, ReviewStatusRejected, ReviewStatusStale:
 		return true
 	}
 	return false
@@ -350,9 +367,11 @@ func validTransition(from, to ReviewStatus) bool {
 	case ReviewStatusProposed:
 		return to == ReviewStatusRefined || to == ReviewStatusPartiallyDecided || to == ReviewStatusRejected || to == ReviewStatusStale
 	case ReviewStatusRefined:
-		return to == ReviewStatusPartiallyDecided || to == ReviewStatusApplied || to == ReviewStatusRejected || to == ReviewStatusStale
+		return to == ReviewStatusPartiallyDecided || to == ReviewStatusDecided || to == ReviewStatusApplied || to == ReviewStatusRejected || to == ReviewStatusStale
 	case ReviewStatusPartiallyDecided:
-		return to == ReviewStatusApplied || to == ReviewStatusRejected || to == ReviewStatusStale
+		return to == ReviewStatusDecided || to == ReviewStatusApplied || to == ReviewStatusRejected || to == ReviewStatusStale
+	case ReviewStatusDecided:
+		return to == ReviewStatusRefined || to == ReviewStatusPartiallyDecided || to == ReviewStatusApplied || to == ReviewStatusRejected || to == ReviewStatusStale
 	case ReviewStatusStale:
 		return to == ReviewStatusRefined || to == ReviewStatusRejected
 	default:

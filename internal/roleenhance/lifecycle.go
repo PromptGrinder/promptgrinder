@@ -151,7 +151,44 @@ func (s ReviewLifecycle) Refine(root, id string) (RoleReview, error) {
 		return s.markStale(store, review, err)
 	}
 	return store.CompareAndUpdate(review.ID, review.Revision, func(next *RoleReview) error {
-		return (RoleReviewRefiner{}).RefineReview(current, next, next.OriginalRecommendations)
+		prior := append([]StoredReviewItem(nil), next.Items...)
+		if err := (RoleReviewRefiner{}).RefineReview(current, next, next.OriginalRecommendations); err != nil {
+			return err
+		}
+		for _, edit := range next.Edits {
+			for i := range next.Items {
+				if next.Items[i].ID == edit.ItemID {
+					next.Items[i].ProposedValue = edit.NewValue
+				}
+			}
+		}
+		pending, approved := 0, 0
+		for i := range next.Items {
+			for _, old := range prior {
+				if sameRefinedContent(next.Items[i], old) {
+					next.Items[i].Decision, next.Items[i].DecisionAt = old.Decision, old.DecisionAt
+					break
+				}
+			}
+			if next.Items[i].Decision == ReviewDecisionPending {
+				pending++
+			}
+			if next.Items[i].Decision == ReviewDecisionApproved {
+				approved++
+			}
+		}
+		decided := len(next.Items) - pending
+		switch {
+		case decided == 0:
+			next.Status, next.DecidedAt = ReviewStatusRefined, nil
+		case pending > 0:
+			next.Status, next.DecidedAt = ReviewStatusPartiallyDecided, nil
+		case approved == 0:
+			next.Status = ReviewStatusRejected
+		case next.Status != ReviewStatusApplied:
+			next.Status = ReviewStatusDecided
+		}
+		return nil
 	})
 }
 
@@ -185,6 +222,117 @@ func (s ReviewLifecycle) Reject(root, id string) (RoleReview, error) {
 	})
 }
 
+// Decide persists an item-level decision without touching role YAML.
+func (s ReviewLifecycle) Decide(root, id, itemID string, decision ReviewDecision) (RoleReview, error) {
+	if decision != ReviewDecisionApproved && decision != ReviewDecisionRejected {
+		return RoleReview{}, fmt.Errorf("decision must be approved or rejected")
+	}
+	store, _, _, err := s.store(root)
+	if err != nil {
+		return RoleReview{}, err
+	}
+	review, err := s.Load(root, id)
+	if err != nil {
+		return RoleReview{}, err
+	}
+	if review.Status == ReviewStatusApplied || review.Status == ReviewStatusRejected || review.Status == ReviewStatusStale {
+		return RoleReview{}, fmt.Errorf("review %s is %s", review.ID, review.Status)
+	}
+	stamp := s.now()
+	return store.CompareAndUpdate(review.ID, review.Revision, func(next *RoleReview) error {
+		found, pending, approved := false, 0, 0
+		for i := range next.Items {
+			if next.Items[i].ID == itemID {
+				found = true
+				next.Items[i].Decision, next.Items[i].DecisionAt = decision, &stamp
+			}
+			if next.Items[i].Decision == ReviewDecisionPending {
+				pending++
+			}
+			if next.Items[i].Decision == ReviewDecisionApproved {
+				approved++
+			}
+		}
+		if !found {
+			return fmt.Errorf("unknown review item ID %q", itemID)
+		}
+		switch {
+		case pending > 0:
+			next.Status, next.DecidedAt = ReviewStatusPartiallyDecided, nil
+		case approved == 0:
+			next.Status, next.DecidedAt = ReviewStatusRejected, &stamp
+		default:
+			next.Status, next.DecidedAt = ReviewStatusDecided, &stamp
+		}
+		return nil
+	})
+}
+
+// EditValue validates and persists an exact structured value without invoking an advisor.
+func (s ReviewLifecycle) EditValue(root, id, itemID string, value any) (RoleReview, error) {
+	store, _, _, err := s.store(root)
+	if err != nil {
+		return RoleReview{}, err
+	}
+	review, err := s.Load(root, id)
+	if err != nil {
+		return RoleReview{}, err
+	}
+	if review.Status == ReviewStatusApplied || review.Status == ReviewStatusRejected || review.Status == ReviewStatusStale {
+		return RoleReview{}, fmt.Errorf("review %s is %s", review.ID, review.Status)
+	}
+	stamp := s.now()
+	return store.CompareAndUpdate(review.ID, review.Revision, func(next *RoleReview) error {
+		for i := range next.Items {
+			item := &next.Items[i]
+			if item.ID != itemID {
+				continue
+			}
+			normalized, err := normalizeEditedValue(item.Field, value)
+			if err != nil {
+				return err
+			}
+			if reflect.DeepEqual(item.OldValue, normalized) {
+				return fmt.Errorf("edited value makes recommendation a no-op")
+			}
+			old := item.ProposedValue
+			item.ProposedValue = normalized
+			item.Decision, item.DecisionAt = ReviewDecisionPending, nil
+			item.Conflict = ""
+			if item.Operation == OperationRemove {
+				item.Safety = SafetyRemoval
+			} else if emptyValue(item.OldValue) {
+				item.Safety = SafetyAddition
+			} else {
+				item.Safety = SafetyReplacement
+			}
+			next.Edits = append(next.Edits, ReviewEdit{ItemID: item.ID, OldValue: old, NewValue: normalized, EditedAt: stamp})
+			decided := 0
+			for _, candidate := range next.Items {
+				if candidate.Decision != ReviewDecisionPending {
+					decided++
+				}
+			}
+			if decided == 0 {
+				next.Status = ReviewStatusRefined
+			} else {
+				next.Status = ReviewStatusPartiallyDecided
+			}
+			next.DecidedAt = nil
+			return nil
+		}
+		return fmt.Errorf("unknown review item ID %q", itemID)
+	})
+}
+
+func normalizeEditedValue(field string, value any) (any, error) {
+	rec, err := normalizeRecommendation(Recommendation{ID: "edit", RoleID: "edit", Operation: OperationSet, Field: field, Value: value})
+	if err != nil {
+		return nil, fmt.Errorf("invalid edited value: %w", err)
+	}
+	return rec.Value, nil
+}
+
 func (s ReviewLifecycle) Apply(root, id string, mode ApplyMode, selected []string) (RoleReview, MergeResult, error) {
 	store, _, _, err := s.store(root)
 	if err != nil {
@@ -201,6 +349,10 @@ func (s ReviewLifecycle) Apply(root, id string, mode ApplyMode, selected []strin
 	if err != nil {
 		return RoleReview{}, MergeResult{}, err
 	}
+	if err := verifySources(root, review.Sources); err != nil {
+		stale, markErr := s.markStale(store, review, err)
+		return stale, MergeResult{}, markErr
+	}
 	allAlready := true
 	for itemID := range chosen {
 		for _, item := range review.Items {
@@ -211,10 +363,6 @@ func (s ReviewLifecycle) Apply(root, id string, mode ApplyMode, selected []strin
 	}
 	if allAlready {
 		return review, MergeResult{}, nil
-	}
-	if err := verifySources(root, review.Sources); err != nil {
-		stale, markErr := s.markStale(store, review, err)
-		return stale, MergeResult{}, markErr
 	}
 	current, err := LoadCurrentState(root)
 	if err != nil {
@@ -278,7 +426,7 @@ func chooseItems(review RoleReview, mode ApplyMode, selected []string) (map[stri
 			return nil, fmt.Errorf("apply safe cannot include item IDs")
 		}
 		for _, item := range review.Items {
-			if item.Safety == SafetyAddition || item.Safety == SafetyReplacement {
+			if item.Decision != ReviewDecisionRejected && item.Safety == SafetyAddition {
 				chosen[item.ID] = true
 			}
 		}
