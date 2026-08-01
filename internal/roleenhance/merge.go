@@ -2,6 +2,7 @@ package roleenhance
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,13 +78,14 @@ func (RoleMergeService) Apply(root string, reviewed CurrentState, plan ReviewPla
 		if err := yaml.Unmarshal(role.Raw, &document); err != nil {
 			return result, fmt.Errorf("parse %s: %w", role.SourcePath, err)
 		}
+		originalRole := oldRoles[roleID]
 		for _, item := range items {
 			oldValue := fieldValue(role, item.Recommendation.Field)
 			newValue, err := proposedValue(oldValue, item.Recommendation)
 			if err != nil {
 				return result, err
 			}
-			if !reflect.DeepEqual(oldValue, item.OldValue) {
+			if !equivalentJSONValue(fieldValue(originalRole, item.Recommendation.Field), item.OldValue) {
 				return result, fmt.Errorf("recommendation %q old value no longer matches", item.Recommendation.ID)
 			}
 			if err := setYAMLField(&document, item.Recommendation.Field, newValue); err != nil {
@@ -145,6 +147,12 @@ func (RoleMergeService) Apply(root string, reviewed CurrentState, plan ReviewPla
 		result.Files = append(result.Files, write.rel)
 	}
 	return result, nil
+}
+
+func equivalentJSONValue(a, b any) bool {
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 func approvedIDs(plan ReviewPlan, selection ApprovalSelection) (map[string]bool, []string, error) {

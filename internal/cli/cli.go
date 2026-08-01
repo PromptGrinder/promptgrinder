@@ -367,8 +367,11 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 			if err != nil {
 				return StructuredError{Err: err, Code: ExitInvalidInput}
 			}
-			svc := roleenhance.EnhanceService{Advisor: roleAdvisor}
-			current, plan, err := svc.Review(cmd.Context(), rootPath)
+			lifecycle, err := roleReviewLifecycle(service, roleAdvisor)
+			if err != nil {
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			review, err := lifecycle.Enhance(cmd.Context(), rootPath)
 			if err != nil {
 				if enhanceJSON {
 					return writeJSONCommandError(stdout, "roles_enhance_error", err, compactJSON)
@@ -385,7 +388,12 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 			}
 			var result roleenhance.MergeResult
 			if selection.Mode != roleenhance.ApprovalRejectAll {
-				result, err = (roleenhance.RoleMergeService{}).Apply(rootPath, current, plan, selection)
+				mode := roleenhance.ApplySafe
+				ids := []string(nil)
+				if selection.Mode == roleenhance.ApprovalApplySelected {
+					mode, ids = roleenhance.ApplySelected, enhanceSelected
+				}
+				review, result, err = lifecycle.Apply(rootPath, review.ID, mode, ids)
 				if err != nil {
 					if enhanceJSON {
 						return writeJSONCommandError(stdout, "merge_conflict", err, compactJSON)
@@ -393,23 +401,22 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 					fmt.Fprintf(stderr, "Error: apply role enhancements: %v\n", err)
 					return StructuredError{Err: err, Code: ExitInvalidInput}
 				}
-			} else {
-				for _, item := range plan.Items {
-					result.Rejected = append(result.Rejected, item.Recommendation.ID)
+			} else if enhanceRejectAll {
+				review, err = lifecycle.Reject(rootPath, review.ID)
+				if err != nil {
+					return StructuredError{Err: err, Code: ExitInvalidInput}
 				}
 			}
 			if enhanceJSON {
 				return writeJSON(stdout, struct {
-					Review roleenhance.ReviewPlan   `json:"review"`
+					Review roleenhance.RoleReview   `json:"review"`
 					Result roleenhance.MergeResult  `json:"result"`
 					Mode   roleenhance.ApprovalMode `json:"mode"`
-				}{plan, result, selection.Mode}, compactJSON)
+				}{review, result, selection.Mode}, compactJSON)
 			}
-			if err := (roleenhance.ReviewRenderer{}).Render(stdout, plan); err != nil {
-				return err
-			}
+			renderStoredRoleReview(stdout, review)
 			if selection.Mode == roleenhance.ApprovalRejectAll {
-				fmt.Fprintln(stdout, "\nReview only: no files written.")
+				fmt.Fprintln(stdout, "\nReview saved: no files written.")
 			} else {
 				fmt.Fprintf(stdout, "\nApplied %d recommendation(s) to %d file(s).\n", len(result.Applied), len(result.Files))
 			}
@@ -421,6 +428,122 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 	enhanceCmd.Flags().BoolVar(&enhanceRejectAll, "reject-all", false, "reject all recommendations and write nothing")
 	enhanceCmd.Flags().BoolVar(&enhanceJSON, "json", false, "print machine-readable JSON")
 	rolesCmd.AddCommand(enhanceCmd)
+
+	var reviewsJSON bool
+	reviewsCmd := &cobra.Command{Use: "reviews", Short: "List stored role reviews (newest first).", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		reviews, err := lifecycle.List(rootPath)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if reviewsJSON {
+			return writeJSON(stdout, reviews, compactJSON)
+		}
+		if len(reviews) == 0 {
+			fmt.Fprintln(stdout, "No stored role reviews.")
+			return nil
+		}
+		for _, review := range reviews {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%d item(s)\n", review.ID, review.Status, review.CreatedAt.Format(time.RFC3339), len(review.Items))
+		}
+		return nil
+	}}
+	reviewsCmd.Flags().BoolVar(&reviewsJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(reviewsCmd)
+
+	var roleReviewJSON bool
+	roleReviewCmd := &cobra.Command{Use: "review <review-id|latest>", Short: "Show an exact stored role review.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		review, err := lifecycle.Load(rootPath, args[0])
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if roleReviewJSON {
+			return writeJSON(stdout, review, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		return nil
+	}}
+	roleReviewCmd.Flags().BoolVar(&roleReviewJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(roleReviewCmd)
+
+	var refineJSON bool
+	refineCmd := &cobra.Command{Use: "refine <review-id|latest>", Short: "Deterministically re-refine a stored review without AI.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		review, err := lifecycle.Refine(rootPath, args[0])
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if refineJSON {
+			return writeJSON(stdout, review, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		return nil
+	}}
+	refineCmd.Flags().BoolVar(&refineJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(refineCmd)
+	var rejectJSON bool
+	rejectCmd := &cobra.Command{Use: "reject <review-id|latest>", Short: "Reject a stored review without changing role YAML.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		review, err := lifecycle.Reject(rootPath, args[0])
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if rejectJSON {
+			return writeJSON(stdout, review, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		return nil
+	}}
+	rejectCmd.Flags().BoolVar(&rejectJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(rejectCmd)
+	var applySafe, applyJSON bool
+	var applySelected []string
+	applyCmd := &cobra.Command{Use: "apply <review-id|latest>", Short: "Apply stored role-review decisions without AI.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if applySafe == cmd.Flags().Changed("selected") {
+			return StructuredError{Err: fmt.Errorf("choose exactly one of --safe or --selected"), Code: ExitInvalidInput}
+		}
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		mode := roleenhance.ApplySafe
+		if cmd.Flags().Changed("selected") {
+			mode = roleenhance.ApplySelected
+		}
+		review, result, err := lifecycle.Apply(rootPath, args[0], mode, applySelected)
+		if err != nil {
+			if applyJSON {
+				return writeJSONCommandError(stdout, "role_review_apply_error", err, compactJSON)
+			}
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if applyJSON {
+			return writeJSON(stdout, struct {
+				Review roleenhance.RoleReview  `json:"review"`
+				Result roleenhance.MergeResult `json:"result"`
+			}{review, result}, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		fmt.Fprintf(stdout, "\nApplied %d item(s) to %d file(s).\n", len(result.Applied), len(result.Files))
+		return nil
+	}}
+	applyCmd.Flags().BoolVar(&applySafe, "safe", false, "apply non-removal, non-conflicting items")
+	applyCmd.Flags().StringSliceVar(&applySelected, "selected", nil, "apply explicit stored item IDs (required for removals)")
+	applyCmd.Flags().BoolVar(&applyJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(applyCmd)
 	root.AddCommand(rolesCmd)
 
 	var runJSON bool
@@ -2129,6 +2252,58 @@ func printTask(stdout io.Writer, task workerdomain.Task) {
 	if !strings.HasSuffix(task.Instructions, "\n") {
 		fmt.Fprintln(stdout)
 	}
+}
+
+func roleReviewLifecycle(service Service, advisor roleenhance.Advisor) (roleenhance.ReviewLifecycle, error) {
+	home := service.Defaults().Config.HomeDir
+	if home == "" {
+		home = service.Defaults().HomeDir
+	}
+	if home == "" {
+		var err error
+		home, err = config.ResolveHomeDir("")
+		if err != nil {
+			return roleenhance.ReviewLifecycle{}, err
+		}
+	}
+	if !filepath.IsAbs(home) {
+		return roleenhance.ReviewLifecycle{}, fmt.Errorf("PromptGrinder home must be absolute")
+	}
+	return roleenhance.ReviewLifecycle{Home: home, Advisor: advisor}, nil
+}
+
+func roleReviewContext(service Service, advisor roleenhance.Advisor, getwd func() (string, error)) (string, roleenhance.ReviewLifecycle, error) {
+	cwd, err := getwd()
+	if err != nil {
+		return "", roleenhance.ReviewLifecycle{}, err
+	}
+	root, err := findRepositoryRoot(cwd)
+	if err != nil {
+		return "", roleenhance.ReviewLifecycle{}, err
+	}
+	lifecycle, err := roleReviewLifecycle(service, advisor)
+	return root, lifecycle, err
+}
+
+func renderStoredRoleReview(w io.Writer, review roleenhance.RoleReview) {
+	fmt.Fprintf(w, "Review: %s\nStatus: %s\n", review.ID, review.Status)
+	for _, item := range review.Items {
+		label := item.OriginalRecommendationID
+		if label == "" {
+			label = item.ID
+		}
+		oldValue, _ := json.Marshal(item.OldValue)
+		proposedValue, _ := json.Marshal(item.ProposedValue)
+		fmt.Fprintf(w, "\n[%s] %s.%s (%s, %s)\n  Item ID: %s\n  Old: %s\n  Proposed: %s\n  Confidence: %s\n  Decision: %s\n  Reason: %s\n", label, item.RoleID, item.Field, item.Operation, item.Safety, item.ID, oldValue, proposedValue, item.Confidence, item.Decision, item.Explanation)
+		for _, citation := range item.Evidence {
+			fmt.Fprintf(w, "  Evidence: %s", citation.Path)
+			if citation.Fact != "" {
+				fmt.Fprintf(w, " (%s)", citation.Fact)
+			}
+			fmt.Fprintln(w)
+		}
+	}
+	fmt.Fprintf(w, "\nNext:\n  promptgrinder roles review %s\n  promptgrinder roles refine %s\n  promptgrinder roles apply %s --safe\n  promptgrinder roles reject %s\n", review.ID, review.ID, review.ID, review.ID)
 }
 
 func parseReviewValidations(values []string) ([]workerdomain.Validation, error) {

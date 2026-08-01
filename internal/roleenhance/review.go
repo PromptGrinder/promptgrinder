@@ -100,6 +100,7 @@ type StoredReviewItem struct {
 	Conflict                  string               `json:"conflict,omitempty"`
 	Decision                  ReviewDecision       `json:"decision"`
 	DecisionAt                *time.Time           `json:"decision_at,omitempty"`
+	AppliedAt                 *time.Time           `json:"applied_at,omitempty"`
 }
 
 type RoleReview struct {
@@ -241,6 +242,9 @@ func (r RoleReview) Validate() error {
 		}
 		if item.DecisionAt != nil && !item.DecisionAt.Equal(item.DecisionAt.UTC()) {
 			return fmt.Errorf("decision timestamp for %q is not UTC", item.ID)
+		}
+		if item.AppliedAt != nil && (item.Decision != ReviewDecisionApproved || !item.AppliedAt.Equal(item.AppliedAt.UTC())) {
+			return fmt.Errorf("application timestamp mismatch for %q", item.ID)
 		}
 		if item.Confidence != ConfidenceLow && item.Confidence != ConfidenceMedium && item.Confidence != ConfidenceHigh {
 			return fmt.Errorf("invalid confidence for %q", item.ID)
