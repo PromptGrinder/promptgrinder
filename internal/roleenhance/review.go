@@ -42,6 +42,7 @@ const (
 	SafetyAddition    SafetyClassification = "addition"
 	SafetyReplacement SafetyClassification = "replacement"
 	SafetyRemoval     SafetyClassification = "removal"
+	SafetyConflict    SafetyClassification = "conflict"
 )
 
 // RepositoryIdentity is an opaque binding to a canonical repository. It is
@@ -84,19 +85,21 @@ type PersistedEvidence struct {
 }
 
 type StoredReviewItem struct {
-	ID                       string               `json:"id"`
-	OriginalRecommendationID string               `json:"original_recommendation_id"`
-	RoleID                   string               `json:"role_id"`
-	Operation                Operation            `json:"operation"`
-	Field                    string               `json:"field"`
-	OldValue                 any                  `json:"old_value"`
-	ProposedValue            any                  `json:"proposed_value"`
-	Confidence               Confidence           `json:"confidence"`
-	Explanation              string               `json:"explanation"`
-	Evidence                 []Citation           `json:"evidence"`
-	Safety                   SafetyClassification `json:"safety"`
-	Decision                 ReviewDecision       `json:"decision"`
-	DecisionAt               *time.Time           `json:"decision_at,omitempty"`
+	ID                        string               `json:"id"`
+	OriginalRecommendationID  string               `json:"original_recommendation_id"`
+	OriginalRecommendationIDs []string             `json:"original_recommendation_ids,omitempty"`
+	RoleID                    string               `json:"role_id"`
+	Operation                 Operation            `json:"operation"`
+	Field                     string               `json:"field"`
+	OldValue                  any                  `json:"old_value"`
+	ProposedValue             any                  `json:"proposed_value"`
+	Confidence                Confidence           `json:"confidence"`
+	Explanation               string               `json:"explanation"`
+	Evidence                  []Citation           `json:"evidence"`
+	Safety                    SafetyClassification `json:"safety"`
+	Conflict                  string               `json:"conflict,omitempty"`
+	Decision                  ReviewDecision       `json:"decision"`
+	DecisionAt                *time.Time           `json:"decision_at,omitempty"`
 }
 
 type RoleReview struct {
@@ -193,12 +196,25 @@ func (r RoleReview) Validate() error {
 			return fmt.Errorf("invalid or duplicate review item %q", item.ID)
 		}
 		seen[item.ID] = true
-		source, ok := original[item.OriginalRecommendationID]
+		sourceIDs := item.OriginalRecommendationIDs
+		if len(sourceIDs) == 0 {
+			sourceIDs = []string{item.OriginalRecommendationID}
+		}
+		if len(sourceIDs) == 0 || item.OriginalRecommendationID != sourceIDs[0] {
+			return fmt.Errorf("review item %q has inconsistent source recommendations", item.ID)
+		}
+		source, ok := original[sourceIDs[0]]
 		if !ok {
 			return fmt.Errorf("review item %q has no original recommendation", item.ID)
 		}
-		if item.RoleID != source.RoleID || item.Field != source.Field || item.Operation != source.Operation {
-			return fmt.Errorf("review item %q changes its source recommendation target", item.ID)
+		for i, sourceID := range sourceIDs {
+			if i > 0 && sourceIDs[i-1] >= sourceID {
+				return fmt.Errorf("review item %q has unordered or duplicate source recommendations", item.ID)
+			}
+			source, ok = original[sourceID]
+			if !ok || item.RoleID != source.RoleID || item.Field != source.Field || item.Operation != source.Operation {
+				return fmt.Errorf("review item %q changes its source recommendation target", item.ID)
+			}
 		}
 		if item.Operation != OperationSet && item.Operation != OperationAppend && item.Operation != OperationRemove {
 			return fmt.Errorf("invalid operation for %q", item.ID)
@@ -214,11 +230,14 @@ func (r RoleReview) Validate() error {
 		} else {
 			decided++
 		}
-		if item.Safety != SafetyAddition && item.Safety != SafetyReplacement && item.Safety != SafetyRemoval {
+		if item.Safety != SafetyAddition && item.Safety != SafetyReplacement && item.Safety != SafetyRemoval && item.Safety != SafetyConflict {
 			return fmt.Errorf("invalid safety classification for %q", item.ID)
 		}
-		if item.Operation == OperationRemove && item.Safety != SafetyRemoval {
+		if item.Operation == OperationRemove && item.Safety != SafetyRemoval && item.Safety != SafetyConflict {
 			return fmt.Errorf("removal %q must have removal safety", item.ID)
+		}
+		if (item.Safety == SafetyConflict) != (item.Conflict != "") {
+			return fmt.Errorf("conflict classification mismatch for %q", item.ID)
 		}
 		if item.DecisionAt != nil && !item.DecisionAt.Equal(item.DecisionAt.UTC()) {
 			return fmt.Errorf("decision timestamp for %q is not UTC", item.ID)
