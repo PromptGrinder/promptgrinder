@@ -209,6 +209,10 @@ output.
 `00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
 `NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. README files,
 notes, completion reports, and unknown numbered file types are never runnable.
+Before creating sequence state, PromptGrinder classifies every visible Markdown
+file and validates every included prompt. Numbered task-like files with an
+unsupported name fail preflight with included/total counts instead of being
+silently skipped; ordinary notes are reported as ignored.
 Specifications are shared context unless `--include-specification` is set.
 
 PromptGrinder appends one visible completion-report instruction to every

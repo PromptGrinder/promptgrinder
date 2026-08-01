@@ -29,23 +29,25 @@ type RunFolderRenderer struct {
 	now         func() time.Time
 	newTicker   func(time.Duration) rendererTicker
 
-	mu          sync.Mutex
-	opMu        sync.Mutex
-	items       []runfolder.ProgressPrompt
-	details     map[string]runfolder.ProgressEvent
-	sequenceID  string
-	folder      string
-	active      string
-	activeSince time.Time
-	frame       int
-	lines       int
-	started     bool
-	bannerShown bool
-	closed      bool
-	finished    bool
-	stop        chan struct{}
-	done        chan struct{}
-	ticker      rendererTicker
+	mu             sync.Mutex
+	opMu           sync.Mutex
+	items          []runfolder.ProgressPrompt
+	markdownTotal  int
+	ignored        []string
+	details        map[string]runfolder.ProgressEvent
+	sequenceID     string
+	folder         string
+	active         string
+	activeSince    time.Time
+	frame          int
+	dashboardSaved bool
+	started        bool
+	bannerShown    bool
+	closed         bool
+	finished       bool
+	stop           chan struct{}
+	done           chan struct{}
+	ticker         rendererTicker
 }
 
 func NewRunFolderRenderer(w io.Writer, interactive bool, opts Options) *RunFolderRenderer {
@@ -74,6 +76,8 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	case "run.started":
 		r.sequenceID, r.folder = event.SequenceID, event.Folder
 		r.items = append([]runfolder.ProgressPrompt(nil), event.Inventory...)
+		r.markdownTotal = event.MarkdownTotal
+		r.ignored = append([]string(nil), event.Ignored...)
 		r.started = true
 		if r.interactive {
 			r.renderDashboardLocked()
@@ -201,6 +205,12 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 		fmt.Fprintln(r.w, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
 	}
 	fmt.Fprintln(r.w, "Prompts:")
+	if r.markdownTotal > 0 {
+		fmt.Fprintf(r.w, "Preflight: %d of %d Markdown files included\n", len(r.items), r.markdownTotal)
+	}
+	if len(r.ignored) > 0 {
+		fmt.Fprintln(r.w, "Ignored: "+strings.Join(r.ignored, ", "))
+	}
 	for i, item := range r.items {
 		fmt.Fprintf(r.w, "[%d/%d] %s [%s] - %s\n", i+1, len(r.items), item.Name, item.Type, stateLabel(item.Status))
 	}
@@ -223,11 +233,17 @@ func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent)
 }
 
 func (r *RunFolderRenderer) renderDashboardLocked() {
-	if r.lines > 0 {
-		fmt.Fprintf(r.w, "\033[%dA", r.lines)
-	} else if !r.bannerShown {
-		Banner(r.w, r.opts)
-		r.bannerShown = true
+	if r.dashboardSaved {
+		// Restore the dashboard origin and erase everything below it. This
+		// remains correct when long rows occupy multiple terminal lines.
+		fmt.Fprint(r.w, "\033[u\033[J")
+	} else {
+		if !r.bannerShown {
+			Banner(r.w, r.opts)
+			r.bannerShown = true
+		}
+		fmt.Fprint(r.w, "\033[s")
+		r.dashboardSaved = true
 	}
 	lines := []string{"Mode: foreground"}
 	if r.sequenceID != "" {
@@ -235,6 +251,12 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		lines = append(lines, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
 	}
 	lines = append(lines, "Prompts:")
+	if r.markdownTotal > 0 {
+		lines = append(lines, fmt.Sprintf("Preflight: %d of %d Markdown files included", len(r.items), r.markdownTotal))
+	}
+	if len(r.ignored) > 0 {
+		lines = append(lines, "Ignored: "+strings.Join(r.ignored, ", "))
+	}
 	for i, item := range r.items {
 		icon := colorizeStatusIcon(stateIcon(item.Status), item.Status, themeColor(r.opts.Theme))
 		duration, detail := "", r.details[item.Name]
@@ -259,7 +281,6 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	for _, line := range lines {
 		fmt.Fprint(r.w, "\033[2K"+line+"\n")
 	}
-	r.lines = len(lines)
 }
 
 func terminalFileLink(path string) string {

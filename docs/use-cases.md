@@ -103,6 +103,9 @@ the configured defaults.
 Use `promptgrinder run-folder <folder>` to execute recognized numbered
 Markdown tasks in order. A `00-specification*.md` file supplies shared context
 without running unless `--include-specification` is selected.
+Before sequence creation, PromptGrinder reports how many Markdown files are
+included, identifies ignored notes, validates all included prompts, and rejects
+numbered task-like filenames that would otherwise be silently omitted.
 
 ### UC-16: Stop unsafe sequence continuation
 

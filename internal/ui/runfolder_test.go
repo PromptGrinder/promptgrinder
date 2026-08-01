@@ -47,6 +47,18 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererReportsIncludedAndIgnoredMarkdown(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: inventory(), MarkdownTotal: 7, Ignored: []string{"README.md"}})
+	r.Close()
+	for _, want := range []string{"Preflight: 6 of 7 Markdown files included", "Ignored: README.md"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q: %q", want, out.String())
+		}
+	}
+}
+
 func TestRunFolderRendererPrintsPreflightFailureReason(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
@@ -123,6 +135,24 @@ func TestRunFolderRendererUsesCompactInteractiveLogLink(t *testing.T) {
 	}
 	if strings.Contains(got, "(log: /tmp/worker logs/") {
 		t.Fatalf("interactive output exposed long log path: %q", got)
+	}
+}
+
+func TestRunFolderRendererRedrawSurvivesWrappedRows(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeMinimal})
+	longName := "10-implement-" + strings.Repeat("a", 180) + ".md"
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: longName, Type: runfolder.TypeImplement, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: longName, PromptType: runfolder.TypeImplement, Status: "succeeded", WorkerID: "wrk_" + strings.Repeat("b", 80), LogPath: "/tmp/worker logs/wrk_1/worker.log"})
+	r.Close()
+	got := out.String()
+	if strings.Count(got, "\033[s") != 1 || !strings.Contains(got, "\033[u\033[J") {
+		t.Fatalf("dashboard did not use save/restore redraw: %q", got)
+	}
+	wantLink := "\033]8;;file:///tmp/worker%20logs/wrk_1/worker.log\033\\worker.log\033]8;;\033\\"
+	if !strings.Contains(got, wantLink) {
+		t.Fatalf("wrapped dashboard corrupted log hyperlink: %q", got)
 	}
 }
 

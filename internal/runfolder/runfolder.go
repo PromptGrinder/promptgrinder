@@ -136,6 +136,8 @@ type ProgressEvent struct {
 	NextPromptSafe   *bool            `json:"next_prompt_safe,omitempty"`
 	Reason           string           `json:"reason,omitempty"`
 	Inventory        []ProgressPrompt `json:"inventory,omitempty"`
+	MarkdownTotal    int              `json:"markdown_total,omitempty"`
+	Ignored          []string         `json:"ignored,omitempty"`
 }
 
 // ProgressPrompt is the prompt metadata needed to render an ordered run
@@ -155,6 +157,13 @@ type Prompt struct {
 	Path string
 	Name string
 	Type PromptType
+}
+
+type FolderInspection struct {
+	Prompts       []Prompt
+	MarkdownTotal int
+	Ignored       []string
+	Invalid       []string
 }
 
 type RunState struct {
@@ -254,33 +263,53 @@ func Classify(filename string) PromptType {
 }
 
 func Discover(folder string) ([]Prompt, error) {
-	abs, err := filepath.Abs(folder)
+	inspection, err := Inspect(folder)
 	if err != nil {
 		return nil, err
+	}
+	if len(inspection.Invalid) > 0 {
+		return nil, invalidPromptNamesError(inspection)
+	}
+	return inspection.Prompts, nil
+}
+
+func Inspect(folder string) (FolderInspection, error) {
+	abs, err := filepath.Abs(folder)
+	if err != nil {
+		return FolderInspection{}, err
 	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
-		return nil, err
+		return FolderInspection{}, err
 	}
-	prompts := []Prompt{}
+	inspection := FolderInspection{}
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") || entry.IsDir() || !strings.EqualFold(filepath.Ext(name), ".md") {
 			continue
 		}
+		inspection.MarkdownTotal++
 		if !matches(name, `^\d\d-.+\.md$`) {
+			inspection.Ignored = append(inspection.Ignored, name)
 			continue
 		}
 		promptType := Classify(name)
 		if promptType == TypeUnknown {
+			inspection.Invalid = append(inspection.Invalid, name)
 			continue
 		}
-		prompts = append(prompts, Prompt{Path: filepath.Join(abs, name), Name: name, Type: promptType})
+		inspection.Prompts = append(inspection.Prompts, Prompt{Path: filepath.Join(abs, name), Name: name, Type: promptType})
 	}
-	sort.SliceStable(prompts, func(i, j int) bool {
-		return prompts[i].Name < prompts[j].Name
+	sort.SliceStable(inspection.Prompts, func(i, j int) bool {
+		return inspection.Prompts[i].Name < inspection.Prompts[j].Name
 	})
-	return prompts, nil
+	sort.Strings(inspection.Ignored)
+	sort.Strings(inspection.Invalid)
+	return inspection, nil
+}
+
+func invalidPromptNamesError(inspection FolderInspection) error {
+	return fmt.Errorf("run-folder preflight: %d of %d Markdown files included; unsupported numbered prompt name(s): %s; use 00-specification*.md or NN-implement-, NN-test-, NN-verify-, NN-final-verify-, or NN-review- filenames", len(inspection.Prompts), inspection.MarkdownTotal, strings.Join(inspection.Invalid, ", "))
 }
 
 // ResolveSequenceID computes the stable identity used by Run without creating
@@ -298,10 +327,14 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	prompts, err := Discover(absFolder)
+	inspection, err := Inspect(absFolder)
 	if err != nil {
 		return "", err
 	}
+	if len(inspection.Invalid) > 0 {
+		return "", invalidPromptNamesError(inspection)
+	}
+	prompts := inspection.Prompts
 	if len(prompts) == 0 {
 		return "", fmt.Errorf("no recognized numbered Markdown prompts found in %s", absFolder)
 	}
@@ -351,12 +384,19 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		return Summary{}, err
 	}
 	options.RepoPath = repoRoot
-	prompts, err := Discover(absFolder)
+	inspection, err := Inspect(absFolder)
 	if err != nil {
 		return Summary{}, err
 	}
+	if len(inspection.Invalid) > 0 {
+		return Summary{}, invalidPromptNamesError(inspection)
+	}
+	prompts := inspection.Prompts
 	if len(prompts) == 0 {
 		return Summary{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
+	}
+	if err := validatePrompts(prompts); err != nil {
+		return Summary{}, fmt.Errorf("run-folder preflight: %w", err)
 	}
 
 	sequenceStore := newSequenceStore(options.HomeDir)
@@ -410,7 +450,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		}
 		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, Type: prompt.Type, Status: status})
 	}
-	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
+	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
 	if err := store.ensure(); err != nil {
 		return summary, err
 	}
@@ -525,6 +565,23 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	summary.Sequence = &sequence
 	emitProgress(options, ProgressEvent{Type: "run.completed", SequenceID: sequence.SequenceID, Completed: len(runState.Completed), Total: len(prompts)})
 	return summary, nil
+}
+
+func validatePrompts(prompts []Prompt) error {
+	for _, prompt := range prompts {
+		data, err := os.ReadFile(prompt.Path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", prompt.Name, err)
+		}
+		parsed, err := markdown.Parse(string(data))
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", prompt.Name, err)
+		}
+		if err := markdown.Validate(parsed, prompt.Path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func promptDuration(prompt PromptState) time.Duration {
