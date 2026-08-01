@@ -181,7 +181,12 @@ commits are intended.
 | `run <path...>` | Run one or more work orders |
 | `run-folder <folder>` | Run numbered work orders sequentially |
 | `discover` | Detect repository technologies and generate `.promptgrinder/` project roles |
-| `roles enhance` | Review grounded role recommendations; apply with `--apply-all` or `--apply-selected <id>` |
+| `roles enhance` | Ask the advisor once, refine deterministically, and persist an exact role review |
+| `roles reviews` | List persisted reviews for the current repository |
+| `roles review <id\|latest>` | Inspect exact stored before/after values without AI |
+| `roles refine <id\|latest>` | Re-run deterministic refinement without AI |
+| `roles apply <id\|latest>` | Apply safe additions or explicitly selected stored items without AI |
+| `roles reject <id\|latest>` | Reject a stored review without writing role YAML |
 | `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
 | `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
 | `setup` | Preview or create PromptGrinder-owned first-use files |
@@ -229,13 +234,23 @@ For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys
 are rejected rather than treated as task content.
 
-`roles enhance` is review-only by default and with `--reject-all`. It writes
-nothing unless `--apply-all` or `--apply-selected <id>[,<id>...]` is supplied;
-these approval flags are mutually exclusive. Use `--json` for deterministic
-automation output. The configured Codex executable is used only through a
-bounded, structured advisor request in a temporary directory with a read-only
-sandbox. PromptGrinder validates grounding and performs all YAML merging; the
-advisor never receives the repository path or write access.
+`roles enhance` calls the configured advisor once, validates and
+deterministically refines its structured recommendations, and saves the exact
+review under `PROMPTGRINDER_HOME/projects/<project-id>/role-reviews/`. It does
+not write role YAML by default. Use `roles review`, `roles refine`, `roles
+apply`, and `roles reject` to continue later; those commands operate only on
+stored state and never invoke AI. `roles apply <id> --safe` applies additions
+only. Replacements, conflicts, and removals require explicit item IDs through
+`--selected`; removals are never included in a bulk safe action. Changed source
+files make a review stale and stop application.
+
+Legacy `roles enhance --reject-all`, `--apply-all`, and `--apply-selected
+<id>[,<id>...]` automation remains supported and uses the same persisted review
+without a second advisor call. Non-interactive and `--json` execution saves the
+review and never prompts. The configured Codex executable is used only through
+a bounded, structured advisor request in a temporary directory with a
+read-only sandbox. PromptGrinder validates grounding and performs all YAML
+merging; the advisor never receives the repository path or write access.
 
 The `.promptgrinder/project.yaml` and `.promptgrinder/roles/*.yaml` files are
 discovery and enhancement artifacts in RC.2. Executable named-worker definitions

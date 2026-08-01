@@ -2,7 +2,7 @@ package roleenhance
 
 import (
 	"bytes"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -57,15 +57,16 @@ func (s ReviewStore) Create(review RoleReview) (RoleReview, error) {
 		return RoleReview{}, fmt.Errorf("cross-project role review")
 	}
 	if review.ID == "" {
-		review.ID, err = newReviewID()
-		if err != nil {
-			return RoleReview{}, err
-		}
+		review.ID = stableReviewID(review)
 	}
 	if !validReviewID(review.ID) {
 		return RoleReview{}, fmt.Errorf("invalid review id %q", review.ID)
 	}
 	if _, err := os.Lstat(s.Path(review.ID)); err == nil {
+		existing, loadErr := s.loadPath(s.Path(review.ID), review.ID)
+		if loadErr == nil && sameReviewProposal(existing, review) {
+			return existing, nil
+		}
 		return RoleReview{}, fmt.Errorf("duplicate review id %q", review.ID)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return RoleReview{}, err
@@ -108,7 +109,7 @@ func (s ReviewStore) List() ([]RoleReview, error) {
 	reviews := make([]RoleReview, 0)
 	seen := map[string]bool{}
 	for _, entry := range entries {
-		if entry.Name() == ".lock" {
+		if entry.Name() == ".lock" || entry.Name() == ".lifecycle.lock" {
 			continue
 		}
 		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
@@ -253,12 +254,23 @@ func (s ReviewStore) ensure() error {
 }
 
 func (s ReviewStore) lock() (func(), error) {
+	return s.namedLock(".lock")
+}
+
+// lifecycleLock serializes operations whose effects span both the review
+// store and repository role files. The store lock alone cannot cover that
+// boundary because CompareAndUpdate acquires it only while replacing JSON.
+func (s ReviewStore) lifecycleLock() (func(), error) {
+	return s.namedLock(".lifecycle.lock")
+}
+
+func (s ReviewStore) namedLock(name string) (func(), error) {
 	if err := s.ensure(); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(s.Dir(), ".lock")
+	path := filepath.Join(s.Dir(), name)
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("unsafe role review lock")
+		return nil, fmt.Errorf("unsafe role review lock %q", name)
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
@@ -269,7 +281,7 @@ func (s ReviewStore) lock() (func(), error) {
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		file.Close()
-		return nil, fmt.Errorf("unsafe role review lock")
+		return nil, fmt.Errorf("unsafe role review lock %q", name)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		file.Close()
@@ -326,10 +338,25 @@ func (s ReviewStore) write(review RoleReview) error {
 	return nil
 }
 
-func newReviewID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
+func stableReviewID(review RoleReview) string {
+	raw, _ := json.Marshal(review)
+	var proposal RoleReview
+	_ = json.Unmarshal(raw, &proposal)
+	proposal.SchemaVersion, proposal.Revision, proposal.ID = 0, 0, ""
+	proposal.Status = ""
+	proposal.CreatedAt, proposal.UpdatedAt = time.Time{}, time.Time{}
+	proposal.DecidedAt, proposal.AppliedAt = nil, nil
+	proposal.Edits = nil
+	for i := range proposal.Items {
+		proposal.Items[i].Decision = ""
+		proposal.Items[i].DecisionAt, proposal.Items[i].AppliedAt = nil, nil
 	}
-	return "rev_" + hex.EncodeToString(b[:]), nil
+	proposal.normalize()
+	data, _ := json.Marshal(proposal)
+	sum := sha256.Sum256(data)
+	return "rev_" + hex.EncodeToString(sum[:16])
+}
+
+func sameReviewProposal(existing, candidate RoleReview) bool {
+	return existing.ID == stableReviewID(candidate) && existing.ID == stableReviewID(existing)
 }

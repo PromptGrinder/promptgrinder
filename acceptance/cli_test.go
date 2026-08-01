@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -259,6 +260,65 @@ printf '%s' "$PG_ROLE_RESPONSE" > "$output"
 				}
 			}
 		})
+	}
+}
+
+func TestCompiledCLIPersistedRoleReviewFollowupsDoNotInvokeAdvisor(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "persisted review repository")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<project><parent><artifactId>spring-boot-starter-parent</artifactId></parent></project>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("Run ./mvnw test before merging.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(t.TempDir(), "promptgrinder home")
+	count := filepath.Join(t.TempDir(), "advisor count")
+	response := `{"schema_version":"promptgrinder.role-advisor/v1","recommendations":[{"id":"gate","role_id":"backend-feature","operation":"append","field":"quality_gates","value":"./mvnw test","confidence":"high","explanation":"documented test command","evidence":[{"path":"README.md"}]}]}`
+	script := `#!/bin/sh
+set -eu
+printf x >> "$PG_ADVISOR_COUNT"
+output=
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then output=$argument; fi
+  previous=$argument
+done
+/bin/cat >/dev/null
+printf '%s' "$PG_ROLE_RESPONSE" > "$output"
+`
+	fake := testsupport.FakeExecutable(t, "codex", script)
+	options := commandOptions{home: home, cwd: root, codex: fake, env: []string{"PG_ADVISOR_COUNT=" + count, "PG_ROLE_RESPONSE=" + response}}
+	if result := runCLI(t, options, "discover"); result.exitCode != 0 {
+		t.Fatalf("discover = %#v", result)
+	}
+	enhanced := runCLI(t, options, "roles", "enhance")
+	if enhanced.exitCode != 0 {
+		t.Fatalf("enhance = %#v", enhanced)
+	}
+	match := regexp.MustCompile(`Review: (rev_[a-f0-9]+)`).FindStringSubmatch(enhanced.stdout)
+	if len(match) != 2 {
+		t.Fatalf("missing review ID:\n%s", enhanced.stdout)
+	}
+	if calls, err := os.ReadFile(count); err != nil || string(calls) != "x" {
+		t.Fatalf("advisor calls after enhance = %q, %v", calls, err)
+	}
+	failing, marker := markedFailingCodex(t)
+	options.codex = failing
+	if result := runCLI(t, options, "roles", "refine", match[1]); result.exitCode != 0 {
+		t.Fatalf("refine with failing advisor = %#v", result)
+	}
+	if result := runCLI(t, options, "roles", "apply", match[1], "--safe"); result.exitCode != 0 {
+		t.Fatalf("apply with failing advisor = %#v", result)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stored review follow-up invoked advisor: %v", err)
+	}
+	role, err := os.ReadFile(filepath.Join(root, ".promptgrinder", "roles", "backend-feature.yaml"))
+	if err != nil || !bytes.Contains(role, []byte("./mvnw test")) {
+		t.Fatalf("safe stored application missing: %v\n%s", err, role)
 	}
 }
 

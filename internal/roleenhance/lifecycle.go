@@ -139,6 +139,11 @@ func (s ReviewLifecycle) Refine(root, id string) (RoleReview, error) {
 	if err != nil {
 		return RoleReview{}, err
 	}
+	unlock, err := store.lifecycleLock()
+	if err != nil {
+		return RoleReview{}, err
+	}
+	defer unlock()
 	review, err := s.Load(root, id)
 	if err != nil {
 		return RoleReview{}, err
@@ -197,6 +202,11 @@ func (s ReviewLifecycle) Reject(root, id string) (RoleReview, error) {
 	if err != nil {
 		return RoleReview{}, err
 	}
+	unlock, err := store.lifecycleLock()
+	if err != nil {
+		return RoleReview{}, err
+	}
+	defer unlock()
 	review, err := s.Load(root, id)
 	if err != nil {
 		return RoleReview{}, err
@@ -231,6 +241,11 @@ func (s ReviewLifecycle) Decide(root, id, itemID string, decision ReviewDecision
 	if err != nil {
 		return RoleReview{}, err
 	}
+	unlock, err := store.lifecycleLock()
+	if err != nil {
+		return RoleReview{}, err
+	}
+	defer unlock()
 	review, err := s.Load(root, id)
 	if err != nil {
 		return RoleReview{}, err
@@ -274,6 +289,11 @@ func (s ReviewLifecycle) EditValue(root, id, itemID string, value any) (RoleRevi
 	if err != nil {
 		return RoleReview{}, err
 	}
+	unlock, err := store.lifecycleLock()
+	if err != nil {
+		return RoleReview{}, err
+	}
+	defer unlock()
 	review, err := s.Load(root, id)
 	if err != nil {
 		return RoleReview{}, err
@@ -338,6 +358,11 @@ func (s ReviewLifecycle) Apply(root, id string, mode ApplyMode, selected []strin
 	if err != nil {
 		return RoleReview{}, MergeResult{}, err
 	}
+	unlock, err := store.lifecycleLock()
+	if err != nil {
+		return RoleReview{}, MergeResult{}, err
+	}
+	defer unlock()
 	review, err := s.Load(root, id)
 	if err != nil {
 		return RoleReview{}, MergeResult{}, err

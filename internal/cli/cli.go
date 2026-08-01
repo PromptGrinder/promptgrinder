@@ -558,7 +558,7 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 		fmt.Fprintf(stdout, "\nApplied %d item(s) to %d file(s).\n", len(result.Applied), len(result.Files))
 		return nil
 	}}
-	applyCmd.Flags().BoolVar(&applySafe, "safe", false, "apply non-removal, non-conflicting items")
+	applyCmd.Flags().BoolVar(&applySafe, "safe", false, "apply addition items only")
 	applyCmd.Flags().StringSliceVar(&applySelected, "selected", nil, "apply explicit stored item IDs (required for removals)")
 	applyCmd.Flags().BoolVar(&applyJSON, "json", false, "print machine-readable JSON")
 	rolesCmd.AddCommand(applyCmd)

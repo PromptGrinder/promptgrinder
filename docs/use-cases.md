@@ -160,7 +160,10 @@ allowed paths to distinguish its responsibility inside the shared repository.
 
 Use `promptgrinder roles enhance` to collect bounded repository, build, CI,
 documentation, and skill evidence and request structured recommendations from
-the configured advisor runtime. The default is review-only and writes nothing.
+the configured advisor runtime once. PromptGrinder validates, deterministically
+refines, and persists the exact proposal outside the repository. The default is
+review-only and writes no role YAML; non-interactive, piped, and JSON runs save
+the review without prompting.
 
 ### UC-25: Enhance roles in a large monorepo
 
@@ -180,6 +183,20 @@ YAML while preserving unrelated user-authored fields.
 
 Use the default review mode or `--reject-all` to inspect or reject all
 recommendations without writing project files.
+
+### UC-27a: Resume a persisted role review without AI
+
+Use `promptgrinder roles reviews` and `promptgrinder roles review <id|latest>`
+to find and inspect saved reviews. `roles refine`, `roles apply`, and `roles
+reject` use only the persisted proposal. They do not invoke the advisor, and a
+source-hash mismatch stops application before role YAML is changed.
+
+### UC-27b: Edit and approve destructive role changes explicitly
+
+In an interactive review, edit structured proposed values or decide items one
+at a time. `roles apply <id> --safe` applies additions only; replacements,
+conflicts, and removals require `--selected <item-id>`. EOF, interruption,
+rejection, inspection, and save-for-later leave role YAML unchanged.
 
 ## Persistent named workers
 
