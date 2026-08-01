@@ -2,32 +2,99 @@
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
-## Quick Start
+## Quick start
 
-Discover the repository and generate project roles:
+Run these commands from the root of the Git repository where PromptGrinder
+should work. Git and an installed, authenticated Codex CLI are required for
+the workflow below.
 
-    promptgrinder discover
+### 1. Install
 
-Discovery is deterministic and writes only a new `.promptgrinder/` tree with
-`project.yaml`, generated role YAML under `roles/`, and `context/`. It never
-overwrites existing files.
+```sh
+brew install promptgrinder
+promptgrinder --version
+```
 
-Review suggested role improvements without writing them:
+### 2. Check the setup
 
-    promptgrinder roles enhance
+```sh
+promptgrinder doctor --repo . --terminal headless
+```
 
-Validate, then run a prompt:
+A successful check confirms that PromptGrinder can use its local state,
+repository, Git, configured runtime, and a non-GUI terminal adapter.
 
-    promptgrinder validate docs/tasks/10-implement.md
-    promptgrinder run docs/tasks/10-implement.md
+### 3. Prepare roles and slices
 
-Run an ordered folder in the invoking terminal:
+Discover project roles, ask for a reviewable enhancement proposal, and inspect
+the stored review:
 
-    promptgrinder run-folder docs/tasks/ --detach=false
+```sh
+promptgrinder discover
+promptgrinder roles enhance
+promptgrinder roles reviews
+promptgrinder roles review latest
+```
 
-Resume it after a failure or interruption:
+Discovery creates `.promptgrinder/project.yaml`, generated role YAML under
+`.promptgrinder/roles/`, and `.promptgrinder/context/`. Role enhancement is
+review-first: inspect recommendations before applying any with
+`promptgrinder roles apply latest --safe`.
 
-    promptgrinder run-folder docs/tasks/ --detach=false --resume
+Slices are numbered Markdown work orders in one folder. This creates a small
+two-slice example:
+
+```sh
+mkdir -p tasks/first-change
+
+cat > tasks/first-change/10-implement-change.md <<'EOF'
+# Implement the change
+
+Make one bounded project change. Add focused tests and avoid unrelated files.
+EOF
+
+cat > tasks/first-change/20-test-change.md <<'EOF'
+# Verify the change
+
+Run the relevant tests, fix regressions caused by the change, and report the
+commands and results.
+EOF
+
+promptgrinder validate tasks/first-change/10-implement-change.md
+promptgrinder validate tasks/first-change/20-test-change.md
+
+git add .promptgrinder tasks/first-change
+git commit -m "Add PromptGrinder roles and first slices"
+```
+
+Runnable slice names use `NN-implement-*.md`, `NN-test-*.md`,
+`NN-verify-*.md`, or `NN-review-*.md`. An optional
+`00-specification*.md` supplies shared context.
+
+### 4. Run the slices
+
+```sh
+promptgrinder run-folder tasks/first-change \
+  --repo . \
+  --require-clean-git \
+  --commit-each=false \
+  --detach
+```
+
+`run-folder` requires the slice folder and executes recognized Markdown files
+in filename order. Detached startup prints the sequence ID and an exact status
+command while workers continue locally.
+
+### 5. Check progress
+
+```sh
+promptgrinder sequence current
+promptgrinder sequences --folder tasks/first-change
+```
+
+`sequence current` shows the overall state, current slice, per-slice results,
+worker IDs, completion safety, and retained logs. `sequences --folder` is useful
+when the same slice folder has been run more than once.
 
 ![PromptGrinder executing five sequential work orders successfully](docs/images/sequential-workflow.png)
 
@@ -56,10 +123,10 @@ the selected runtime performs the engineering work.
   review grounded AI-assisted recommendations before applying selected changes.
 - **macOS terminals:** use Terminal.app, iTerm2, or headless execution.
 
-## Installation
+## Installation and platform details
 
-PromptGrinder `v1.0.0-rc.2.1` supports macOS on Apple silicon and Intel. It
-requires Git and an installed, authenticated
+PromptGrinder targets macOS on Apple silicon and Intel. It requires Git and an
+installed, authenticated
 [Codex CLI](https://developers.openai.com/codex/cli/).
 
 ### GitHub releases and Homebrew
@@ -70,10 +137,9 @@ The release page contains GitHub's automatic **Source code (zip)** and
 attach compiled ZIP or tarball archives, binary-only checksums, or build
 metadata to these releases.
 
-macOS installation will be supported through Homebrew, which builds from the
-tagged source archive. Homebrew formula and tap instructions are maintained
-separately from GitHub release assets; the release workflow does not upload a
-compiled binary for either Apple silicon or Intel Macs.
+The Homebrew installation shown in the quick start builds from tagged source.
+The release workflow does not upload a compiled binary for either Apple
+silicon or Intel Macs.
 
 ### Build from source
 
