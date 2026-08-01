@@ -1,6 +1,6 @@
 # Clean-machine release qualification checklist
 
-Use this checklist for the exact release-candidate archives. It is an evidence
+Use this checklist for the exact tagged source and proposed Homebrew formula. It is an evidence
 procedure, not a claim that qualification has occurred. Run it once for every
 row in the proposed macOS/architecture matrix using a fresh user account,
 ephemeral VM, or equivalent clean environment. A long-lived development
@@ -14,7 +14,7 @@ dumps, or sensitive configuration values. Record:
 
 - tester, UTC start/end, hardware or VM, `sw_vers`, `uname -m`, Terminal and
   iTerm versions, Codex version, and `promptgrinder --version`;
-- exact archive name and SHA-256, download URL, commands and exit codes;
+- exact tag, commit, source URL, Homebrew formula revision, commands and exit codes;
 - duration, outcome, prompts/dialogs seen, confusing steps, and any deviation;
 - redacted command output, screenshots where useful, and before/after Git
   status or state hashes.
@@ -22,17 +22,13 @@ dumps, or sensitive configuration values. Record:
 Failures remain failures until the fixed release artifact is retested on the
 affected row. Never edit a captured result into a pass.
 
-## 1. Artifact and deterministic preflight
+## 1. Source and deterministic preflight
 
-Download the archive and `checksums.txt` using the README instructions. Verify
-the selected archive with `shasum -a 256 -c`, extract it directly, and record
-the commands and output in the evidence directory. Use the `amd64` archive on
-Intel.
-
-The release archives are named
-`promptgrinder_<version>_darwin_arm64.tar.gz` and
-`promptgrinder_<version>_darwin_amd64.tar.gz`. Each contains a binary named
-`promptgrinder`.
+Confirm the annotated tag resolves to the reviewed commit and that the GitHub
+release exposes only GitHub's automatic source ZIP and tar.gz links. Confirm
+there are no PromptGrinder-uploaded compiled archives, binary-only checksum
+files, or build metadata assets. Record the tag and source URL used by the
+proposed Homebrew formula.
 
 Before installing persistent state, exercise missing Codex,
 unknown/unready Codex, unwritable home, malformed config, non-Git directory,
@@ -40,9 +36,9 @@ custom `PATH`, missing iTerm2 when absent, setup dry-run/apply, and repository
 and worker non-mutation. Fixture Codex results prove discovery behavior only;
 they do not qualify a real Codex installation.
 
-Install the already verified binary into an existing executable search path
-exactly as documented in the README. Record any Gatekeeper flow. Do not disable
-Gatekeeper globally.
+Install through the proposed Homebrew formula on both Apple silicon and Intel,
+recording the formula source build and installed version. Do not substitute a
+locally prebuilt binary or disable Gatekeeper globally.
 
 ## 2. Real first-run onboarding
 

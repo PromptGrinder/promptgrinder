@@ -383,6 +383,9 @@ user's preferred shell configuration explicitly.
 Keep project configuration, worker state, tasks, queues, logs, and review
 evidence on the local machine. AI providers receive only the execution or
 advisor input required by their configured adapter and remain replaceable.
+Beginning with `v1.0.0-rc.2.2`, GitHub releases retain GitHub-generated source
+archives without attaching compiled binaries or binary-only checksums; macOS
+installation will be supported through Homebrew from tagged source.
 
 ## Product boundaries
 

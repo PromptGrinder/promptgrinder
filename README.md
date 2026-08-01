@@ -62,33 +62,18 @@ PromptGrinder `v1.0.0-rc.2.1` supports macOS on Apple silicon and Intel. It
 requires Git and an installed, authenticated
 [Codex CLI](https://developers.openai.com/codex/cli/).
 
-### Release archive
+### GitHub releases and Homebrew
 
-Download the archive for your Mac from the
-[GitHub releases page](https://github.com/PromptGrinder/promptgrinder/releases):
+Beginning with `v1.0.0-rc.2.2`, PromptGrinder GitHub releases are source-only.
+The release page contains GitHub's automatic **Source code (zip)** and
+**Source code (tar.gz)** links for the tagged commit. PromptGrinder does not
+attach compiled ZIP or tarball archives, binary-only checksums, or build
+metadata to these releases.
 
-- Apple silicon: `promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz`
-- Intel: `promptgrinder_v1.0.0-rc.2.1_darwin_amd64.tar.gz`
-
-Download `checksums.txt` from the same release, then verify and install. This
-example uses the Apple silicon archive:
-
-```sh
-grep 'promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz' checksums.txt |
-  shasum -a 256 -c -
-tar -xzf promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz
-install -d "$HOME/.local/bin"
-install -m 0755 \
-  promptgrinder_v1.0.0-rc.2.1_darwin_arm64/promptgrinder \
-  "$HOME/.local/bin/promptgrinder"
-promptgrinder --version
-```
-
-Use the `amd64` archive and directory on Intel. Ensure `$HOME/.local/bin` is on
-`PATH`. `promptgrinder doctor` detects the current shell and prints an exact,
-copyable PATH command when it is not. It reports the change but never edits
-`.zshrc`, `.bash_profile`, or another shell profile automatically. Release
-binaries are currently unsigned and not notarized.
+macOS installation will be supported through Homebrew, which builds from the
+tagged source archive. Homebrew formula and tap instructions are maintained
+separately from GitHub release assets; the release workflow does not upload a
+compiled binary for either Apple silicon or Intel Macs.
 
 ### Build from source
 
@@ -101,8 +86,9 @@ go install ./cmd/promptgrinder
 promptgrinder --version
 ```
 
-Homebrew, Linux, Windows, and automatic updates are not supported by this
-release candidate.
+Linux, Windows, and automatic updates are not supported by this release
+candidate. Direct compiled-archive installation is retained only in historical
+release documentation for releases that actually published those assets.
 
 ## Running prompts
 
