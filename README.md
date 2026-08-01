@@ -487,7 +487,9 @@ general development, slice authoring, CI, and release qualification.
 
 ## Documentation and support
 
-- [Worker runtime use cases](docs/product/worker-runtime-use-cases.md)
+- [`docs/use-cases.md`](docs/use-cases.md) — canonical catalog of supported
+  PromptGrinder workflows and product boundaries.
+
 - [Release policy](docs/RELEASE_POLICY.md)
 - [RC.2.1 qualification](docs/release/v1.0.0-rc.2.1-qualification.md)
 - [RC.2.1 final gate](docs/release/v1.0.0-rc.2.1-final-gate.md)

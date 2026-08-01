@@ -19,6 +19,7 @@ description: Implement, diagnose, review, or verify changes in the PromptGrinder
 - Preserve stdout, stderr, exit-code, JSON-envelope, state-schema, and resume compatibility unless the task explicitly changes a public contract.
 - Isolate tests with `t.TempDir()` and `PROMPTGRINDER_HOME`. Use fake executables and context deadlines; never require Codex, network access, GUI terminals, credentials, sleeps, or developer state.
 - For subprocess boundaries, assert arguments, environment, working directory, stdin, streams, exit status, and persisted state.
+- For every new or changed user-visible feature, update `docs/use-cases.md` in the same change. Add the use case, commands, safety behavior, and product boundary; do not leave the catalog for release cleanup.
 - Use `apply_patch` for edits. Do not overwrite unrelated dirty-worktree changes.
 
 ## Verify

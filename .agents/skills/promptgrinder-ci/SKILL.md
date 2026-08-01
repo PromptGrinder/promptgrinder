@@ -36,6 +36,8 @@ Build the CLI once per acceptance package/job. Assert stdout, stderr, JSON envel
 
 Treat committed examples as executable specifications. Validate and safely dry-run every runnable example. If validation resolves an engine executable, provide the fake even when no execution should occur.
 
+When CI or acceptance work introduces or changes user-visible product behavior, update `docs/use-cases.md` in the same change and cover the documented use case at the appropriate test boundary.
+
 For Darwin arm64 and amd64 artifacts, use `CGO_ENABLED=0` and `-trimpath`; verify both as Mach-O and run a smoke test only for the native architecture.
 
 ## Finish
