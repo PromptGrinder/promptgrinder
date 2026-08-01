@@ -1,0 +1,6 @@
+Result: failed
+--resume and --fresh are mutually exclusive
+--restart and --no-resume are mutually exclusive
+Result: failed
+Result: failed
+Result: failed

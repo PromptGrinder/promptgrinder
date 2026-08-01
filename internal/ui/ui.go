@@ -73,14 +73,28 @@ func (r *SharedProgressRenderer) Update(progress pgruntime.SharedRunProgress) {
 	name := filepath.Base(progress.TaskPath)
 	label := progressLabel(progress)
 	if r.animated {
-		prefix := r.color + "✓\033[0m"
+		prefix := colorizeStatusIcon("✓", "succeeded", r.color)
 		if progress.Status == pgruntime.SharedRunFailed {
-			prefix = "\033[31m✗\033[0m"
+			prefix = colorizeStatusIcon("✗", "failed", r.color)
 		}
 		fmt.Fprintf(r.w, "\r\033[2K%s [%d/%d] %s - %s\n", prefix, progress.Index, progress.Total, name, label)
 		return
 	}
 	fmt.Fprintf(r.w, "[%d/%d] %s - %s\n", progress.Index, progress.Total, name, label)
+}
+
+func colorizeStatusIcon(icon, status, successColor string) string {
+	color := ""
+	switch status {
+	case "active", "running", "succeeded", "completed":
+		color = successColor
+	case "failed":
+		color = "\033[31m"
+	}
+	if color == "" {
+		return icon
+	}
+	return color + icon + "\033[0m"
 }
 
 func progressLabel(progress pgruntime.SharedRunProgress) string {

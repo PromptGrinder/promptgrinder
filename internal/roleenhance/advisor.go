@@ -209,9 +209,6 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 	if !ok || len(values) == 0 {
 		return fmt.Errorf("recommendation %q has invalid value for field %q", r.ID, r.Field)
 	}
-	if r.Operation == OperationAppend && len(values) != 1 {
-		return fmt.Errorf("recommendation %q append requires one string value", r.ID)
-	}
 	corpus := groundingCorpus(current, evidence)
 	for _, value := range values {
 		value = strings.TrimSpace(value)
@@ -220,11 +217,11 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 		}
 		switch r.Field {
 		case "technology":
-			if !knownTechnology(current, value) {
+			if !knownTechnology(current, evidence, value) {
 				return fmt.Errorf("recommendation %q proposes ungrounded technology %q", r.ID, value)
 			}
 		case "quality_gates", "runtime.preferred":
-			if !strings.Contains(corpus, strings.ToLower(value)) {
+			if !groundingContains(corpus, value) {
 				return fmt.Errorf("recommendation %q proposes ungrounded %s %q", r.ID, r.Field, value)
 			}
 		case "allowed_paths":
@@ -237,7 +234,31 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 	return nil
 }
 
-func knownTechnology(current CurrentState, proposed string) bool {
+func groundingContains(corpus, value string) bool {
+	value = strings.ToLower(value)
+	if strings.Contains(corpus, value) {
+		return true
+	}
+	normalizedCorpus := strings.Join(strings.Fields(corpus), " ")
+	if strings.Contains(normalizedCorpus, strings.Join(strings.Fields(value), " ")) {
+		return true
+	}
+	lines := strings.Split(value, "\n")
+	groundedLines := 0
+	for _, line := range lines {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" {
+			continue
+		}
+		groundedLines++
+		if !strings.Contains(normalizedCorpus, line) {
+			return false
+		}
+	}
+	return groundedLines > 1
+}
+
+func knownTechnology(current CurrentState, evidence Evidence, proposed string) bool {
 	for _, value := range append(append([]string{}, current.Project.Languages...), current.Project.Frameworks...) {
 		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(proposed)) {
 			return true
@@ -248,6 +269,59 @@ func knownTechnology(current CurrentState, proposed string) bool {
 			if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(proposed)) {
 				return true
 			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(proposed), "Go") {
+		for _, source := range evidence.Sources {
+			if source.Kind == EvidenceRepository && source.Path == "go.mod" {
+				return true
+			}
+		}
+		for _, fact := range evidence.Facts {
+			if fact.Kind == EvidenceRepository && fact.Path == "go.mod" {
+				return true
+			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(proposed), "Jetpack Compose") {
+		for _, source := range evidence.Sources {
+			if source.Kind == EvidenceRepository && containsComposeEvidence(source.Excerpt) {
+				return true
+			}
+		}
+	}
+	if match := versionedJavaTechnology.FindStringSubmatch(strings.TrimSpace(proposed)); len(match) == 2 {
+		for _, source := range evidence.Sources {
+			if source.Kind == EvidenceRepository && javaVersionDeclared(source.Excerpt, match[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var versionedJavaTechnology = regexp.MustCompile(`(?i)^java\s+([0-9]+)$`)
+
+func javaVersionDeclared(text, version string) bool {
+	text = strings.ToLower(strings.Join(strings.Fields(text), ""))
+	for _, marker := range []string{
+		"<java.version>" + version + "</java.version>",
+		"<maven.compiler.release>" + version + "</maven.compiler.release>",
+		"javaversion.version_" + version,
+		"javalanguageversion.of(" + version + ")",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsComposeEvidence(text string) bool {
+	text = strings.ToLower(text)
+	for _, marker := range []string{"androidx.compose", "org.jetbrains.compose", "compose = true", "compose=true"} {
+		if strings.Contains(text, marker) {
+			return true
 		}
 	}
 	return false
@@ -275,8 +349,12 @@ func stringValues(value any) ([]string, bool) {
 }
 
 func evidenceHasPath(e Evidence, proposed string) bool {
+	proposed = filepath.ToSlash(filepath.Clean(proposed))
 	for _, s := range e.Sources {
 		if s.Path == proposed || strings.HasPrefix(s.Path, strings.TrimSuffix(proposed, "/")+"/") {
+			return true
+		}
+		if strings.Contains(filepath.ToSlash(s.Excerpt), proposed) {
 			return true
 		}
 	}
@@ -289,11 +367,24 @@ func evidenceHasPath(e Evidence, proposed string) bool {
 }
 
 func groundingCorpus(current CurrentState, evidence Evidence) string {
-	b, _ := json.Marshal(struct {
-		Current  CurrentState `json:"current"`
-		Evidence Evidence     `json:"evidence"`
-	}{current, evidence})
-	return strings.ToLower(string(b))
+	var values []string
+	values = append(values, current.Project.Name, current.Project.GeneratedBy)
+	values = append(values, current.Project.Languages...)
+	values = append(values, current.Project.Frameworks...)
+	values = append(values, current.Project.Roles...)
+	for _, role := range current.Roles {
+		values = append(values, role.ID, role.Name, role.Description, role.Runtime.Preferred)
+		values = append(values, role.Technology...)
+		values = append(values, role.AllowedPaths...)
+		values = append(values, role.QualityGates...)
+	}
+	for _, source := range evidence.Sources {
+		values = append(values, string(source.Kind), source.Path, source.Excerpt)
+	}
+	for _, fact := range evidence.Facts {
+		values = append(values, string(fact.Kind), fact.Path, fact.Key, fact.Value, fact.Key+"="+fact.Value)
+	}
+	return strings.ToLower(strings.Join(values, "\n"))
 }
 
 func roleIndex(current CurrentState) map[string]RoleSnapshot {

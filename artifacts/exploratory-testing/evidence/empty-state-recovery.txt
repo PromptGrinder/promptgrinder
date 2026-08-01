@@ -1,0 +1,84 @@
+No workers found.
+{
+  "workers": []
+}
+{
+  "workers": []
+}
+No sequences found.
+{
+  "sequences": []
+}
+No sequences found.
+file does not exist
+No PromptGrinder Terminal.app tabs found in worker state.
+{
+  "terminals": []
+}
+{
+  "error": {
+    "code": "validation_error",
+    "message": "terminal number 1 is out of range"
+  }
+}
+{
+  "error": {
+    "code": "validation_error",
+    "message": "terminal number 1 is out of range"
+  }
+}
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Terminal.app close failed (invalid_applescript): 2026-08-01 12:47:40.856 osascript[5122:3070620] Error received in message reply handler: Connection invalid\n2026-08-01 12:47:40.856 osascript[5122:3070622] Connection Invalid error for service com.apple.hiservices-xpcservice.\n443:448: syntax error: Expected end of line but found identifier. (-2741)"
+  }
+}
+No events found.
+{
+  "events": null
+}
+Pruned 0 workers.
+{
+  "pruned_workers": null,
+  "count": 0
+}
+invalid duration "0s": must be greater than zero
+{
+  "older_than": "30m0s",
+  "mark_failed": true,
+  "stale_workers": null,
+  "updated_workers": [],
+  "stale_sequences": null,
+  "updated_sequences": []
+}
+invalid duration "invalid": use values like 30m, 2h, or 24h
+{
+  "error": {
+    "code": "worker_not_found",
+    "message": "worker not found: missing"
+  }
+}
+{
+  "error": {
+    "code": "worker_not_found",
+    "message": "worker not found: missing"
+  }
+}
+{
+  "error": {
+    "code": "worker_not_found",
+    "message": "worker not found: missing"
+  }
+}
+{
+  "error": {
+    "code": "worker_not_found",
+    "message": "worker not found: missing"
+  }
+}
+{
+  "error": {
+    "code": "worker_not_found",
+    "message": "worker not found: missing"
+  }
+}

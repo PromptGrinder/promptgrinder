@@ -60,6 +60,9 @@ func (TechnologyDetector) Detect(root string) (Detection, error) {
 		}
 		lower := strings.ToLower(name)
 		switch {
+		case lower == "go.mod":
+			languages.add("Go")
+			tools.add("Go modules")
 		case lower == "pom.xml":
 			languages.add("Java")
 			tools.add("Maven")
@@ -87,6 +90,9 @@ func (TechnologyDetector) Detect(root string) (Detection, error) {
 			if strings.Contains(text, "com.android.application") || strings.Contains(text, "com.android.library") {
 				technologies.add("Android")
 				androidRoots.add(dir)
+			}
+			if containsComposeMarker(text) {
+				technologies.add("Jetpack Compose")
 			}
 			if framework := jvmFramework(text); framework != "" {
 				technologies.add(framework)
@@ -205,6 +211,16 @@ func packageTechnologies(b []byte) []string {
 		}
 	}
 	return out
+}
+
+func containsComposeMarker(text string) bool {
+	text = strings.ToLower(text)
+	for _, marker := range []string{"androidx.compose", "org.jetbrains.compose", "compose = true", "compose=true"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 func looksLikeKubernetes(path string) bool {
 	b, err := os.ReadFile(path)

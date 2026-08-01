@@ -1,0 +1,69 @@
+Home: /tmp/promptgrinder-et-interface-home
+Default template: /tmp/promptgrinder-et-interface-home/templates/default.yaml
+Default template status: missing
+Create it on first interactive run, or add this example:
+
+# PromptGrinder default template.
+# Edit this file or override values in ~/.promptgrinder/config.yaml,
+# repository .ai/config.yaml, environment variables, or CLI flags.
+
+engine:
+  default: codex
+  codex:
+    sandbox: workspace-write
+    approval: never
+
+terminal:
+  adapter: terminal
+  mode: normal
+  close_on_finish: true
+  close_on_failure: false
+
+worker:
+  heartbeat_interval: 30s
+  timeout: 45m
+
+run:
+  engine: codex
+
+run_folder:
+  repo: .
+  template: codex
+  engine: codex
+  resume: false
+  fresh: false
+  restart: false
+  no_resume: false
+  checkpoint: true
+  commit_each: true
+  require_clean_git: false
+  include_specification: false
+  detach: true
+User config: /tmp/promptgrinder-et-interface-home/config.yaml (missing)
+Repository config: /Users/anyberg/git/promptgrinder/.ai/config.yaml (missing)
+
+Current defaults:
+  engine.default: codex
+  terminal.adapter: terminal
+  terminal.mode: normal
+  terminal.close_on_finish: true
+  terminal.close_on_failure: false
+  worker.heartbeat_interval: 30s
+  worker.timeout: -
+  engine.codex.sandbox: workspace-write
+  engine.codex.approval: never
+  run.engine: -
+  run_folder.repo: .
+  run_folder.template: codex
+  run_folder.engine: -
+  run_folder.resume: false
+  run_folder.fresh: false
+  run_folder.restart: false
+  run_folder.no_resume: false
+  run_folder.checkpoint: false
+  run_folder.commit_each: false
+  run_folder.require_clean_git: false
+  run_folder.include_specification: false
+  run_folder.detach: true
+
+Override order: CLI flags > environment variables > repository .ai/config.yaml > ~/.promptgrinder/config.yaml > default template > built-in defaults.

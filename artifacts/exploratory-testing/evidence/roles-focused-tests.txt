@@ -1,0 +1,202 @@
+=== RUN   TestCompiledCLIHelpVersionAndHumanStreams
+--- PASS: TestCompiledCLIHelpVersionAndHumanStreams (1.53s)
+=== RUN   TestCompiledCLIValidateAndDryRunDoNotExecuteCodexOrCreateState
+--- PASS: TestCompiledCLIValidateAndDryRunDoNotExecuteCodexOrCreateState (0.03s)
+=== RUN   TestCompiledCLIJSONContractsAndUnknownEngineExitCode
+--- PASS: TestCompiledCLIJSONContractsAndUnknownEngineExitCode (0.07s)
+=== RUN   TestCompiledCLIRecordingCodexSuccess
+--- PASS: TestCompiledCLIRecordingCodexSuccess (0.53s)
+=== RUN   TestCompiledCLIRecordingCodexFailure
+--- PASS: TestCompiledCLIRecordingCodexFailure (0.39s)
+=== RUN   TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes
+=== RUN   TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/review
+=== RUN   TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/reject-all
+=== RUN   TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/apply-selected
+=== RUN   TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/apply-all
+--- PASS: TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes (1.12s)
+    --- PASS: TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/review (0.33s)
+    --- PASS: TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/reject-all (0.30s)
+    --- PASS: TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/apply-selected (0.30s)
+    --- PASS: TestCompiledCLIRolesEnhanceOfflineReviewAndApprovalModes/apply-all (0.19s)
+=== RUN   TestCompiledCLIPersistedRoleReviewFollowupsDoNotInvokeAdvisor
+--- PASS: TestCompiledCLIPersistedRoleReviewFollowupsDoNotInvokeAdvisor (0.25s)
+PASS
+ok  	promptgrinder/acceptance	5.650s
+=== RUN   TestAiRoleAdvisorReturnsStableValidatedPlan
+--- PASS: TestAiRoleAdvisorReturnsStableValidatedPlan (0.00s)
+=== RUN   TestAdvisorRequestIsBoundedToDataAndDeterministicallyOrdered
+--- PASS: TestAdvisorRequestIsBoundedToDataAndDeterministicallyOrdered (0.00s)
+=== RUN   TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence
+=== RUN   TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence/framework
+=== RUN   TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence/substring
+=== RUN   TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence/evidence
+--- PASS: TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence (0.00s)
+    --- PASS: TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence/framework (0.00s)
+    --- PASS: TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence/substring (0.00s)
+    --- PASS: TestAiRoleAdvisorRejectsUngroundedTechnologyAndFabricatedEvidence/evidence (0.00s)
+=== RUN   TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities
+=== RUN   TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/malformed
+=== RUN   TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/timeout
+=== RUN   TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/failure
+=== RUN   TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/capability
+--- PASS: TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities (0.00s)
+    --- PASS: TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/malformed (0.00s)
+    --- PASS: TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/timeout (0.00s)
+    --- PASS: TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/failure (0.00s)
+    --- PASS: TestAiRoleAdvisorSurfacesMalformedTimeoutFailureAndCapabilities/capability (0.00s)
+=== RUN   TestAdvisorRuntimeSelectionIsConfigurable
+--- PASS: TestAdvisorRuntimeSelectionIsConfigurable (0.00s)
+=== RUN   TestAiRoleAdvisorDoesNotWriteProjectFiles
+--- PASS: TestAiRoleAdvisorDoesNotWriteProjectFiles (0.00s)
+=== RUN   TestValidateRecommendationsAllowsGroundedRemovalAndRejectsSecrets
+--- PASS: TestValidateRecommendationsAllowsGroundedRemovalAndRejectsSecrets (0.00s)
+=== RUN   TestValidateRecommendationsAllowsGoGroundedByCollectedModule
+--- PASS: TestValidateRecommendationsAllowsGoGroundedByCollectedModule (0.00s)
+=== RUN   TestValidateRecommendationsAllowsGroundedMultiValueAppend
+--- PASS: TestValidateRecommendationsAllowsGroundedMultiValueAppend (0.00s)
+=== RUN   TestValidateRecommendationsGroundsQuotedCommandAgainstRawEvidence
+--- PASS: TestValidateRecommendationsGroundsQuotedCommandAgainstRawEvidence (0.00s)
+=== RUN   TestValidateRecommendationsGroundsMultilineCommandAcrossIndentation
+--- PASS: TestValidateRecommendationsGroundsMultilineCommandAcrossIndentation (0.00s)
+=== RUN   TestValidateRecommendationsGroundsMultilineCommandFromExactCollectedFragments
+--- PASS: TestValidateRecommendationsGroundsMultilineCommandFromExactCollectedFragments (0.00s)
+=== RUN   TestValidateRecommendationsGroundsDeepPathMentionedInEvidence
+--- PASS: TestValidateRecommendationsGroundsDeepPathMentionedInEvidence (0.00s)
+=== RUN   TestValidateRecommendationsGroundsComposeFromCollectedBuildEvidence
+--- PASS: TestValidateRecommendationsGroundsComposeFromCollectedBuildEvidence (0.00s)
+=== RUN   TestValidateRecommendationsGroundsExplicitJavaVersionFromBuildEvidence
+--- PASS: TestValidateRecommendationsGroundsExplicitJavaVersionFromBuildEvidence (0.00s)
+=== RUN   TestAdvisorResponseSchemaRequiresEveryCitationProperty
+--- PASS: TestAdvisorResponseSchemaRequiresEveryCitationProperty (0.00s)
+=== RUN   TestAdvisorInstructionsRequireVerbatimQualityGateCommands
+--- PASS: TestAdvisorInstructionsRequireVerbatimQualityGateCommands (0.00s)
+=== RUN   TestAdvisorResponseSchemaUsesCodexSupportedCompositionKeywords
+--- PASS: TestAdvisorResponseSchemaUsesCodexSupportedCompositionKeywords (0.00s)
+=== RUN   TestCodexRuntimeSurfacesSanitizedStderr
+--- PASS: TestCodexRuntimeSurfacesSanitizedStderr (2.40s)
+=== RUN   TestCollectorsDiscoveredProjectAndStableOrdering
+--- PASS: TestCollectorsDiscoveredProjectAndStableOrdering (0.11s)
+=== RUN   TestCollectorsAllowMissingOptionalDirectories
+--- PASS: TestCollectorsAllowMissingOptionalDirectories (0.01s)
+=== RUN   TestCollectorLimitsAreHardAndDeterministic
+--- PASS: TestCollectorLimitsAreHardAndDeterministic (0.01s)
+=== RUN   TestCollectorsSkipSymlinksBinariesAndSecrets
+--- PASS: TestCollectorsSkipSymlinksBinariesAndSecrets (0.03s)
+=== RUN   TestLoadCurrentStateRejectsMalformedYAML
+=== RUN   TestLoadCurrentStateRejectsMalformedYAML/project
+=== RUN   TestLoadCurrentStateRejectsMalformedYAML/role
+--- PASS: TestLoadCurrentStateRejectsMalformedYAML (0.04s)
+    --- PASS: TestLoadCurrentStateRejectsMalformedYAML/project (0.01s)
+    --- PASS: TestLoadCurrentStateRejectsMalformedYAML/role (0.03s)
+=== RUN   TestStableReviewPlan
+--- PASS: TestStableReviewPlan (0.00s)
+=== RUN   TestRecommendationEvidenceMustHaveBeenCollected
+--- PASS: TestRecommendationEvidenceMustHaveBeenCollected (0.00s)
+=== RUN   TestReviewLifecycleCallsAdvisorOnceAndFollowupsUseNoAI
+--- PASS: TestReviewLifecycleCallsAdvisorOnceAndFollowupsUseNoAI (0.17s)
+=== RUN   TestReviewLifecycleSafeExcludesRemovalAndStaleWritesNothing
+--- PASS: TestReviewLifecycleSafeExcludesRemovalAndStaleWritesNothing (0.06s)
+=== RUN   TestReviewLifecycleDecisionsAndEditsPersistWithoutAdvisorOrYAML
+--- PASS: TestReviewLifecycleDecisionsAndEditsPersistWithoutAdvisorOrYAML (0.08s)
+=== RUN   TestReviewLifecycleRejectsInvalidStructuredEdit
+--- PASS: TestReviewLifecycleRejectsInvalidStructuredEdit (0.03s)
+=== RUN   TestRoleMergeApplySelectedPreservesCustomYAML
+--- PASS: TestRoleMergeApplySelectedPreservesCustomYAML (0.00s)
+=== RUN   TestRoleMergeRejectAndStaleConflictDoNotWrite
+--- PASS: TestRoleMergeRejectAndStaleConflictDoNotWrite (0.00s)
+=== RUN   TestRoleMergeRejectsStaleProjectWithoutWriting
+--- PASS: TestRoleMergeRejectsStaleProjectWithoutWriting (0.00s)
+=== RUN   TestRoleMergeValidatesWholeSelectionBeforeWriting
+--- PASS: TestRoleMergeValidatesWholeSelectionBeforeWriting (0.00s)
+=== RUN   TestRoleMergeAppliesMultiValueAppendAsOneReviewableChange
+--- PASS: TestRoleMergeAppliesMultiValueAppendAsOneReviewableChange (0.00s)
+=== RUN   TestRemovalRequiresIndividualApproval
+--- PASS: TestRemovalRequiresIndividualApproval (0.00s)
+=== RUN   TestProposedValueRemovesMultipleValuesAfterExplicitApproval
+--- PASS: TestProposedValueRemovesMultipleValuesAfterExplicitApproval (0.00s)
+=== RUN   TestRoleReviewRefinerNormalizesAndCalculatesExactValues
+=== RUN   TestRoleReviewRefinerNormalizesAndCalculatesExactValues/scalar
+=== RUN   TestRoleReviewRefinerNormalizesAndCalculatesExactValues/list_representation
+=== RUN   TestRoleReviewRefinerNormalizesAndCalculatesExactValues/generated_path_cleanup
+=== RUN   TestRoleReviewRefinerNormalizesAndCalculatesExactValues/command_whitespace
+--- PASS: TestRoleReviewRefinerNormalizesAndCalculatesExactValues (0.00s)
+    --- PASS: TestRoleReviewRefinerNormalizesAndCalculatesExactValues/scalar (0.00s)
+    --- PASS: TestRoleReviewRefinerNormalizesAndCalculatesExactValues/list_representation (0.00s)
+    --- PASS: TestRoleReviewRefinerNormalizesAndCalculatesExactValues/generated_path_cleanup (0.00s)
+    --- PASS: TestRoleReviewRefinerNormalizesAndCalculatesExactValues/command_whitespace (0.00s)
+=== RUN   TestRoleReviewRefinerDeduplicatesDropsNoOpsAndSplitsRemovals
+--- PASS: TestRoleReviewRefinerDeduplicatesDropsNoOpsAndSplitsRemovals (0.00s)
+=== RUN   TestRoleReviewRefinerConflictsAreVisible
+--- PASS: TestRoleReviewRefinerConflictsAreVisible (0.00s)
+=== RUN   TestRoleReviewRefinerIsOrderIndependentAndPreservesOnlyExactDecisions
+--- PASS: TestRoleReviewRefinerIsOrderIndependentAndPreservesOnlyExactDecisions (0.00s)
+=== RUN   TestRoleReviewRefinerPersistsOriginalAndRefinedResults
+--- PASS: TestRoleReviewRefinerPersistsOriginalAndRefinedResults (0.00s)
+=== RUN   TestRoleReviewRefinerKeepsReviewDecisionState
+--- PASS: TestRoleReviewRefinerKeepsReviewDecisionState (0.00s)
+=== RUN   TestReviewStoreCreateLoadStableAndPermissions
+--- PASS: TestReviewStoreCreateLoadStableAndPermissions (0.03s)
+=== RUN   TestReviewStoreListLatestAndMissing
+--- PASS: TestReviewStoreListLatestAndMissing (0.02s)
+=== RUN   TestReviewStoreRejectsCorruptionSchemaTraversalAndSymlinks
+--- PASS: TestReviewStoreRejectsCorruptionSchemaTraversalAndSymlinks (0.00s)
+=== RUN   TestReviewStoreCompareAndUpdateIsConcurrentAndTransitionSafe
+--- PASS: TestReviewStoreCompareAndUpdateIsConcurrentAndTransitionSafe (0.02s)
+=== RUN   TestReviewStoreRejectsCrossProjectAndDuplicateID
+--- PASS: TestReviewStoreRejectsCrossProjectAndDuplicateID (0.01s)
+=== RUN   TestBoundAdvisorEvidenceEnforcesGlobalLimitsAndKeepsPriorityInputs
+--- PASS: TestBoundAdvisorEvidenceEnforcesGlobalLimitsAndKeepsPriorityInputs (0.00s)
+=== RUN   TestBoundAdvisorEvidenceTruncatesOnUTF8Boundary
+--- PASS: TestBoundAdvisorEvidenceTruncatesOnUTF8Boundary (0.00s)
+=== RUN   TestBoundAdvisorEvidencePrioritizesNestedBuildFiles
+--- PASS: TestBoundAdvisorEvidencePrioritizesNestedBuildFiles (0.00s)
+PASS
+ok  	promptgrinder/internal/roleenhance	3.553s
+=== RUN   TestTechnologyDetectorAndRoleGenerator
+=== RUN   TestTechnologyDetectorAndRoleGenerator/spring_boot_maven_with_tests
+=== RUN   TestTechnologyDetectorAndRoleGenerator/gradle_quarkus
+=== RUN   TestTechnologyDetectorAndRoleGenerator/android
+=== RUN   TestTechnologyDetectorAndRoleGenerator/android_compose
+=== RUN   TestTechnologyDetectorAndRoleGenerator/android_manifest_only
+=== RUN   TestTechnologyDetectorAndRoleGenerator/frontend_variants
+=== RUN   TestTechnologyDetectorAndRoleGenerator/go_module
+=== RUN   TestTechnologyDetectorAndRoleGenerator/infrastructure
+=== RUN   TestTechnologyDetectorAndRoleGenerator/ci
+=== RUN   TestTechnologyDetectorAndRoleGenerator/documentation
+=== RUN   TestTechnologyDetectorAndRoleGenerator/mixed
+=== RUN   TestTechnologyDetectorAndRoleGenerator/unsupported
+--- PASS: TestTechnologyDetectorAndRoleGenerator (0.01s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/spring_boot_maven_with_tests (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/gradle_quarkus (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/android (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/android_compose (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/android_manifest_only (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/frontend_variants (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/go_module (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/infrastructure (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/ci (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/documentation (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/mixed (0.00s)
+    --- PASS: TestTechnologyDetectorAndRoleGenerator/unsupported (0.00s)
+=== RUN   TestGeneratedContentIsDeterministicAndMinimal
+--- PASS: TestGeneratedContentIsDeterministicAndMinimal (0.00s)
+=== RUN   TestDiscoverWithoutSupportedEvidenceCreatesEmptyProjectStructure
+--- PASS: TestDiscoverWithoutSupportedEvidenceCreatesEmptyProjectStructure (0.00s)
+=== RUN   TestDiscoverWritesOnlyPromptGrinderAndLeavesIdenticalFilesUntouched
+--- PASS: TestDiscoverWritesOnlyPromptGrinderAndLeavesIdenticalFilesUntouched (0.00s)
+=== RUN   TestWritePlanPreflightsAllConflictsWithoutPartialWrites
+--- PASS: TestWritePlanPreflightsAllConflictsWithoutPartialWrites (0.00s)
+=== RUN   TestExistingEmptyContextDirectoryIsAllowed
+--- PASS: TestExistingEmptyContextDirectoryIsAllowed (0.00s)
+=== RUN   TestWritePlanRejectsPathsOutsidePromptGrinder
+=== RUN   TestWritePlanRejectsPathsOutsidePromptGrinder/outside.yaml
+=== RUN   TestWritePlanRejectsPathsOutsidePromptGrinder/../outside.yaml
+=== RUN   TestWritePlanRejectsPathsOutsidePromptGrinder/.promptgrinder-other/file
+--- PASS: TestWritePlanRejectsPathsOutsidePromptGrinder (0.00s)
+    --- PASS: TestWritePlanRejectsPathsOutsidePromptGrinder/outside.yaml (0.00s)
+    --- PASS: TestWritePlanRejectsPathsOutsidePromptGrinder/../outside.yaml (0.00s)
+    --- PASS: TestWritePlanRejectsPathsOutsidePromptGrinder/.promptgrinder-other/file (0.00s)
+=== RUN   TestWritePlanRejectsSymlinkedPromptGrinderDirectory
+--- PASS: TestWritePlanRejectsSymlinkedPromptGrinderDirectory (0.00s)
+PASS
+ok  	promptgrinder/internal/discovery	0.686s

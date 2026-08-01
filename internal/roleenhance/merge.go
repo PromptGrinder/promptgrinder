@@ -2,6 +2,7 @@ package roleenhance
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,13 +78,14 @@ func (RoleMergeService) Apply(root string, reviewed CurrentState, plan ReviewPla
 		if err := yaml.Unmarshal(role.Raw, &document); err != nil {
 			return result, fmt.Errorf("parse %s: %w", role.SourcePath, err)
 		}
+		originalRole := oldRoles[roleID]
 		for _, item := range items {
 			oldValue := fieldValue(role, item.Recommendation.Field)
 			newValue, err := proposedValue(oldValue, item.Recommendation)
 			if err != nil {
 				return result, err
 			}
-			if !reflect.DeepEqual(oldValue, item.OldValue) {
+			if !equivalentJSONValue(fieldValue(originalRole, item.Recommendation.Field), item.OldValue) {
 				return result, fmt.Errorf("recommendation %q old value no longer matches", item.Recommendation.ID)
 			}
 			if err := setYAMLField(&document, item.Recommendation.Field, newValue); err != nil {
@@ -145,6 +147,12 @@ func (RoleMergeService) Apply(root string, reviewed CurrentState, plan ReviewPla
 		result.Files = append(result.Files, write.rel)
 	}
 	return result, nil
+}
+
+func equivalentJSONValue(a, b any) bool {
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 func approvedIDs(plan ReviewPlan, selection ApprovalSelection) (map[string]bool, []string, error) {
@@ -215,30 +223,38 @@ func proposedValue(old any, r Recommendation) (any, error) {
 		}
 		return vals, nil
 	}
-	if len(vals) != 1 {
-		return nil, fmt.Errorf("recommendation %q requires one string value", r.ID)
-	}
 	current, ok := old.([]string)
 	if !ok {
 		return nil, fmt.Errorf("recommendation %q requires a list field", r.ID)
 	}
 	out := append([]string(nil), current...)
-	value := vals[0]
 	if r.Operation == OperationAppend {
-		for _, v := range out {
-			if v == value {
-				return out, nil
+		for _, value := range vals {
+			found := false
+			for _, existing := range out {
+				if existing == value {
+					found = true
+					break
+				}
 			}
-		}
-		return append(out, value), nil
-	}
-	if r.Operation == OperationRemove {
-		for i, v := range out {
-			if v == value {
-				return append(out[:i:i], out[i+1:]...), nil
+			if !found {
+				out = append(out, value)
 			}
 		}
 		return out, nil
+	}
+	if r.Operation == OperationRemove {
+		remove := make(map[string]bool, len(vals))
+		for _, value := range vals {
+			remove[value] = true
+		}
+		kept := out[:0]
+		for _, value := range out {
+			if !remove[value] {
+				kept = append(kept, value)
+			}
+		}
+		return kept, nil
 	}
 	return nil, fmt.Errorf("unsupported operation %q", r.Operation)
 }

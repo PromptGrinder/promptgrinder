@@ -367,8 +367,11 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 			if err != nil {
 				return StructuredError{Err: err, Code: ExitInvalidInput}
 			}
-			svc := roleenhance.EnhanceService{Advisor: roleAdvisor}
-			current, plan, err := svc.Review(cmd.Context(), rootPath)
+			lifecycle, err := roleReviewLifecycle(service, roleAdvisor)
+			if err != nil {
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			review, err := lifecycle.Enhance(cmd.Context(), rootPath)
 			if err != nil {
 				if enhanceJSON {
 					return writeJSONCommandError(stdout, "roles_enhance_error", err, compactJSON)
@@ -376,6 +379,7 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 				fmt.Fprintf(stderr, "Error: enhance roles: %v\n", err)
 				return StructuredError{Err: err, Code: ExitInvalidInput}
 			}
+			explicitMode := enhanceApplyAll || enhanceRejectAll || cmd.Flags().Changed("apply-selected")
 			selection := roleenhance.ApprovalSelection{Mode: roleenhance.ApprovalRejectAll}
 			if enhanceApplyAll {
 				selection.Mode = roleenhance.ApprovalApplyAll
@@ -385,7 +389,22 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 			}
 			var result roleenhance.MergeResult
 			if selection.Mode != roleenhance.ApprovalRejectAll {
-				result, err = (roleenhance.RoleMergeService{}).Apply(rootPath, current, plan, selection)
+				mode := roleenhance.ApplySafe
+				ids := []string(nil)
+				if selection.Mode == roleenhance.ApprovalApplySelected {
+					mode, ids = roleenhance.ApplySelected, enhanceSelected
+				} else if enhanceApplyAll {
+					mode = roleenhance.ApplySelected
+					for _, item := range review.Items {
+						if item.Safety != roleenhance.SafetyRemoval && item.Safety != roleenhance.SafetyConflict {
+							ids = append(ids, item.ID)
+						}
+					}
+					if len(ids) == 0 {
+						mode = roleenhance.ApplySafe
+					}
+				}
+				review, result, err = lifecycle.Apply(rootPath, review.ID, mode, ids)
 				if err != nil {
 					if enhanceJSON {
 						return writeJSONCommandError(stdout, "merge_conflict", err, compactJSON)
@@ -393,23 +412,29 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 					fmt.Fprintf(stderr, "Error: apply role enhancements: %v\n", err)
 					return StructuredError{Err: err, Code: ExitInvalidInput}
 				}
-			} else {
-				for _, item := range plan.Items {
-					result.Rejected = append(result.Rejected, item.Recommendation.ID)
+			} else if enhanceRejectAll {
+				review, err = lifecycle.Reject(rootPath, review.ID)
+				if err != nil {
+					return StructuredError{Err: err, Code: ExitInvalidInput}
 				}
 			}
 			if enhanceJSON {
 				return writeJSON(stdout, struct {
-					Review roleenhance.ReviewPlan   `json:"review"`
+					Review roleenhance.RoleReview   `json:"review"`
 					Result roleenhance.MergeResult  `json:"result"`
 					Mode   roleenhance.ApprovalMode `json:"mode"`
-				}{plan, result, selection.Mode}, compactJSON)
+				}{review, result, selection.Mode}, compactJSON)
 			}
-			if err := (roleenhance.ReviewRenderer{}).Render(stdout, plan); err != nil {
-				return err
+			renderStoredRoleReview(stdout, review)
+			if !explicitMode && shouldRenderInteractive(stdout, false, false) && isInteractiveReader(cmd.InOrStdin()) {
+				theme, themeErr := ui.NormalizeTheme(themeName)
+				if themeErr != nil {
+					return StructuredError{Err: themeErr, Code: ExitInvalidInput}
+				}
+				return runInteractiveRoleReview(cmd.Context(), cmd.InOrStdin(), stdout, rootPath, lifecycle, review, ui.Options{Theme: theme, Plain: plainOutput || ui.PlainFromEnv()})
 			}
 			if selection.Mode == roleenhance.ApprovalRejectAll {
-				fmt.Fprintln(stdout, "\nReview only: no files written.")
+				fmt.Fprintln(stdout, "\nReview saved: no files written.")
 			} else {
 				fmt.Fprintf(stdout, "\nApplied %d recommendation(s) to %d file(s).\n", len(result.Applied), len(result.Files))
 			}
@@ -421,6 +446,122 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 	enhanceCmd.Flags().BoolVar(&enhanceRejectAll, "reject-all", false, "reject all recommendations and write nothing")
 	enhanceCmd.Flags().BoolVar(&enhanceJSON, "json", false, "print machine-readable JSON")
 	rolesCmd.AddCommand(enhanceCmd)
+
+	var reviewsJSON bool
+	reviewsCmd := &cobra.Command{Use: "reviews", Short: "List stored role reviews (newest first).", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		reviews, err := lifecycle.List(rootPath)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if reviewsJSON {
+			return writeJSON(stdout, reviews, compactJSON)
+		}
+		if len(reviews) == 0 {
+			fmt.Fprintln(stdout, "No stored role reviews.")
+			return nil
+		}
+		for _, review := range reviews {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%d item(s)\n", review.ID, review.Status, review.CreatedAt.Format(time.RFC3339), len(review.Items))
+		}
+		return nil
+	}}
+	reviewsCmd.Flags().BoolVar(&reviewsJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(reviewsCmd)
+
+	var roleReviewJSON bool
+	roleReviewCmd := &cobra.Command{Use: "review <review-id|latest>", Short: "Show an exact stored role review.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		review, err := lifecycle.Load(rootPath, args[0])
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if roleReviewJSON {
+			return writeJSON(stdout, review, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		return nil
+	}}
+	roleReviewCmd.Flags().BoolVar(&roleReviewJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(roleReviewCmd)
+
+	var refineJSON bool
+	refineCmd := &cobra.Command{Use: "refine <review-id|latest>", Short: "Deterministically re-refine a stored review without AI.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		review, err := lifecycle.Refine(rootPath, args[0])
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if refineJSON {
+			return writeJSON(stdout, review, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		return nil
+	}}
+	refineCmd.Flags().BoolVar(&refineJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(refineCmd)
+	var rejectJSON bool
+	rejectCmd := &cobra.Command{Use: "reject <review-id|latest>", Short: "Reject a stored review without changing role YAML.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		review, err := lifecycle.Reject(rootPath, args[0])
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if rejectJSON {
+			return writeJSON(stdout, review, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		return nil
+	}}
+	rejectCmd.Flags().BoolVar(&rejectJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(rejectCmd)
+	var applySafe, applyJSON bool
+	var applySelected []string
+	applyCmd := &cobra.Command{Use: "apply <review-id|latest>", Short: "Apply stored role-review decisions without AI.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if applySafe == cmd.Flags().Changed("selected") {
+			return StructuredError{Err: fmt.Errorf("choose exactly one of --safe or --selected"), Code: ExitInvalidInput}
+		}
+		rootPath, lifecycle, err := roleReviewContext(service, roleAdvisor, getwd)
+		if err != nil {
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		mode := roleenhance.ApplySafe
+		if cmd.Flags().Changed("selected") {
+			mode = roleenhance.ApplySelected
+		}
+		review, result, err := lifecycle.Apply(rootPath, args[0], mode, applySelected)
+		if err != nil {
+			if applyJSON {
+				return writeJSONCommandError(stdout, "role_review_apply_error", err, compactJSON)
+			}
+			return StructuredError{Err: err, Code: ExitInvalidInput}
+		}
+		if applyJSON {
+			return writeJSON(stdout, struct {
+				Review roleenhance.RoleReview  `json:"review"`
+				Result roleenhance.MergeResult `json:"result"`
+			}{review, result}, compactJSON)
+		}
+		renderStoredRoleReview(stdout, review)
+		fmt.Fprintf(stdout, "\nApplied %d item(s) to %d file(s).\n", len(result.Applied), len(result.Files))
+		return nil
+	}}
+	applyCmd.Flags().BoolVar(&applySafe, "safe", false, "apply addition items only")
+	applyCmd.Flags().StringSliceVar(&applySelected, "selected", nil, "apply explicit stored item IDs (required for removals)")
+	applyCmd.Flags().BoolVar(&applyJSON, "json", false, "print machine-readable JSON")
+	rolesCmd.AddCommand(applyCmd)
 	root.AddCommand(rolesCmd)
 
 	var runJSON bool
@@ -621,7 +762,9 @@ Examples:
 				return StructuredError{Err: err, Code: ExitSetupFailed}
 			}
 			if !setupJSON {
-				if report.Changed {
+				if report.DryRun && setupHasPlannedMutations(report) {
+					fmt.Fprintln(stdout, "Setup preview complete; planned changes were not written.")
+				} else if report.Changed {
 					fmt.Fprintln(stdout, "Setup complete. Next: promptgrinder doctor")
 				} else {
 					fmt.Fprintln(stdout, "Setup is already complete; no files changed.")
@@ -864,6 +1007,9 @@ Examples:
 				renderer.Update(event)
 			}
 			summary, err := service.RunPromptFolder(args[0], options)
+			if err != nil && !summary.Started {
+				fmt.Fprintln(stdout, "Error: "+err.Error())
+			}
 			renderer.Finish(err == nil)
 			printRunFolderAggregate(stdout, summary)
 			if err != nil {
@@ -2061,6 +2207,15 @@ task at the tail of its original implementing worker's FIFO.`,
 	return root
 }
 
+func setupHasPlannedMutations(report firstuse.SetupReport) bool {
+	for _, mutation := range report.Mutations {
+		if mutation.Status == "planned" {
+			return true
+		}
+	}
+	return false
+}
+
 func findRepositoryRoot(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -2129,6 +2284,236 @@ func printTask(stdout io.Writer, task workerdomain.Task) {
 	if !strings.HasSuffix(task.Instructions, "\n") {
 		fmt.Fprintln(stdout)
 	}
+}
+
+func roleReviewLifecycle(service Service, advisor roleenhance.Advisor) (roleenhance.ReviewLifecycle, error) {
+	home := service.Defaults().Config.HomeDir
+	if home == "" {
+		home = service.Defaults().HomeDir
+	}
+	if home == "" {
+		var err error
+		home, err = config.ResolveHomeDir("")
+		if err != nil {
+			return roleenhance.ReviewLifecycle{}, err
+		}
+	}
+	if !filepath.IsAbs(home) {
+		return roleenhance.ReviewLifecycle{}, fmt.Errorf("PromptGrinder home must be absolute")
+	}
+	return roleenhance.ReviewLifecycle{Home: home, Advisor: advisor}, nil
+}
+
+func roleReviewContext(service Service, advisor roleenhance.Advisor, getwd func() (string, error)) (string, roleenhance.ReviewLifecycle, error) {
+	cwd, err := getwd()
+	if err != nil {
+		return "", roleenhance.ReviewLifecycle{}, err
+	}
+	root, err := findRepositoryRoot(cwd)
+	if err != nil {
+		return "", roleenhance.ReviewLifecycle{}, err
+	}
+	lifecycle, err := roleReviewLifecycle(service, advisor)
+	return root, lifecycle, err
+}
+
+func renderStoredRoleReview(w io.Writer, review roleenhance.RoleReview) {
+	fmt.Fprintf(w, "Review: %s\nStatus: %s\n", review.ID, review.Status)
+	for _, item := range review.Items {
+		label := item.OriginalRecommendationID
+		if label == "" {
+			label = item.ID
+		}
+		oldValue, _ := json.Marshal(item.OldValue)
+		proposedValue, _ := json.Marshal(item.ProposedValue)
+		fmt.Fprintf(w, "\n[%s] %s.%s (%s, %s)\n  Item ID: %s\n  Old: %s\n  Proposed: %s\n  Confidence: %s\n  Decision: %s\n  Reason: %s\n", label, item.RoleID, item.Field, item.Operation, item.Safety, item.ID, oldValue, proposedValue, item.Confidence, item.Decision, item.Explanation)
+		for _, citation := range item.Evidence {
+			fmt.Fprintf(w, "  Evidence: %s", citation.Path)
+			if citation.Fact != "" {
+				fmt.Fprintf(w, " (%s)", citation.Fact)
+			}
+			fmt.Fprintln(w)
+		}
+	}
+	fmt.Fprintf(w, "\nNext:\n  promptgrinder roles review %s\n  promptgrinder roles refine %s\n  promptgrinder roles apply %s --safe\n  promptgrinder roles reject %s\n", review.ID, review.ID, review.ID, review.ID)
+}
+
+func runInteractiveRoleReview(ctx context.Context, input io.Reader, output io.Writer, root string, lifecycle roleenhance.ReviewLifecycle, review roleenhance.RoleReview, opts ui.Options) error {
+	reader := bufio.NewReader(input)
+	for {
+		if err := ctx.Err(); err != nil {
+			return saveRoleReview(output, review)
+		}
+		ui.RoleReviewMenu(output)
+		answer, ok := readReviewAnswer(reader, output, "Choose an action: ")
+		if !ok {
+			return saveRoleReview(output, review)
+		}
+		switch strings.ToLower(answer) {
+		case "a", "1":
+			updated, result, err := lifecycle.Apply(root, review.ID, roleenhance.ApplySafe, nil)
+			if err != nil {
+				fmt.Fprintf(output, "Could not apply safe changes: %v\n", err)
+				review = reloadReview(lifecycle, root, review)
+				continue
+			}
+			review = updated
+			fmt.Fprintf(output, "Applied %d safe change(s) to %d file(s).\n", len(result.Applied), len(result.Files))
+			return nil
+		case "r", "2":
+			var saved bool
+			review, saved = reviewItemsOneByOne(ctx, reader, output, root, lifecycle, review, opts)
+			if saved {
+				return saveRoleReview(output, review)
+			}
+		case "e", "3":
+			var saved bool
+			review, saved = editReviewItem(reader, output, root, lifecycle, review, opts)
+			if saved {
+				return saveRoleReview(output, review)
+			}
+		case "x", "4":
+			confirmed, ok := confirmReview(reader, output, "Reject every recommendation? [y/N]: ")
+			if !ok {
+				return saveRoleReview(output, review)
+			}
+			if !confirmed {
+				continue
+			}
+			updated, err := lifecycle.Reject(root, review.ID)
+			if err != nil {
+				fmt.Fprintf(output, "Could not reject review: %v\n", err)
+				continue
+			}
+			review = updated
+			fmt.Fprintln(output, "Review rejected. No role files were written.")
+			return nil
+		case "s", "5":
+			return saveRoleReview(output, review)
+		default:
+			fmt.Fprintln(output, "Invalid choice. Enter a, r, e, x, or s.")
+		}
+	}
+}
+
+func reviewItemsOneByOne(ctx context.Context, reader *bufio.Reader, output io.Writer, root string, lifecycle roleenhance.ReviewLifecycle, review roleenhance.RoleReview, opts ui.Options) (roleenhance.RoleReview, bool) {
+	for _, snapshot := range review.Items {
+		if snapshot.Decision != roleenhance.ReviewDecisionPending {
+			continue
+		}
+		if ctx.Err() != nil {
+			return review, true
+		}
+		item := findReviewItem(review, snapshot.ID)
+		ui.RoleReviewItem(output, item, opts)
+		answer, ok := readReviewAnswer(reader, output, "[a]pprove, [r]eject, [s]kip, or [q] save: ")
+		if !ok || strings.EqualFold(answer, "q") {
+			return review, true
+		}
+		var decision roleenhance.ReviewDecision
+		switch strings.ToLower(answer) {
+		case "a":
+			if item.Safety == roleenhance.SafetyRemoval || item.Safety == roleenhance.SafetyReplacement {
+				confirmed, readable := confirmReview(reader, output, fmt.Sprintf("Explicitly approve this %s? [y/N]: ", item.Safety))
+				if !readable {
+					return review, true
+				}
+				if !confirmed {
+					continue
+				}
+			}
+			decision = roleenhance.ReviewDecisionApproved
+		case "r":
+			decision = roleenhance.ReviewDecisionRejected
+		case "s":
+			continue
+		default:
+			fmt.Fprintln(output, "Invalid choice; this item was not changed.")
+			continue
+		}
+		updated, err := lifecycle.Decide(root, review.ID, item.ID, decision)
+		if err != nil {
+			fmt.Fprintf(output, "Could not save decision: %v\n", err)
+			continue
+		}
+		review = updated
+		fmt.Fprintf(output, "Decision saved: %s.\n", decision)
+	}
+	fmt.Fprintln(output, "Item decisions saved. Use Apply safe changes or a stored apply command to write approved values.")
+	return review, false
+}
+
+func editReviewItem(reader *bufio.Reader, output io.Writer, root string, lifecycle roleenhance.ReviewLifecycle, review roleenhance.RoleReview, opts ui.Options) (roleenhance.RoleReview, bool) {
+	answer, ok := readReviewAnswer(reader, output, "Item ID (or list number): ")
+	if !ok {
+		return review, true
+	}
+	item := findReviewItem(review, answer)
+	if item.ID == "" {
+		index, err := strconv.Atoi(answer)
+		if err == nil && index > 0 && index <= len(review.Items) {
+			item = review.Items[index-1]
+		}
+	}
+	if item.ID == "" {
+		fmt.Fprintln(output, "Unknown item; no edit saved.")
+		return review, false
+	}
+	ui.RoleReviewItem(output, item, opts)
+	raw, ok := readReviewAnswer(reader, output, "New value as JSON (string or string list): ")
+	if !ok {
+		return review, true
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		fmt.Fprintf(output, "Invalid JSON value: %v\n", err)
+		return review, false
+	}
+	updated, err := lifecycle.EditValue(root, review.ID, item.ID, value)
+	if err != nil {
+		fmt.Fprintf(output, "Edit rejected: %v\n", err)
+		return review, false
+	}
+	review = updated
+	fmt.Fprintln(output, "Edit saved; deterministic validation and classification were re-run.")
+	ui.RoleReviewItem(output, findReviewItem(review, item.ID), opts)
+	return review, false
+}
+
+func readReviewAnswer(reader *bufio.Reader, output io.Writer, prompt string) (string, bool) {
+	fmt.Fprint(output, prompt)
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		fmt.Fprintln(output)
+		return "", false
+	}
+	return strings.TrimSpace(line), true
+}
+
+func confirmReview(reader *bufio.Reader, output io.Writer, prompt string) (bool, bool) {
+	answer, ok := readReviewAnswer(reader, output, prompt)
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), ok
+}
+
+func saveRoleReview(output io.Writer, review roleenhance.RoleReview) error {
+	fmt.Fprintf(output, "Review %s saved for later. No role files were written.\n", review.ID)
+	return nil
+}
+
+func findReviewItem(review roleenhance.RoleReview, id string) roleenhance.StoredReviewItem {
+	for _, item := range review.Items {
+		if item.ID == id || item.OriginalRecommendationID == id {
+			return item
+		}
+	}
+	return roleenhance.StoredReviewItem{}
+}
+
+func reloadReview(lifecycle roleenhance.ReviewLifecycle, root string, review roleenhance.RoleReview) roleenhance.RoleReview {
+	if next, err := lifecycle.Load(root, review.ID); err == nil {
+		return next
+	}
+	return review
 }
 
 func parseReviewValidations(values []string) ([]workerdomain.Validation, error) {
@@ -3111,6 +3496,18 @@ func title(value string) string {
 
 type terminalStatusWriter interface {
 	IsTerminal() bool
+}
+
+func isInteractiveReader(input io.Reader) bool {
+	if terminalReader, ok := input.(terminalStatusWriter); ok {
+		return terminalReader.IsTerminal()
+	}
+	fileReader, ok := input.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := fileReader.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func shouldRenderInteractive(stdout io.Writer, jsonMode, compact bool) bool {

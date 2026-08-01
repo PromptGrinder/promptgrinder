@@ -18,6 +18,7 @@ description: Break engineering work into ordered Markdown prompts for PromptGrin
 - Use only supported frontmatter keys. Current semantic keys include `acceptance_criteria`, `allowed_paths`, `forbidden_paths`, and `validation`; validate the prompt before running it.
 - Keep paths repository-relative. Make forbidden paths override allowed paths.
 - State concrete behavior, tests, compatibility expectations, and non-goals. Avoid vague requests such as “finish the feature.”
+- Every sequence that adds or changes a user-visible feature must include updating `docs/use-cases.md` in the implementing slice or a dedicated documentation slice before final verification.
 - Do not instruct a nested worker to run `git add` or `git commit` when the outer sequence uses `--commit-each`; the supervisor owns Git metadata.
 - Do not request network access, real AI calls, GUI terminal launches, credentials, or publishing unless explicitly required and authorized.
 - End every runnable prompt with this exact required contract:

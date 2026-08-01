@@ -32,6 +32,8 @@ jobs:
         run: go vet ./...
       - name: Module integrity
         run: go mod verify
+      - name: Source-only release policy
+        run: scripts/verify-source-only-release.sh
 
   tests:
     name: Go tests

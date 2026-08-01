@@ -1,0 +1,91 @@
+package roleenhance
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"promptgrinder/internal/testsupport"
+)
+
+func TestAdvisorResponseSchemaRequiresEveryCitationProperty(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			Recommendations struct {
+				Items struct {
+					Properties struct {
+						Evidence struct {
+							Items struct {
+								Required []string `json:"required"`
+							} `json:"items"`
+						} `json:"evidence"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"recommendations"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(advisorResponseJSONSchema), &schema); err != nil {
+		t.Fatalf("parse advisor response schema: %v", err)
+	}
+	required := schema.Properties.Recommendations.Items.Properties.Evidence.Items.Required
+	if len(required) != 2 || required[0] != "path" || required[1] != "fact" {
+		t.Fatalf("citation required properties = %v, want [path fact]", required)
+	}
+}
+
+func TestAdvisorInstructionsRequireVerbatimQualityGateCommands(t *testing.T) {
+	for _, required := range []string{"exact executable command text", "copied verbatim", "never paraphrase", "every value", "Set evidence.fact to an empty string", "never put prose in evidence.fact"} {
+		if !strings.Contains(advisorInstructions, required) {
+			t.Fatalf("advisor instructions missing %q", required)
+		}
+	}
+}
+
+func TestAdvisorResponseSchemaUsesCodexSupportedCompositionKeywords(t *testing.T) {
+	var schema any
+	if err := json.Unmarshal([]byte(advisorResponseJSONSchema), &schema); err != nil {
+		t.Fatalf("parse advisor response schema: %v", err)
+	}
+	assertNoJSONSchemaKeyword(t, schema, "const")
+	assertNoJSONSchemaKeyword(t, schema, "oneOf")
+	if !strings.Contains(advisorResponseJSONSchema, `"anyOf"`) {
+		t.Fatal("advisor response schema does not use anyOf for the polymorphic value")
+	}
+}
+
+func assertNoJSONSchemaKeyword(t *testing.T, value any, forbidden string) {
+	t.Helper()
+	switch value := value.(type) {
+	case map[string]any:
+		if _, exists := value[forbidden]; exists {
+			t.Fatalf("advisor response schema contains unsupported keyword %q", forbidden)
+		}
+		for _, child := range value {
+			assertNoJSONSchemaKeyword(t, child, forbidden)
+		}
+	case []any:
+		for _, child := range value {
+			assertNoJSONSchemaKeyword(t, child, forbidden)
+		}
+	}
+}
+
+func TestCodexRuntimeSurfacesSanitizedStderr(t *testing.T) {
+	fake := testsupport.FakeExecutable(t, "codex", "#!/bin/sh\nprintf '%s\\n' 'user' >&2\ncat >&2\nprintf '%s\\n' 'invalid output schema: fact must be required' >&2\nprintf '%s\\n' 'ERROR api_key=do-not-print' >&2\nexit 17\n")
+
+	_, err := (CodexRuntime{Executable: fake}).Advise(context.Background(), []byte(`{"schema_version":"promptgrinder.role-advisor/v1","private_prompt":"do not echo this error evidence"}`))
+	if err == nil {
+		t.Fatal("Advise() error = nil, want execution failure")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "exit status 17") || !strings.Contains(message, "fact must be required") {
+		t.Fatalf("Advise() error = %q, want exit status and Codex diagnostic", message)
+	}
+	if strings.Contains(message, "do-not-print") {
+		t.Fatalf("Advise() error leaked secret: %q", message)
+	}
+	if strings.Contains(message, "do not echo this error evidence") {
+		t.Fatalf("Advise() error leaked advisor input: %q", message)
+	}
+}

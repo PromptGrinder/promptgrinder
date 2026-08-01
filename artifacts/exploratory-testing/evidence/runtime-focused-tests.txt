@@ -1,0 +1,234 @@
+=== RUN   TestProgressEventJSONBackwardCompatibility
+--- PASS: TestProgressEventJSONBackwardCompatibility (0.00s)
+=== RUN   TestProgressEventJSONNewFieldsRoundTrip
+--- PASS: TestProgressEventJSONNewFieldsRoundTrip (0.00s)
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults/blocked
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults/partial
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults/missing_status
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults/unsafe
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults/empty_final
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults/clarification
+=== RUN   TestOrderedCompletionContractStopsUnsafeResults/duplicate
+--- PASS: TestOrderedCompletionContractStopsUnsafeResults (0.02s)
+    --- PASS: TestOrderedCompletionContractStopsUnsafeResults/blocked (0.00s)
+    --- PASS: TestOrderedCompletionContractStopsUnsafeResults/partial (0.00s)
+    --- PASS: TestOrderedCompletionContractStopsUnsafeResults/missing_status (0.00s)
+    --- PASS: TestOrderedCompletionContractStopsUnsafeResults/unsafe (0.00s)
+    --- PASS: TestOrderedCompletionContractStopsUnsafeResults/empty_final (0.00s)
+    --- PASS: TestOrderedCompletionContractStopsUnsafeResults/clarification (0.00s)
+    --- PASS: TestOrderedCompletionContractStopsUnsafeResults/duplicate (0.00s)
+=== RUN   TestOrderedPromptInjectsContractExactlyOnce
+--- PASS: TestOrderedPromptInjectsContractExactlyOnce (0.00s)
+=== RUN   TestOrderedCompletionParsingIsAdapterIndependent
+--- PASS: TestOrderedCompletionParsingIsAdapterIndependent (0.00s)
+=== RUN   TestEngineFailurePersistsOrderedCompletionFields
+--- PASS: TestEngineFailurePersistsOrderedCompletionFields (0.00s)
+=== RUN   TestRunFolderReusesPersistedCodexSession
+--- PASS: TestRunFolderReusesPersistedCodexSession (0.00s)
+=== RUN   TestDiscoverSortsMarkdownAlphabetically
+--- PASS: TestDiscoverSortsMarkdownAlphabetically (0.00s)
+=== RUN   TestClassifyPromptTypes
+--- PASS: TestClassifyPromptTypes (0.00s)
+=== RUN   TestDiscoverIncludesOnlyRecognizedNumberedPrompts
+--- PASS: TestDiscoverIncludesOnlyRecognizedNumberedPrompts (0.00s)
+=== RUN   TestRunPreflightValidatesEveryPromptBeforeCreatingState
+--- PASS: TestRunPreflightValidatesEveryPromptBeforeCreatingState (0.00s)
+=== RUN   TestSpecificationIsMetadataByDefaultAndContextPrepended
+--- PASS: TestSpecificationIsMetadataByDefaultAndContextPrepended (0.00s)
+=== RUN   TestRunEmitsProgressEvents
+--- PASS: TestRunEmitsProgressEvents (0.00s)
+=== RUN   TestSpecificationV2IsSharedContextByDefault
+--- PASS: TestSpecificationV2IsSharedContextByDefault (0.00s)
+=== RUN   TestRunDoesNotMarkRunningWorkerCompleted
+--- PASS: TestRunDoesNotMarkRunningWorkerCompleted (0.00s)
+=== RUN   TestSharedContextPreservesActiveFrontmatter
+--- PASS: TestSharedContextPreservesActiveFrontmatter (0.00s)
+=== RUN   TestSpecificationAndTaskSemanticsRenderExactlyOnce
+--- PASS: TestSpecificationAndTaskSemanticsRenderExactlyOnce (0.00s)
+=== RUN   TestIncludeSpecificationExecutesSpecification
+--- PASS: TestIncludeSpecificationExecutesSpecification (0.00s)
+=== RUN   TestFreshCreatesStateAndDefaultResumes
+--- PASS: TestFreshCreatesStateAndDefaultResumes (0.00s)
+=== RUN   TestExactSequenceRerunSkipsSucceededPrompts
+--- PASS: TestExactSequenceRerunSkipsSucceededPrompts (0.01s)
+=== RUN   TestSequenceWithSucceededPrefixResumesAtFirstFailedPrompt
+--- PASS: TestSequenceWithSucceededPrefixResumesAtFirstFailedPrompt (0.04s)
+=== RUN   TestChangingPromptContentCreatesDifferentSequence
+--- PASS: TestChangingPromptContentCreatesDifferentSequence (0.02s)
+=== RUN   TestEngineOverrideParticipatesInSequenceIdentity
+--- PASS: TestEngineOverrideParticipatesInSequenceIdentity (0.01s)
+=== RUN   TestUnsupportedDefaultEngineFailsBeforeSequenceCreation
+--- PASS: TestUnsupportedDefaultEngineFailsBeforeSequenceCreation (0.01s)
+=== RUN   TestCodexEngineConfigParticipatesInSequenceIdentity
+--- PASS: TestCodexEngineConfigParticipatesInSequenceIdentity (0.01s)
+=== RUN   TestRestartRunsAllPromptsAgain
+--- PASS: TestRestartRunsAllPromptsAgain (0.02s)
+=== RUN   TestFreshIgnoresPreviousState
+--- PASS: TestFreshIgnoresPreviousState (0.01s)
+=== RUN   TestResumeFreshMutuallyExclusive
+--- PASS: TestResumeFreshMutuallyExclusive (0.00s)
+=== RUN   TestStopOnFailureAndRetryFailedOnResume
+--- PASS: TestStopOnFailureAndRetryFailedOnResume (0.02s)
+=== RUN   TestUnknownPromptIsNotRunnable
+--- PASS: TestUnknownPromptIsNotRunnable (0.00s)
+=== RUN   TestCurrentSequenceReturnsNewestEvenWhenOlderSequenceIsRunning
+--- PASS: TestCurrentSequenceReturnsNewestEvenWhenOlderSequenceIsRunning (0.00s)
+=== RUN   TestOldPersistedSequenceWithoutNewTimestampsLoads
+--- PASS: TestOldPersistedSequenceWithoutNewTimestampsLoads (0.00s)
+=== RUN   TestSequenceProgressDistinguishesRunningFromNext
+--- PASS: TestSequenceProgressDistinguishesRunningFromNext (0.00s)
+=== RUN   TestReconcileSequencesMarksAbandonedPendingSequenceInterrupted
+--- PASS: TestReconcileSequencesMarksAbandonedPendingSequenceInterrupted (0.00s)
+=== RUN   TestReconcileSequencesPreservesHealthySupervisor
+--- PASS: TestReconcileSequencesPreservesHealthySupervisor (0.00s)
+=== RUN   TestReconcileSequencesMarksDeadSupervisorDespiteFreshHeartbeat
+--- PASS: TestReconcileSequencesMarksDeadSupervisorDespiteFreshHeartbeat (0.00s)
+=== RUN   TestRunPersistsSupervisorLifecycleAndSequenceEvents
+--- PASS: TestRunPersistsSupervisorLifecycleAndSequenceEvents (0.01s)
+=== RUN   TestDetachedNotificationsReportSuccessAndFailure
+=== RUN   TestDetachedNotificationsReportSuccessAndFailure/success
+=== RUN   TestDetachedNotificationsReportSuccessAndFailure/failure
+--- PASS: TestDetachedNotificationsReportSuccessAndFailure (0.02s)
+    --- PASS: TestDetachedNotificationsReportSuccessAndFailure/success (0.01s)
+    --- PASS: TestDetachedNotificationsReportSuccessAndFailure/failure (0.01s)
+=== RUN   TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary
+--- PASS: TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary (0.02s)
+=== RUN   TestParseTokenUsage
+--- PASS: TestParseTokenUsage (0.00s)
+=== RUN   TestCheckpointRecordsGitMetadata
+--- PASS: TestCheckpointRecordsGitMetadata (0.60s)
+=== RUN   TestRepoPathControlsGitMetadataForExternalPromptFolder
+--- PASS: TestRepoPathControlsGitMetadataForExternalPromptFolder (0.41s)
+=== RUN   TestCommitEachCommitsOnlyWhenThereAreChanges
+--- PASS: TestCommitEachCommitsOnlyWhenThereAreChanges (1.36s)
+=== RUN   TestRequireCleanGitFailsWhenDirty
+--- PASS: TestRequireCleanGitFailsWhenDirty (0.30s)
+=== RUN   TestCommitEachRefusesIncidentBaselineWithoutLaunchingOrStaging
+--- PASS: TestCommitEachRefusesIncidentBaselineWithoutLaunchingOrStaging (0.37s)
+=== RUN   TestRunFolderPathPolicyRejectsWorkerCreatedUnallowedPath
+--- PASS: TestRunFolderPathPolicyRejectsWorkerCreatedUnallowedPath (0.33s)
+PASS
+ok  	promptgrinder/internal/runfolder	4.663s
+=== RUN   TestRunFolderCreatesMultipleWorkers
+--- PASS: TestRunFolderCreatesMultipleWorkers (0.15s)
+=== RUN   TestRunPathsPreflightRejectsMissingPathBeforeCreatingWorkers
+--- PASS: TestRunPathsPreflightRejectsMissingPathBeforeCreatingWorkers (0.00s)
+=== RUN   TestRunPathsDryRunRejectsEmptyPromptWithoutCreatingWorkers
+--- PASS: TestRunPathsDryRunRejectsEmptyPromptWithoutCreatingWorkers (0.01s)
+=== RUN   TestRunPathsDryRunValidatesAndOrdersSharedPrompts
+--- PASS: TestRunPathsDryRunValidatesAndOrdersSharedPrompts (0.01s)
+=== RUN   TestRunPathsRejectsPatternContainingNewline
+--- PASS: TestRunPathsRejectsPatternContainingNewline (0.01s)
+=== RUN   TestSharedGitCommitCreatesPromptCheckpoint
+--- PASS: TestSharedGitCommitCreatesPromptCheckpoint (0.65s)
+=== RUN   TestRollbackSharedChangesRestoresCheckpoint
+--- PASS: TestRollbackSharedChangesRestoresCheckpoint (0.49s)
+=== RUN   TestSharedWorkerFailureIncludesCompletionDetails
+--- PASS: TestSharedWorkerFailureIncludesCompletionDetails (0.00s)
+=== RUN   TestSharedPromptWithHandoffAppendsPrerequisiteEvidence
+--- PASS: TestSharedPromptWithHandoffAppendsPrerequisiteEvidence (0.02s)
+=== RUN   TestRunFileEngineOverrideTakesPrecedence
+--- PASS: TestRunFileEngineOverrideTakesPrecedence (0.17s)
+=== RUN   TestRunFolderEngineOverrideTakesPrecedenceForEveryTask
+--- PASS: TestRunFolderEngineOverrideTakesPrecedenceForEveryTask (0.23s)
+=== RUN   TestRunPathUnknownEngineOverrideFailsBeforeLaunch
+--- PASS: TestRunPathUnknownEngineOverrideFailsBeforeLaunch (0.00s)
+=== RUN   TestRunPromptFolderEngineOverrideTakesPrecedence
+--- PASS: TestRunPromptFolderEngineOverrideTakesPrecedence (0.17s)
+=== RUN   TestRunPromptFolderUsesRepoPathForWorkerRepository
+--- PASS: TestRunPromptFolderUsesRepoPathForWorkerRepository (0.09s)
+=== RUN   TestRunPromptFolderForegroundForcesHeadlessAfterRepoConfig
+--- PASS: TestRunPromptFolderForegroundForcesHeadlessAfterRepoConfig (0.15s)
+=== RUN   TestRunPromptFolderConfiguredPolicyAndNormalRunRetainAdapter
+--- PASS: TestRunPromptFolderConfiguredPolicyAndNormalRunRetainAdapter (0.17s)
+=== RUN   TestRunPromptFolderForegroundFailureStopsAndPersistsResumeState
+--- PASS: TestRunPromptFolderForegroundFailureStopsAndPersistsResumeState (0.15s)
+=== RUN   TestRunFolderContinuesAfterLaunchFailure
+--- PASS: TestRunFolderContinuesAfterLaunchFailure (0.14s)
+=== RUN   TestLogsUnknownWorkerReturnsClearError
+--- PASS: TestLogsUnknownWorkerReturnsClearError (0.00s)
+=== RUN   TestFinishWorkerPersistsParsedEngineResult
+--- PASS: TestFinishWorkerPersistsParsedEngineResult (0.00s)
+=== RUN   TestFinishWorkerRejectsBlockedCodexCompletion
+--- PASS: TestFinishWorkerRejectsBlockedCodexCompletion (0.00s)
+=== RUN   TestFinishWorkerRejectsSuccessfulExitWithoutFinalCodexMessage
+--- PASS: TestFinishWorkerRejectsSuccessfulExitWithoutFinalCodexMessage (0.00s)
+=== RUN   TestFinishWorkerPrefersCompleteCodexCaptureOverUnflushedLog
+--- PASS: TestFinishWorkerPrefersCompleteCodexCaptureOverUnflushedLog (0.00s)
+=== RUN   TestFinishWorkerPersistsCompletionBeforeTerminalStatus
+--- PASS: TestFinishWorkerPersistsCompletionBeforeTerminalStatus (0.00s)
+=== RUN   TestTerminalCandidatesSkipClosedWorkers
+--- PASS: TestTerminalCandidatesSkipClosedWorkers (0.00s)
+=== RUN   TestCloseTerminalsMarksWorkersClosed
+--- PASS: TestCloseTerminalsMarksWorkersClosed (0.00s)
+=== RUN   TestCloseAllTerminalsIncludesITermWildcard
+--- PASS: TestCloseAllTerminalsIncludesITermWildcard (0.00s)
+PASS
+ok  	promptgrinder/internal/runtime	4.203s
+=== RUN   TestSelectAdapter
+--- PASS: TestSelectAdapter (0.00s)
+=== RUN   TestSelectAdapterRejectsFutureAdapters
+--- PASS: TestSelectAdapterRejectsFutureAdapters (0.00s)
+=== RUN   TestTitleFromScriptUsesWorkerID
+--- PASS: TestTitleFromScriptUsesWorkerID (0.00s)
+=== RUN   TestAppleScriptGenerationQuotesPathsAndAssignsOwnedTitle
+=== RUN   TestAppleScriptGenerationQuotesPathsAndAssignsOwnedTitle/iTerm2
+=== RUN   TestAppleScriptGenerationQuotesPathsAndAssignsOwnedTitle/Terminal.app
+--- PASS: TestAppleScriptGenerationQuotesPathsAndAssignsOwnedTitle (0.00s)
+    --- PASS: TestAppleScriptGenerationQuotesPathsAndAssignsOwnedTitle/iTerm2 (0.00s)
+    --- PASS: TestAppleScriptGenerationQuotesPathsAndAssignsOwnedTitle/Terminal.app (0.00s)
+=== RUN   TestCloseScriptsUseStableIdentityAndBundleIdentifier
+--- PASS: TestCloseScriptsUseStableIdentityAndBundleIdentifier (0.00s)
+=== RUN   TestLaunchUsesInjectableAppleScriptBoundary
+--- PASS: TestLaunchUsesInjectableAppleScriptBoundary (0.00s)
+=== RUN   TestAppleScriptFailuresAreDistinguishable
+=== RUN   TestAppleScriptFailuresAreDistinguishable/permission
+=== RUN   TestAppleScriptFailuresAreDistinguishable/syntax
+=== RUN   TestAppleScriptFailuresAreDistinguishable/application_timeout
+=== RUN   TestAppleScriptFailuresAreDistinguishable/application
+--- PASS: TestAppleScriptFailuresAreDistinguishable (0.00s)
+    --- PASS: TestAppleScriptFailuresAreDistinguishable/permission (0.00s)
+    --- PASS: TestAppleScriptFailuresAreDistinguishable/syntax (0.00s)
+    --- PASS: TestAppleScriptFailuresAreDistinguishable/application_timeout (0.00s)
+    --- PASS: TestAppleScriptFailuresAreDistinguishable/application (0.00s)
+=== RUN   TestAppleScriptContextTimeoutIsDistinguishable
+--- PASS: TestAppleScriptContextTimeoutIsDistinguishable (0.00s)
+=== RUN   TestHeadlessAdapterExecutionSuccessWritesLog
+--- PASS: TestHeadlessAdapterExecutionSuccessWritesLog (0.01s)
+=== RUN   TestHeadlessAdapterExecutionFailure
+--- PASS: TestHeadlessAdapterExecutionFailure (0.01s)
+=== RUN   TestAppleScriptStringListUsesAppleScriptSyntax
+--- PASS: TestAppleScriptStringListUsesAppleScriptSyntax (0.00s)
+PASS
+ok  	promptgrinder/internal/terminal	1.972s
+=== RUN   TestRunFolderRendererPlainLifecycleFailureAndResume
+--- PASS: TestRunFolderRendererPlainLifecycleFailureAndResume (0.00s)
+=== RUN   TestRunFolderRendererReportsIncludedAndIgnoredMarkdown
+--- PASS: TestRunFolderRendererReportsIncludedAndIgnoredMarkdown (0.00s)
+=== RUN   TestRunFolderRendererPrintsPreflightFailureReason
+--- PASS: TestRunFolderRendererPrintsPreflightFailureReason (0.00s)
+=== RUN   TestRunFolderRendererResumeInventoryAndDurations
+--- PASS: TestRunFolderRendererResumeInventoryAndDurations (0.00s)
+=== RUN   TestRunFolderRendererNoColorForcesPlain
+--- PASS: TestRunFolderRendererNoColorForcesPlain (0.00s)
+=== RUN   TestRunFolderRendererUsesSharedStatusColors
+--- PASS: TestRunFolderRendererUsesSharedStatusColors (0.00s)
+=== RUN   TestRunFolderRendererUsesCompactInteractiveLogLink
+--- PASS: TestRunFolderRendererUsesCompactInteractiveLogLink (0.00s)
+=== RUN   TestRunFolderRendererRedrawSurvivesWrappedRows
+--- PASS: TestRunFolderRendererRedrawSurvivesWrappedRows (0.00s)
+=== RUN   TestTerminalFileLinkRejectsControlCharacters
+--- PASS: TestTerminalFileLinkRejectsControlCharacters (0.00s)
+=== RUN   TestRunFolderRendererTickerLifecycleAndReplacement
+--- PASS: TestRunFolderRendererTickerLifecycleAndReplacement (0.00s)
+=== RUN   TestRunFolderRendererConcurrentUpdatesAndClose
+--- PASS: TestRunFolderRendererConcurrentUpdatesAndClose (0.00s)
+=== RUN   TestSharedProgressRendererPlainLifecycle
+--- PASS: TestSharedProgressRendererPlainLifecycle (0.00s)
+=== RUN   TestSharedProgressRendererPlainFailure
+--- PASS: TestSharedProgressRendererPlainFailure (0.00s)
+=== RUN   TestFormatDuration
+--- PASS: TestFormatDuration (0.00s)
+PASS
+ok  	promptgrinder/internal/ui	1.784s

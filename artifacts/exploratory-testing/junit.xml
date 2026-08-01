@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="PromptGrinder exploratory baselines" tests="61" failures="2" errors="0" skipped="0" time="549">
+  <properties><property name="commit" value="a60f68bc2516bbe427ffff3027b76fd8b9e5c224"/><property name="confidence" value="94"/></properties>
+  <testcase classname="use-cases" name="UC-01"/><testcase classname="use-cases" name="UC-02"/><testcase classname="use-cases" name="UC-03"/><testcase classname="use-cases" name="UC-04"/>
+  <testcase classname="use-cases" name="UC-05"/><testcase classname="use-cases" name="UC-06"/><testcase classname="use-cases" name="UC-07"/><testcase classname="use-cases" name="UC-08"/>
+  <testcase classname="use-cases" name="UC-09"/><testcase classname="use-cases" name="UC-10"/><testcase classname="use-cases" name="UC-11"/><testcase classname="use-cases" name="UC-12"/>
+  <testcase classname="use-cases" name="UC-13"/><testcase classname="use-cases" name="UC-14"/><testcase classname="use-cases" name="UC-15"/><testcase classname="use-cases" name="UC-16"/>
+  <testcase classname="use-cases" name="UC-17"/><testcase classname="use-cases" name="UC-18"/><testcase classname="use-cases" name="UC-19"/><testcase classname="use-cases" name="UC-20"/>
+  <testcase classname="use-cases" name="UC-21"/><testcase classname="use-cases" name="UC-22"/><testcase classname="use-cases" name="UC-23"/><testcase classname="use-cases" name="UC-24"/>
+  <testcase classname="use-cases" name="UC-25"/><testcase classname="use-cases" name="UC-26"/><testcase classname="use-cases" name="UC-27"/><testcase classname="use-cases" name="UC-27a"/><testcase classname="use-cases" name="UC-27b"/>
+  <testcase classname="use-cases" name="UC-28"/><testcase classname="use-cases" name="UC-29"/><testcase classname="use-cases" name="UC-30"/><testcase classname="use-cases" name="UC-31"/>
+  <testcase classname="use-cases" name="UC-32"/><testcase classname="use-cases" name="UC-33"/><testcase classname="use-cases" name="UC-34"/><testcase classname="use-cases" name="UC-35"/>
+  <testcase classname="use-cases" name="UC-36"/><testcase classname="use-cases" name="UC-37"/><testcase classname="use-cases" name="UC-38"/><testcase classname="use-cases" name="UC-39"/>
+  <testcase classname="use-cases" name="UC-40"/><testcase classname="use-cases" name="UC-41"/><testcase classname="use-cases" name="UC-42"/><testcase classname="use-cases" name="UC-43"/>
+  <testcase classname="use-cases" name="UC-44"/><testcase classname="use-cases" name="UC-45"/><testcase classname="use-cases" name="UC-46"/><testcase classname="use-cases" name="UC-47"/>
+  <testcase classname="use-cases" name="UC-48"/><testcase classname="use-cases" name="UC-49"/><testcase classname="use-cases" name="UC-50"/><testcase classname="use-cases" name="UC-51"/>
+  <testcase classname="use-cases" name="UC-52"/><testcase classname="use-cases" name="UC-53"/><testcase classname="use-cases" name="UC-54"/><testcase classname="use-cases" name="UC-55"/><testcase classname="use-cases" name="UC-56"/><testcase classname="use-cases" name="UC-57"/>
+  <testcase classname="defects" name="DEF-001 setup dry-run summary"><failure type="low">Planned writes are followed by the contradictory message: Setup is already complete; no files changed.</failure></testcase>
+  <testcase classname="defects" name="DEF-002 run-folder diagnostic"><failure type="medium">Unsupported numbered prompt exits 1 but foreground stdout only says Result: failed and stderr is empty.</failure></testcase>
+</testsuite>

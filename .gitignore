@@ -1,6 +1,5 @@
 # Build and release output.
 /promptgrinder
-/dist/
 /build/
 /bin/
 /tmp/
@@ -11,8 +10,6 @@
 coverage.out
 coverage.html
 *.prof
-checksums.txt
-*.dmg
 
 # PromptGrinder-generated state, wherever a fixture repository is used.
 /.promptgrinder/

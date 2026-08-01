@@ -1,4 +1,4 @@
-# PromptGrinder
+# PromptGrinder — the app that builds itself
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
@@ -62,33 +62,18 @@ PromptGrinder `v1.0.0-rc.2.1` supports macOS on Apple silicon and Intel. It
 requires Git and an installed, authenticated
 [Codex CLI](https://developers.openai.com/codex/cli/).
 
-### Release archive
+### GitHub releases and Homebrew
 
-Download the archive for your Mac from the
-[GitHub releases page](https://github.com/PromptGrinder/promptgrinder/releases):
+Beginning with `v1.0.0-rc.2.2`, PromptGrinder GitHub releases are source-only.
+The release page contains GitHub's automatic **Source code (zip)** and
+**Source code (tar.gz)** links for the tagged commit. PromptGrinder does not
+attach compiled ZIP or tarball archives, binary-only checksums, or build
+metadata to these releases.
 
-- Apple silicon: `promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz`
-- Intel: `promptgrinder_v1.0.0-rc.2.1_darwin_amd64.tar.gz`
-
-Download `checksums.txt` from the same release, then verify and install. This
-example uses the Apple silicon archive:
-
-```sh
-grep 'promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz' checksums.txt |
-  shasum -a 256 -c -
-tar -xzf promptgrinder_v1.0.0-rc.2.1_darwin_arm64.tar.gz
-install -d "$HOME/.local/bin"
-install -m 0755 \
-  promptgrinder_v1.0.0-rc.2.1_darwin_arm64/promptgrinder \
-  "$HOME/.local/bin/promptgrinder"
-promptgrinder --version
-```
-
-Use the `amd64` archive and directory on Intel. Ensure `$HOME/.local/bin` is on
-`PATH`. `promptgrinder doctor` detects the current shell and prints an exact,
-copyable PATH command when it is not. It reports the change but never edits
-`.zshrc`, `.bash_profile`, or another shell profile automatically. Release
-binaries are currently unsigned and not notarized.
+macOS installation will be supported through Homebrew, which builds from the
+tagged source archive. Homebrew formula and tap instructions are maintained
+separately from GitHub release assets; the release workflow does not upload a
+compiled binary for either Apple silicon or Intel Macs.
 
 ### Build from source
 
@@ -101,8 +86,9 @@ go install ./cmd/promptgrinder
 promptgrinder --version
 ```
 
-Homebrew, Linux, Windows, and automatic updates are not supported by this
-release candidate.
+Linux, Windows, and automatic updates are not supported by this release
+candidate. Direct compiled-archive installation is retained only in historical
+release documentation for releases that actually published those assets.
 
 ## Running prompts
 
@@ -181,7 +167,12 @@ commits are intended.
 | `run <path...>` | Run one or more work orders |
 | `run-folder <folder>` | Run numbered work orders sequentially |
 | `discover` | Detect repository technologies and generate `.promptgrinder/` project roles |
-| `roles enhance` | Review grounded role recommendations; apply with `--apply-all` or `--apply-selected <id>` |
+| `roles enhance` | Ask the advisor once, refine deterministically, and persist an exact role review |
+| `roles reviews` | List persisted reviews for the current repository |
+| `roles review <id\|latest>` | Inspect exact stored before/after values without AI |
+| `roles refine <id\|latest>` | Re-run deterministic refinement without AI |
+| `roles apply <id\|latest>` | Apply safe additions or explicitly selected stored items without AI |
+| `roles reject <id\|latest>` | Reject a stored review without writing role YAML |
 | `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
 | `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
 | `setup` | Preview or create PromptGrinder-owned first-use files |
@@ -204,6 +195,10 @@ output.
 `00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
 `NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. README files,
 notes, completion reports, and unknown numbered file types are never runnable.
+Before creating sequence state, PromptGrinder classifies every visible Markdown
+file and validates every included prompt. Numbered task-like files with an
+unsupported name fail preflight with included/total counts instead of being
+silently skipped; ordinary notes are reported as ignored.
 Specifications are shared context unless `--include-specification` is set.
 
 PromptGrinder appends one visible completion-report instruction to every
@@ -229,13 +224,23 @@ For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys
 are rejected rather than treated as task content.
 
-`roles enhance` is review-only by default and with `--reject-all`. It writes
-nothing unless `--apply-all` or `--apply-selected <id>[,<id>...]` is supplied;
-these approval flags are mutually exclusive. Use `--json` for deterministic
-automation output. The configured Codex executable is used only through a
-bounded, structured advisor request in a temporary directory with a read-only
-sandbox. PromptGrinder validates grounding and performs all YAML merging; the
-advisor never receives the repository path or write access.
+`roles enhance` calls the configured advisor once, validates and
+deterministically refines its structured recommendations, and saves the exact
+review under `PROMPTGRINDER_HOME/projects/<project-id>/role-reviews/`. It does
+not write role YAML by default. Use `roles review`, `roles refine`, `roles
+apply`, and `roles reject` to continue later; those commands operate only on
+stored state and never invoke AI. `roles apply <id> --safe` applies additions
+only. Replacements, conflicts, and removals require explicit item IDs through
+`--selected`; removals are never included in a bulk safe action. Changed source
+files make a review stale and stop application.
+
+Legacy `roles enhance --reject-all`, `--apply-all`, and `--apply-selected
+<id>[,<id>...]` automation remains supported and uses the same persisted review
+without a second advisor call. Non-interactive and `--json` execution saves the
+review and never prompts. The configured Codex executable is used only through
+a bounded, structured advisor request in a temporary directory with a
+read-only sandbox. PromptGrinder validates grounding and performs all YAML
+merging; the advisor never receives the repository path or write access.
 
 The `.promptgrinder/project.yaml` and `.promptgrinder/roles/*.yaml` files are
 discovery and enhancement artifacts in RC.2. Executable named-worker definitions
@@ -487,7 +492,9 @@ general development, slice authoring, CI, and release qualification.
 
 ## Documentation and support
 
-- [Worker runtime use cases](docs/product/worker-runtime-use-cases.md)
+- [`docs/use-cases.md`](docs/use-cases.md) — canonical catalog of supported
+  PromptGrinder workflows and product boundaries.
+
 - [Release policy](docs/RELEASE_POLICY.md)
 - [RC.2.1 qualification](docs/release/v1.0.0-rc.2.1-qualification.md)
 - [RC.2.1 final gate](docs/release/v1.0.0-rc.2.1-final-gate.md)

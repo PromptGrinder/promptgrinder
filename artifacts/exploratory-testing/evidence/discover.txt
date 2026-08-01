@@ -1,0 +1,22 @@
+Discovered:
+  Continuous Integration
+  Documentation
+Generated:
+  .promptgrinder/project.yaml
+  .promptgrinder/roles/ci.yaml
+  .promptgrinder/roles/documentation.yaml
+  .promptgrinder/context/
+.promptgrinder
+.promptgrinder/context
+.promptgrinder/project.yaml
+.promptgrinder/roles
+.promptgrinder/roles/ci.yaml
+.promptgrinder/roles/documentation.yaml
+Discovered:
+  Continuous Integration
+  Documentation
+Generated:
+  .promptgrinder/project.yaml
+  .promptgrinder/roles/ci.yaml
+  .promptgrinder/roles/documentation.yaml
+  .promptgrinder/context/

@@ -31,6 +31,7 @@ Cross-build supported artifacts with `CGO_ENABLED=0` and `-trimpath` for Darwin 
 ## Review safety and compatibility
 
 - Confirm documentation matches the candidate version and public commands.
+- Confirm every user-visible feature in the candidate is represented accurately in `docs/use-cases.md`; an undocumented feature is a release-readiness gap.
 - Review state/config schema defaults and old-state compatibility.
 - Confirm no credentials, private prompts, generated binaries, PromptGrinder state, or developer-specific paths are tracked.
 - Keep release publication in the release workflow; do not duplicate it in CI.

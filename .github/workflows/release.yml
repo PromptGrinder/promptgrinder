@@ -33,57 +33,20 @@ jobs:
       - run: go vet ./...
       - run: go test -count=1 ./...
       - run: go test -race -count=1 ./...
-      - name: Build and verify release archives
-        run: scripts/release.sh "${GITHUB_REF_NAME}" "${GITHUB_SHA}" dist
-      - uses: actions/upload-artifact@v7
-        with:
-          name: qualified-release-${{ github.ref_name }}
-          path: dist/
-          if-no-files-found: error
-          retention-days: 14
-
-  smoke:
-    needs: qualify
-    strategy:
-      matrix:
-        include:
-          - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: amd64
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: qualified-release-${{ github.ref_name }}
-          path: dist
-      - name: Install and smoke-test native archive
-        run: |
-          artifact="promptgrinder_${GITHUB_REF_NAME}_darwin_${{ matrix.arch }}"
-          mkdir -p install
-          tar -xzf "dist/${artifact}.tar.gz" -C install
-          scripts/smoke-release.sh \
-            "install/${artifact}/promptgrinder" \
-            "${GITHUB_REF_NAME}" "${GITHUB_SHA}"
+      - name: Verify source-only release configuration
+        run: scripts/verify-source-only-release.sh
 
   draft:
-    needs: [qualify, smoke]
+    needs: qualify
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: qualified-release-${{ github.ref_name }}
-          path: dist
       - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
+          gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --draft \
             --verify-tag \

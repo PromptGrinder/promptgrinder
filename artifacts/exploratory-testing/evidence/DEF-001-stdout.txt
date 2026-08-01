@@ -1,0 +1,6 @@
+create_directory: /tmp/promptgrinder-et-defect-setup-new-2 (planned)
+create_directory: /tmp/promptgrinder-et-defect-setup-new-2/workers (planned)
+create_directory: /tmp/promptgrinder-et-defect-setup-new-2/sequences (planned)
+create_directory: /tmp/promptgrinder-et-defect-setup-new-2/templates (planned)
+create_config: /tmp/promptgrinder-et-defect-setup-new-2/config.yaml (planned)
+Setup is already complete; no files changed.

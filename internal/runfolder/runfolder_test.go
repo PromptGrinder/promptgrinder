@@ -2,6 +2,7 @@ package runfolder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -226,12 +227,32 @@ func TestDiscoverIncludesOnlyRecognizedNumberedPrompts(t *testing.T) {
 	writePromptFile(t, dir, "README.md", "overview")
 	writePromptFile(t, dir, "notes.md", "notes")
 
-	prompts, err := Discover(dir)
+	inspection, err := Inspect(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(prompts) != 1 || prompts[0].Name != "20-implement-task.md" {
-		t.Fatalf("prompts = %#v", prompts)
+	if len(inspection.Prompts) != 1 || inspection.Prompts[0].Name != "20-implement-task.md" {
+		t.Fatalf("prompts = %#v", inspection.Prompts)
+	}
+	if inspection.MarkdownTotal != 4 || strings.Join(inspection.Ignored, ",") != "README.md,notes.md" || strings.Join(inspection.Invalid, ",") != "10-custom-task.md" {
+		t.Fatalf("inspection = %#v", inspection)
+	}
+	if _, err := Discover(dir); err == nil || !strings.Contains(err.Error(), "1 of 4 Markdown files included") || !strings.Contains(err.Error(), "10-custom-task.md") {
+		t.Fatalf("Discover error = %v", err)
+	}
+}
+
+func TestRunPreflightValidatesEveryPromptBeforeCreatingState(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "10-implement-valid.md", "valid")
+	writePromptFile(t, dir, "20-test-invalid.md", "---\nunknown: true\n---\ninvalid")
+	home := t.TempDir()
+	_, err := Run(dir, Options{HomeDir: home}, &fakeLauncher{})
+	if err == nil || !strings.Contains(err.Error(), "20-test-invalid.md") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".promptgrinder")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("folder state created before preflight completed: %v", statErr)
 	}
 }
 
@@ -610,7 +631,7 @@ func TestUnknownPromptIsNotRunnable(t *testing.T) {
 	dir := t.TempDir()
 	writePromptFile(t, dir, "10-custom.md", "custom")
 	_, err := Run(dir, Options{}, &fakeLauncher{})
-	if err == nil || !strings.Contains(err.Error(), "no Markdown prompts") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported numbered prompt name") {
 		t.Fatalf("err = %v", err)
 	}
 }

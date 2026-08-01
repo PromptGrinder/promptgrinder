@@ -1,0 +1,895 @@
+Check first-run prerequisites without changing files.
+
+Usage:
+  promptgrinder doctor [flags]
+
+Flags:
+      --active            opt in to a visible no-AI terminal launch probe
+  -h, --help              help for doctor
+      --json              print deterministic machine-readable JSON
+      --repo string       check a repository and its effective configuration
+      --terminal string   check terminal, iterm, or headless (defaults to effective config)
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Create minimal PromptGrinder-owned state and configuration.
+
+Usage:
+  promptgrinder setup [flags]
+
+Flags:
+      --backup            back up an existing config before replacement
+      --dry-run           show proposed writes without changing files
+  -h, --help              help for setup
+      --json              print machine-readable JSON
+      --non-interactive   never prompt; requires --yes when writes are proposed
+      --replace           replace an existing user config (requires --backup)
+  -y, --yes               confirm proposed PromptGrinder-owned writes
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show current PromptGrinder defaults and override locations.
+
+Usage:
+  promptgrinder defaults [flags]
+
+Flags:
+  -h, --help   help for defaults
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+List supported engine adapters.
+
+Usage:
+  promptgrinder engines [flags]
+  promptgrinder engines [command]
+
+Available Commands:
+  describe    Describe one engine adapter.
+
+Flags:
+  -h, --help   help for engines
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder engines [command] --help" for more information about a command.
+Describe one engine adapter.
+
+Usage:
+  promptgrinder engines describe <engine> [flags]
+
+Flags:
+  -h, --help   help for describe
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Validate a Markdown task without launching a worker.
+
+Usage:
+  promptgrinder validate <task.md> [flags]
+
+Flags:
+      --engine string   override the task engine for validation
+  -h, --help            help for validate
+      --json            print machine-readable JSON
+      --render          print the exact prompt bytes the engine would receive
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Run one or more Markdown task files, folders, or wildcard patterns.
+
+Wildcard patterns may be expanded by the shell or quoted for PromptGrinder to
+expand. Add --shared-context to run selected files sequentially in one Codex
+context.
+
+Examples:
+  promptgrinder run task.md
+  promptgrinder run tasks/
+  promptgrinder run ./prompts/02*.md
+  promptgrinder run --dry-run './prompts/02*.md'
+  promptgrinder run --shared-context './prompts/02*.md'
+
+Usage:
+  promptgrinder run <task.md|tasks/|pattern>... [flags]
+
+Flags:
+      --allow-concurrent-worktree   allow another PromptGrinder batch to use the same git worktree
+      --commit-each                 commit changes after each successful shared-context prompt (default true)
+      --dry-run                     resolve and validate all selected prompts without creating workers
+      --engine string               override the task engine for this run
+  -h, --help                        help for run
+      --json                        print machine-readable JSON
+      --require-clean-git           require a clean working tree before a shared-context run (default true)
+      --rollback-on-failure         restore the previous prompt checkpoint after a failed shared-context prompt (default true)
+      --sandbox string              override the Codex sandbox for this run: read-only, workspace-write, or danger-full-access
+      --shared-context              run selected Markdown files sequentially in one Codex context
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Run numbered Markdown prompts in a folder sequentially.
+
+Usage:
+  promptgrinder run-folder <folder> [flags]
+
+Flags:
+      --allow-concurrent-worktree   allow another PromptGrinder batch to use the same git worktree
+      --checkpoint                  record git metadata after successful prompts
+      --commit-each                 commit changes after each successful runnable prompt
+      --detach                      run the folder sequence in the background
+      --engine string               override every prompt engine for this run
+      --fresh                       start a new folder run and ignore previous state
+  -h, --help                        help for run-folder
+      --include-specification       execute specification prompts instead of using them only as context
+      --no-resume                   do not use existing sequence resume state
+      --repo string                 repository path where workers run and git operations apply (default ".")
+      --require-clean-git           require a clean git working tree before each runnable prompt
+      --restart                     restart this exact sequence from the beginning
+      --resume                      resume an unfinished folder run
+      --template string             execution template (default "codex")
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show prompt-level progress for one sequence.
+
+Usage:
+  promptgrinder sequence <sequence-id|current> [flags]
+
+Flags:
+  -h, --help   help for sequence
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+List prompt sequence progress.
+
+Usage:
+  promptgrinder sequences [flags]
+
+Flags:
+      --folder string   show only sequences for this folder (relative or absolute path)
+  -h, --help            help for sequences
+      --json            print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+List PromptGrinder terminal tabs.
+
+Usage:
+  promptgrinder terminals [flags]
+  promptgrinder terminals [command]
+
+Available Commands:
+  kill        Close PromptGrinder terminal tabs.
+
+Flags:
+  -h, --help   help for terminals
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder terminals [command] --help" for more information about a command.
+Close PromptGrinder terminal tabs.
+
+Usage:
+  promptgrinder terminals kill [number|worker-id|list] [flags]
+
+Flags:
+      --all    close all listed PromptGrinder terminal tabs
+  -h, --help   help for kill
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+List local workers.
+
+Usage:
+  promptgrinder list [flags]
+
+Flags:
+      --events   show latest worker event
+  -h, --help     help for list
+      --json     print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+List local workers.
+
+Usage:
+  promptgrinder workers [flags]
+
+Flags:
+      --events   show latest worker event
+  -h, --help     help for workers
+      --json     print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Inspect project-owned named worker definitions.
+
+Usage:
+  promptgrinder worker [command]
+
+Available Commands:
+  list        List project-owned named worker definitions.
+  pause       Gracefully stop and pause a running named worker.
+  reset       Reset a safely terminal named worker to idle.
+  resume      Resume a paused named worker.
+  show        Show one project-owned named worker definition.
+  start       Start a project-owned named worker.
+  status      Show PromptGrinder-owned lifecycle state for a named worker.
+
+Flags:
+  -h, --help   help for worker
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder worker [command] --help" for more information about a command.
+List project-owned named worker definitions.
+
+Usage:
+  promptgrinder worker list [flags]
+
+Flags:
+  -h, --help   help for list
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show one project-owned named worker definition.
+
+Usage:
+  promptgrinder worker show <worker-id> [flags]
+
+Flags:
+  -h, --help   help for show
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Start a project-owned named worker.
+
+Usage:
+  promptgrinder worker start <worker-id> [flags]
+
+Flags:
+      --dry-run          resolve and validate the launch without starting a process or creating state
+  -h, --help             help for start
+      --json             print the redacted launch request as machine-readable JSON
+      --runtime string   override the worker runtime for this launch
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show PromptGrinder-owned lifecycle state for a named worker.
+
+Usage:
+  promptgrinder worker status <worker-id> [flags]
+
+Flags:
+  -h, --help   help for status
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Reset a safely terminal named worker to idle.
+
+Usage:
+  promptgrinder worker reset <worker-id> [flags]
+
+Flags:
+  -h, --help   help for reset
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Gracefully stop and pause a running named worker.
+
+Usage:
+  promptgrinder worker pause <worker-id> [flags]
+
+Flags:
+  -h, --help               help for pause
+      --json               print machine-readable JSON
+      --timeout duration   graceful stop timeout before forced termination (default 10s)
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Resume a paused named worker.
+
+Usage:
+  promptgrinder worker resume <worker-id> [flags]
+
+Flags:
+  -h, --help   help for resume
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Assign and inspect project-owned tasks.
+
+Usage:
+  promptgrinder task [command]
+
+Available Commands:
+  assign      Assign an immutable task snapshot to a named worker.
+  cancel      Cancel active or queued work without deleting evidence.
+  enqueue     Append an immutable task snapshot to a worker FIFO.
+  list        List tasks owned by the current project.
+  queue       Inspect and edit pending worker task queues.
+  retry       Start a new attempt without replacing prior evidence.
+  show        Show one immutable task snapshot.
+
+Flags:
+  -h, --help   help for task
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder task [command] --help" for more information about a command.
+Assign an immutable task snapshot to a named worker.
+
+Usage:
+  promptgrinder task assign <worker-id> <task.md> [flags]
+
+Flags:
+  -h, --help   help for assign
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Append an immutable task snapshot to a worker FIFO.
+
+Usage:
+  promptgrinder task enqueue <worker-id> <task.md> [flags]
+
+Flags:
+  -h, --help   help for enqueue
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+List tasks owned by the current project.
+
+Usage:
+  promptgrinder task list [flags]
+
+Flags:
+  -h, --help            help for list
+      --json            print machine-readable JSON
+      --worker string   show tasks assigned to this worker
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show one immutable task snapshot.
+
+Usage:
+  promptgrinder task show <task-id> [flags]
+
+Flags:
+  -h, --help   help for show
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Inspect and edit pending worker task queues.
+
+Usage:
+  promptgrinder task queue [command]
+
+Available Commands:
+  list        List a worker queue in FIFO order.
+  remove      Remove a pending task from a worker queue.
+  reorder     Move a pending task to a one-based queue position.
+
+Flags:
+  -h, --help   help for queue
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder task queue [command] --help" for more information about a command.
+List a worker queue in FIFO order.
+
+Usage:
+  promptgrinder task queue list <worker-id> [flags]
+
+Flags:
+  -h, --help   help for list
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Move a pending task to a one-based queue position.
+
+Usage:
+  promptgrinder task queue reorder <worker-id> <task-id> <position> [flags]
+
+Flags:
+  -h, --help   help for reorder
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Remove a pending task from a worker queue.
+
+Usage:
+  promptgrinder task queue remove <worker-id> <task-id> [flags]
+
+Flags:
+  -h, --help   help for remove
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Start a new attempt without replacing prior evidence.
+
+Usage:
+  promptgrinder task retry <task-id> [flags]
+
+Flags:
+  -h, --help   help for retry
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Cancel active or queued work without deleting evidence.
+
+Usage:
+  promptgrinder task cancel <task-id> [flags]
+
+Flags:
+  -h, --help   help for cancel
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Review handoffs are local and never push, open a pull request, merge,
+tag, publish, or release. Rejection preserves all evidence and requeues the
+task at the tail of its original implementing worker's FIFO.
+
+Usage:
+  promptgrinder review [command]
+
+Available Commands:
+  accept      Accept a local review without publishing externally.
+  reject      Reject and requeue work while preserving evidence.
+  show        Inspect the latest local review handoff.
+  submit      Submit complete implementation evidence for local review.
+
+Flags:
+  -h, --help   help for review
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder review [command] --help" for more information about a command.
+Submit complete implementation evidence for local review.
+
+Usage:
+  promptgrinder review submit <task-id> <implementer-worker-id> [flags]
+
+Flags:
+      --changed-path strings   repository-relative changed path (repeatable)
+      --commit strings         commit identifier recorded as evidence (repeatable)
+  -h, --help                   help for submit
+      --json                   print machine-readable JSON
+      --summary string         completion summary (required)
+      --validation strings     validation evidence as command=result (repeatable, required)
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Inspect the latest local review handoff.
+
+Usage:
+  promptgrinder review show <task-id> [flags]
+
+Aliases:
+  show, inspect
+
+Flags:
+  -h, --help   help for show
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Inspect the latest local review handoff.
+
+Usage:
+  promptgrinder review show <task-id> [flags]
+
+Aliases:
+  show, inspect
+
+Flags:
+  -h, --help   help for show
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Accept a local review without publishing externally.
+
+Usage:
+  promptgrinder review accept <task-id> <reviewer-worker-id> [flags]
+
+Flags:
+  -h, --help            help for accept
+      --json            print machine-readable JSON
+      --reason string   review decision reason (required)
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Reject and requeue work while preserving evidence.
+
+Usage:
+  promptgrinder review reject <task-id> <reviewer-worker-id> [flags]
+
+Flags:
+  -h, --help            help for reject
+      --json            print machine-readable JSON
+      --reason string   review decision reason (required)
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Dispatch eligible idle named workers.
+
+Usage:
+  promptgrinder scheduler [command]
+
+Available Commands:
+  run         Run the local FIFO scheduler.
+
+Flags:
+  -h, --help   help for scheduler
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder scheduler [command] --help" for more information about a command.
+Run the local FIFO scheduler.
+
+Usage:
+  promptgrinder scheduler run [flags]
+
+Flags:
+  -h, --help                help for run
+      --interval duration   poll interval (default 1s)
+      --once                perform one scheduling decision and exit
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Inspect and enhance discovered roles.
+
+Usage:
+  promptgrinder roles [command]
+
+Available Commands:
+  apply       Apply stored role-review decisions without AI.
+  enhance     Review AI-assisted role recommendations and optionally apply them.
+  refine      Deterministically re-refine a stored review without AI.
+  reject      Reject a stored review without changing role YAML.
+  review      Show an exact stored role review.
+  reviews     List stored role reviews (newest first).
+
+Flags:
+  -h, --help   help for roles
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder roles [command] --help" for more information about a command.
+Review AI-assisted role recommendations and optionally apply them.
+
+Usage:
+  promptgrinder roles enhance [flags]
+
+Flags:
+      --apply-all                apply every recommendation (removals require individual selection)
+      --apply-selected strings   apply only the listed recommendation IDs
+  -h, --help                     help for enhance
+      --json                     print machine-readable JSON
+      --reject-all               reject all recommendations and write nothing
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+List stored role reviews (newest first).
+
+Usage:
+  promptgrinder roles reviews [flags]
+
+Flags:
+  -h, --help   help for reviews
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show an exact stored role review.
+
+Usage:
+  promptgrinder roles review <review-id|latest> [flags]
+
+Flags:
+  -h, --help   help for review
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Deterministically re-refine a stored review without AI.
+
+Usage:
+  promptgrinder roles refine <review-id|latest> [flags]
+
+Flags:
+  -h, --help   help for refine
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Apply stored role-review decisions without AI.
+
+Usage:
+  promptgrinder roles apply <review-id|latest> [flags]
+
+Flags:
+  -h, --help               help for apply
+      --json               print machine-readable JSON
+      --safe               apply addition items only
+      --selected strings   apply explicit stored item IDs (required for removals)
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Reject a stored review without changing role YAML.
+
+Usage:
+  promptgrinder roles reject <review-id|latest> [flags]
+
+Flags:
+  -h, --help   help for reject
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show structured worker events.
+
+Usage:
+  promptgrinder events [worker-id] [flags]
+
+Flags:
+      --follow            follow appended events until interrupted
+      --global            show global event log
+  -h, --help              help for events
+      --json              print machine-readable JSON
+      --severity string   filter by severity
+      --tail int          number of events to show (default 50)
+      --type string       filter by event type
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Show detailed worker status.
+
+Usage:
+  promptgrinder status <worker-id> [flags]
+
+Flags:
+  -h, --help   help for status
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Print a worker log.
+
+Usage:
+  promptgrinder logs <worker-id> [flags]
+
+Flags:
+  -h, --help   help for logs
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Delete completed local worker state.
+
+Usage:
+  promptgrinder prune [flags]
+
+Flags:
+  -h, --help   help for prune
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Find stale active workers and prompt sequences.
+
+Usage:
+  promptgrinder reconcile [flags]
+
+Flags:
+  -h, --help                help for reconcile
+      --json                print machine-readable JSON
+      --mark-failed         mark stale workers as failed
+      --older-than string   stale threshold duration, for example 30m, 2h, or 24h (default "24h")
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Discover repository technologies and generate PromptGrinder roles.
+
+Usage:
+  promptgrinder discover [flags]
+
+Flags:
+  -h, --help   help for discover
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Generate the autocompletion script for promptgrinder for the specified shell.
+See each sub-command's help for details on how to use the generated script.
+
+Usage:
+  promptgrinder completion [command]
+
+Available Commands:
+  bash        Generate the autocompletion script for bash
+  fish        Generate the autocompletion script for fish
+  powershell  Generate the autocompletion script for powershell
+  zsh         Generate the autocompletion script for zsh
+
+Flags:
+  -h, --help   help for completion
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+
+Use "promptgrinder completion [command] --help" for more information about a command.
+Mark a running or waiting worker as succeeded.
+
+Usage:
+  promptgrinder complete <worker-id> [flags]
+
+Flags:
+  -h, --help   help for complete
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Mark a running or waiting worker as failed.
+
+Usage:
+  promptgrinder fail <worker-id> [flags]
+
+Flags:
+  -h, --help   help for fail
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
+Mark a pending, starting, running, or waiting worker as cancelled.
+
+Usage:
+  promptgrinder cancel <worker-id> [flags]
+
+Flags:
+  -h, --help   help for cancel
+      --json   print machine-readable JSON
+
+Global Flags:
+      --compact        emit compact single-line JSON when used with --json
+      --plain          disable color and decorative box styling
+      --theme string   interactive theme: default, minimal, or loud (default "default")
