@@ -69,6 +69,36 @@ func TestCLIHelpUsesPromptGrinder(t *testing.T) {
 	}
 }
 
+func TestCLISetupDryRunReportsPreviewInsteadOfAlreadyComplete(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "new-home")
+	service := &fakeService{defaultsReport: config.DefaultsReport{HomeDir: home}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"setup", "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Setup preview complete; planned changes were not written.") || strings.Contains(out.String(), "already complete") {
+		t.Fatalf("setup output = %q", out.String())
+	}
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry run wrote home: %v", err)
+	}
+}
+
+func TestCLIRunFolderPreflightFailurePrintsReason(t *testing.T) {
+	service := &fakeService{runFolderErr: errTest("unsupported numbered prompt name: 50-add-tests.md")}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"--plain", "run-folder", "specs", "--detach=false"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected preflight failure")
+	}
+	if !strings.Contains(out.String(), "Error: unsupported numbered prompt name: 50-add-tests.md") || !strings.Contains(out.String(), "Result: failed") {
+		t.Fatalf("run-folder output = %q", out.String())
+	}
+}
+
 func TestNamedWorkerLaunchersRegisterRuntimeAdapters(t *testing.T) {
 	launchers := namedWorkerLaunchers(pgruntime.Service{})
 	for _, name := range []string{"codex", "antigravity"} {

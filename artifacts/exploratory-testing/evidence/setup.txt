@@ -1,0 +1,61 @@
+keep_directory: /tmp/promptgrinder-et-setup-home (unchanged)
+create_directory: /tmp/promptgrinder-et-setup-home/workers (planned)
+create_directory: /tmp/promptgrinder-et-setup-home/sequences (planned)
+create_directory: /tmp/promptgrinder-et-setup-home/templates (planned)
+create_config: /tmp/promptgrinder-et-setup-home/config.yaml (planned)
+Setup is already complete; no files changed.
+{
+  "ok": true,
+  "dry_run": true,
+  "changed": false,
+  "mutations": [
+    {
+      "path": "/tmp/promptgrinder-et-setup-home",
+      "action": "keep_directory",
+      "status": "unchanged"
+    },
+    {
+      "path": "/tmp/promptgrinder-et-setup-home/workers",
+      "action": "create_directory",
+      "status": "planned"
+    },
+    {
+      "path": "/tmp/promptgrinder-et-setup-home/sequences",
+      "action": "create_directory",
+      "status": "planned"
+    },
+    {
+      "path": "/tmp/promptgrinder-et-setup-home/templates",
+      "action": "create_directory",
+      "status": "planned"
+    },
+    {
+      "path": "/tmp/promptgrinder-et-setup-home/config.yaml",
+      "action": "create_config",
+      "status": "planned"
+    }
+  ]
+}
+keep_directory: /tmp/promptgrinder-et-setup-home (unchanged)
+create_directory: /tmp/promptgrinder-et-setup-home/workers (planned)
+create_directory: /tmp/promptgrinder-et-setup-home/sequences (planned)
+create_directory: /tmp/promptgrinder-et-setup-home/templates (planned)
+create_config: /tmp/promptgrinder-et-setup-home/config.yaml (planned)
+keep_directory: /tmp/promptgrinder-et-setup-home (unchanged)
+create_directory: /tmp/promptgrinder-et-setup-home/workers (planned)
+create_directory: /tmp/promptgrinder-et-setup-home/sequences (planned)
+create_directory: /tmp/promptgrinder-et-setup-home/templates (planned)
+create_config: /tmp/promptgrinder-et-setup-home/config.yaml (planned)
+Setup complete. Next: promptgrinder doctor
+keep_directory: /tmp/promptgrinder-et-setup-home (unchanged)
+keep_directory: /tmp/promptgrinder-et-setup-home/workers (unchanged)
+keep_directory: /tmp/promptgrinder-et-setup-home/sequences (unchanged)
+keep_directory: /tmp/promptgrinder-et-setup-home/templates (unchanged)
+keep_config: /tmp/promptgrinder-et-setup-home/config.yaml (unchanged)
+Setup is already complete; no files changed.
+keep_directory: /tmp/promptgrinder-et-setup-home (unchanged)
+keep_directory: /tmp/promptgrinder-et-setup-home/workers (unchanged)
+keep_directory: /tmp/promptgrinder-et-setup-home/sequences (unchanged)
+keep_directory: /tmp/promptgrinder-et-setup-home/templates (unchanged)
+replace_config: /tmp/promptgrinder-et-setup-home/config.yaml (planned)
+Setup complete. Next: promptgrinder doctor

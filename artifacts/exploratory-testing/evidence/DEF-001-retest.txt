@@ -1,0 +1,6 @@
+create_directory: /tmp/promptgrinder-et-retest-setup (planned)
+create_directory: /tmp/promptgrinder-et-retest-setup/workers (planned)
+create_directory: /tmp/promptgrinder-et-retest-setup/sequences (planned)
+create_directory: /tmp/promptgrinder-et-retest-setup/templates (planned)
+create_config: /tmp/promptgrinder-et-retest-setup/config.yaml (planned)
+Setup preview complete; planned changes were not written.

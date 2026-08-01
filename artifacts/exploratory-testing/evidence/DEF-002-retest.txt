@@ -1,0 +1,2 @@
+Error: run-folder preflight: 6 of 7 Markdown files included; unsupported numbered prompt name(s): 50-add-role-review-acceptance-and-documentation.md; use 00-specification*.md or NN-implement-, NN-test-, NN-verify-, NN-final-verify-, or NN-review- filenames
+Result: failed

@@ -1,0 +1,100 @@
+=== RUN   TestStartRestoresExactContextAndPersistsReferences
+--- PASS: TestStartRestoresExactContextAndPersistsReferences (0.98s)
+=== RUN   TestStartPreflightFailureLaunchesNothing
+--- PASS: TestStartPreflightFailureLaunchesNothing (0.56s)
+=== RUN   TestStartCapabilityMismatchLaunchesNothing
+--- PASS: TestStartCapabilityMismatchLaunchesNothing (0.90s)
+=== RUN   TestStartLaunchFailurePersistsFailedStateAndRun
+--- PASS: TestStartLaunchFailurePersistsFailedStateAndRun (0.74s)
+=== RUN   TestStartRejectsRestartWhileExecuting
+--- PASS: TestStartRejectsRestartWhileExecuting (0.31s)
+=== RUN   TestStartCompletionViolationBlocksEmitsEventAndRetainsChanges
+--- PASS: TestStartCompletionViolationBlocksEmitsEventAndRetainsChanges (0.60s)
+PASS
+ok  	promptgrinder/internal/workerstart	5.024s
+=== RUN   TestPauseTransitionsIdempotentlyAndRetainsAttempt
+--- PASS: TestPauseTransitionsIdempotentlyAndRetainsAttempt (0.11s)
+=== RUN   TestPauseFailureDoesNotTransition
+--- PASS: TestPauseFailureDoesNotTransition (0.08s)
+=== RUN   TestResumeUsesOnlyAdvertisedSessionSupport
+--- PASS: TestResumeUsesOnlyAdvertisedSessionSupport (0.13s)
+=== RUN   TestResumeUnsupportedCreatesNewAttemptPath
+--- PASS: TestResumeUnsupportedCreatesNewAttemptPath (0.10s)
+=== RUN   TestCancelIsIdempotentAndRetryRejectsCanceled
+--- PASS: TestCancelIsIdempotentAndRetryRejectsCanceled (0.13s)
+=== RUN   TestRetryAppendsRequestWithoutOverwritingAttempt
+--- PASS: TestRetryAppendsRequestWithoutOverwritingAttempt (0.11s)
+PASS
+ok  	promptgrinder/internal/workercontrol	1.963s
+=== RUN   TestLoadDiscoversRootFromRootAndNestedDirectory
+--- PASS: TestLoadDiscoversRootFromRootAndNestedDirectory (0.01s)
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/missing
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/malformed
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/unknown_field
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/unknown_version
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/invalid_worker_ID
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/absolute_path
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/escape
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/bad_glob
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/bad_branch
+=== RUN   TestLoadMissingMalformedAndInvalidRegistry/bad_runtime
+--- PASS: TestLoadMissingMalformedAndInvalidRegistry (0.09s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/missing (0.01s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/malformed (0.01s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/unknown_field (0.01s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/unknown_version (0.01s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/invalid_worker_ID (0.02s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/absolute_path (0.02s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/escape (0.01s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/bad_glob (0.01s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/bad_branch (0.01s)
+    --- PASS: TestLoadMissingMalformedAndInvalidRegistry/bad_runtime (0.01s)
+=== RUN   TestGetUnknownWorker
+--- PASS: TestGetUnknownWorker (0.01s)
+PASS
+ok  	promptgrinder/internal/workerregistry	1.520s
+=== RUN   TestFIFOReorderRemoveAndRestartPersistence
+--- PASS: TestFIFOReorderRemoveAndRestartPersistence (0.07s)
+=== RUN   TestLeaseExclusionAndExpiryRecovery
+--- PASS: TestLeaseExclusionAndExpiryRecovery (0.03s)
+=== RUN   TestConcurrentAcquireHasSingleWinner
+--- PASS: TestConcurrentAcquireHasSingleWinner (0.02s)
+PASS
+ok  	promptgrinder/internal/taskqueue	2.235s
+=== RUN   TestAssignmentSnapshotsMarkdownAndUpdatesWorkerState
+--- PASS: TestAssignmentSnapshotsMarkdownAndUpdatesWorkerState (0.03s)
+=== RUN   TestAdditionalAssignmentQueuesAndMissingSourceLeavesAssignmentUnchanged
+--- PASS: TestAdditionalAssignmentQueuesAndMissingSourceLeavesAssignmentUnchanged (0.05s)
+=== RUN   TestProjectWorkerMismatchAndListFilter
+--- PASS: TestProjectWorkerMismatchAndListFilter (0.04s)
+=== RUN   TestTaskCreationFailureLeavesExistingWorkerStateUnchanged
+--- PASS: TestTaskCreationFailureLeavesExistingWorkerStateUnchanged (0.03s)
+=== RUN   TestConcurrentLaunchAndControlUpdatesPreserveBoth
+--- PASS: TestConcurrentLaunchAndControlUpdatesPreserveBoth (0.46s)
+PASS
+ok  	promptgrinder/internal/taskstore	2.923s
+=== RUN   TestRunOnceDispatchesFIFOAndPersistsDecision
+--- PASS: TestRunOnceDispatchesFIFOAndPersistsDecision (0.27s)
+=== RUN   TestConcurrentSchedulersDispatchOnlyOnce
+--- PASS: TestConcurrentSchedulersDispatchOnlyOnce (0.15s)
+=== RUN   TestConcurrencyLimitsDeferDispatch
+=== RUN   TestConcurrencyLimitsDeferDispatch/project
+=== RUN   TestConcurrencyLimitsDeferDispatch/runtime
+--- PASS: TestConcurrencyLimitsDeferDispatch (0.17s)
+    --- PASS: TestConcurrencyLimitsDeferDispatch/project (0.00s)
+    --- PASS: TestConcurrencyLimitsDeferDispatch/runtime (0.00s)
+=== RUN   TestDiscoverMarkdownFiltersAndSorts
+--- PASS: TestDiscoverMarkdownFiltersAndSorts (0.01s)
+PASS
+ok  	promptgrinder/internal/scheduler	3.265s
+=== RUN   TestSubmitAndAcceptCompleteEvidence
+--- PASS: TestSubmitAndAcceptCompleteEvidence (0.21s)
+=== RUN   TestSeparateReviewerCannotSelfApprove
+--- PASS: TestSeparateReviewerCannotSelfApprove (0.25s)
+=== RUN   TestRejectPreservesEvidenceAndRequeuesOriginalWorker
+--- PASS: TestRejectPreservesEvidenceAndRequeuesOriginalWorker (0.25s)
+=== RUN   TestSubmitRejectsIncompleteEvidenceAndInvalidLifecycle
+--- PASS: TestSubmitRejectsIncompleteEvidenceAndInvalidLifecycle (0.12s)
+PASS
+ok  	promptgrinder/internal/review	3.314s

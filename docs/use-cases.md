@@ -17,6 +17,8 @@ Git, configured runtimes, and terminal adapter without changing files. Use
 
 Use `promptgrinder setup --dry-run` to preview first-use files, then
 `promptgrinder setup` to create the minimal local configuration and state.
+When writes are planned, the dry-run summary identifies the output as a
+preview and confirms that the planned changes were not written.
 Setup does not install or authenticate an AI runtime, edit shell profiles, or
 change operating-system privacy settings.
 
@@ -106,6 +108,8 @@ without running unless `--include-specification` is selected.
 Before sequence creation, PromptGrinder reports how many Markdown files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
+Foreground failures before sequence state exists print the actionable
+preflight reason.
 
 ### UC-16: Stop unsafe sequence continuation
 

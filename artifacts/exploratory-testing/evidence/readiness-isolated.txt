@@ -1,0 +1,382 @@
+PASS    system.platform              Operating system and architecture are supported.
+PASS    promptgrinder.version        PromptGrinder version information is available.
+PASS    config.effective             Effective configuration is valid.
+PASS    home.state                   PromptGrinder home is usable.
+PASS    tool.promptgrinder           PromptGrinder is executable.
+PASS    shell.promptgrinder_path     PromptGrinder is available on PATH.
+PASS    tool.codex                   Codex CLI is executable.
+PASS    codex.readiness              Codex reports an authenticated login.
+PASS    tool.git                     Git is executable.
+SKIPPED repo.git                     Repository check was not requested.
+        Next: Pass --repo when checking a repository workflow.
+PASS    tool.zsh                     Zsh is executable.
+PASS    tool.osascript               osascript is executable.
+PASS    terminal.adapter             Headless adapter requires no GUI application.
+PASS    worker.environment           Generated worker environment can resolve required executables.
+SKIPPED terminal.active_launch       Visible no-AI terminal launch probe was not requested.
+        Next: Rerun with --active to open a short-lived terminal probe.
+
+Doctor passed: 15 check(s), 0 warning(s), no required failures.
+{
+  "ok": true,
+  "checks": [
+    {
+      "id": "system.platform",
+      "status": "pass",
+      "required": true,
+      "summary": "Operating system and architecture are supported.",
+      "evidence": {
+        "architecture": "arm64",
+        "os": "darwin"
+      }
+    },
+    {
+      "id": "promptgrinder.version",
+      "status": "pass",
+      "required": true,
+      "summary": "PromptGrinder version information is available.",
+      "evidence": {
+        "version": "v1.0.0-rc.2.1 (a60f68b)"
+      }
+    },
+    {
+      "id": "config.effective",
+      "status": "pass",
+      "required": true,
+      "summary": "Effective configuration is valid.",
+      "evidence": {
+        "engine": "codex",
+        "sources": [
+          {
+            "exists": false,
+            "kind": "default_template",
+            "path": "/tmp/promptgrinder-et-readonly-home/templates/default.yaml"
+          },
+          {
+            "exists": false,
+            "kind": "user",
+            "path": "/tmp/promptgrinder-et-readonly-home/config.yaml"
+          },
+          {
+            "keys": [
+              "PROMPTGRINDER_HOME"
+            ],
+            "kind": "environment",
+            "prefix": "PROMPTGRINDER_"
+          }
+        ],
+        "terminal_adapter": "terminal"
+      }
+    },
+    {
+      "id": "home.state",
+      "status": "pass",
+      "required": true,
+      "summary": "PromptGrinder home is usable.",
+      "evidence": {
+        "current_uid": 501,
+        "exists": true,
+        "free_bytes": 342869291008,
+        "mode": "-rwxr-xr-x",
+        "owner_uid": 501,
+        "path": "/tmp/promptgrinder-et-readonly-home"
+      }
+    },
+    {
+      "id": "tool.promptgrinder",
+      "status": "pass",
+      "required": true,
+      "summary": "PromptGrinder is executable.",
+      "evidence": {
+        "path": "/tmp/promptgrinder-exploratory/promptgrinder",
+        "resolved_path": "/private/tmp/promptgrinder-exploratory/promptgrinder"
+      }
+    },
+    {
+      "id": "shell.promptgrinder_path",
+      "status": "pass",
+      "required": false,
+      "summary": "PromptGrinder is available on PATH.",
+      "evidence": {
+        "path": "/Users/anyberg/go/bin/promptgrinder"
+      }
+    },
+    {
+      "id": "tool.codex",
+      "status": "pass",
+      "required": true,
+      "summary": "Codex CLI is executable.",
+      "evidence": {
+        "path": "/opt/homebrew/bin/codex",
+        "resolved_path": "/opt/homebrew/Caskroom/codex/0.146.0/bin/codex",
+        "source": "PATH",
+        "version": "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1) codex-cli 0.146.0"
+      }
+    },
+    {
+      "id": "codex.readiness",
+      "status": "pass",
+      "required": false,
+      "summary": "Codex reports an authenticated login.",
+      "evidence": {
+        "output": "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1) Logged in using ChatGPT",
+        "probe": "codex login status"
+      }
+    },
+    {
+      "id": "tool.git",
+      "status": "pass",
+      "required": false,
+      "summary": "Git is executable.",
+      "evidence": {
+        "path": "/usr/bin/git",
+        "resolved_path": "/usr/bin/git"
+      }
+    },
+    {
+      "id": "repo.git",
+      "status": "skipped",
+      "required": false,
+      "summary": "Repository check was not requested.",
+      "remediation": "Pass --repo when checking a repository workflow."
+    },
+    {
+      "id": "tool.zsh",
+      "status": "pass",
+      "required": true,
+      "summary": "Zsh is executable.",
+      "evidence": {
+        "path": "/bin/zsh",
+        "resolved_path": "/bin/zsh"
+      }
+    },
+    {
+      "id": "tool.osascript",
+      "status": "pass",
+      "required": false,
+      "summary": "osascript is executable.",
+      "evidence": {
+        "path": "/usr/bin/osascript",
+        "resolved_path": "/usr/bin/osascript"
+      }
+    },
+    {
+      "id": "terminal.adapter",
+      "status": "pass",
+      "required": true,
+      "summary": "Headless adapter requires no GUI application.",
+      "evidence": {
+        "adapter": "headless"
+      }
+    },
+    {
+      "id": "worker.environment",
+      "status": "pass",
+      "required": true,
+      "summary": "Generated worker environment can resolve required executables.",
+      "evidence": {
+        "codex": {
+          "discoverable": true,
+          "path": "/opt/homebrew/bin/codex"
+        },
+        "git": {
+          "discoverable": true,
+          "path": "/usr/bin/git"
+        },
+        "promptgrinder": {
+          "discoverable": true,
+          "path": "/tmp/promptgrinder-exploratory/promptgrinder"
+        },
+        "zsh": {
+          "discoverable": true,
+          "path": "/bin/zsh"
+        }
+      }
+    },
+    {
+      "id": "terminal.active_launch",
+      "status": "skipped",
+      "required": false,
+      "summary": "Visible no-AI terminal launch probe was not requested.",
+      "remediation": "Rerun with --active to open a short-lived terminal probe."
+    }
+  ],
+  "failures": 0,
+  "warnings": 0
+}
+PASS    system.platform              Operating system and architecture are supported.
+PASS    promptgrinder.version        PromptGrinder version information is available.
+PASS    config.effective             Effective configuration is valid.
+PASS    home.state                   PromptGrinder home is usable.
+PASS    tool.promptgrinder           PromptGrinder is executable.
+PASS    shell.promptgrinder_path     PromptGrinder is available on PATH.
+PASS    tool.codex                   Codex CLI is executable.
+PASS    codex.readiness              Codex reports an authenticated login.
+PASS    tool.git                     Git is executable.
+SKIPPED repo.git                     Repository check was not requested.
+        Next: Pass --repo when checking a repository workflow.
+PASS    tool.zsh                     Zsh is executable.
+PASS    tool.osascript               osascript is executable.
+FAIL    terminal.adapter             Unsupported terminal adapter "invalid".
+        Next: Use --terminal terminal, --terminal iterm, or --terminal headless.
+PASS    worker.environment           Generated worker environment can resolve required executables.
+SKIPPED terminal.active_launch       Visible no-AI terminal launch probe was not requested.
+        Next: Rerun with --active to open a short-lived terminal probe.
+
+Doctor failed: 1 required failure(s), 0 warning(s).
+Home: /tmp/promptgrinder-et-readonly-home
+Default template: /tmp/promptgrinder-et-readonly-home/templates/default.yaml
+Default template status: missing
+Create it on first interactive run, or add this example:
+
+# PromptGrinder default template.
+# Edit this file or override values in ~/.promptgrinder/config.yaml,
+# repository .ai/config.yaml, environment variables, or CLI flags.
+
+engine:
+  default: codex
+  codex:
+    sandbox: workspace-write
+    approval: never
+
+terminal:
+  adapter: terminal
+  mode: normal
+  close_on_finish: true
+  close_on_failure: false
+
+worker:
+  heartbeat_interval: 30s
+  timeout: 45m
+
+run:
+  engine: codex
+
+run_folder:
+  repo: .
+  template: codex
+  engine: codex
+  resume: false
+  fresh: false
+  restart: false
+  no_resume: false
+  checkpoint: true
+  commit_each: true
+  require_clean_git: false
+  include_specification: false
+  detach: true
+User config: /tmp/promptgrinder-et-readonly-home/config.yaml (missing)
+Repository config: /Users/anyberg/git/promptgrinder/.ai/config.yaml (missing)
+
+Current defaults:
+  engine.default: codex
+  terminal.adapter: terminal
+  terminal.mode: normal
+  terminal.close_on_finish: true
+  terminal.close_on_failure: false
+  worker.heartbeat_interval: 30s
+  worker.timeout: -
+  engine.codex.sandbox: workspace-write
+  engine.codex.approval: never
+  run.engine: -
+  run_folder.repo: .
+  run_folder.template: codex
+  run_folder.engine: -
+  run_folder.resume: false
+  run_folder.fresh: false
+  run_folder.restart: false
+  run_folder.no_resume: false
+  run_folder.checkpoint: false
+  run_folder.commit_each: false
+  run_folder.require_clean_git: false
+  run_folder.include_specification: false
+  run_folder.detach: true
+
+Override order: CLI flags > environment variables > repository .ai/config.yaml > ~/.promptgrinder/config.yaml > default template > built-in defaults.
+{
+  "defaults": {
+    "home_dir": "/tmp/promptgrinder-et-readonly-home",
+    "template_path": "/tmp/promptgrinder-et-readonly-home/templates/default.yaml",
+    "template_exists": false,
+    "user_config_path": "/tmp/promptgrinder-et-readonly-home/config.yaml",
+    "user_config_exists": false,
+    "repository_config_path": "/Users/anyberg/git/promptgrinder/.ai/config.yaml",
+    "repository_config_exists": false,
+    "config": {
+      "home_dir": "/tmp/promptgrinder-et-readonly-home",
+      "engine": "codex",
+      "terminal_adapter": "terminal",
+      "terminal_mode": "normal",
+      "terminal_close_on_finish": true,
+      "terminal_close_on_failure": false,
+      "worker_heartbeat_interval": 30000000000,
+      "worker_timeout": 0,
+      "codex_sandbox": "workspace-write",
+      "codex_approval": "never",
+      "run_engine": "",
+      "run_folder_repo": ".",
+      "run_folder_template": "codex",
+      "run_folder_engine": "",
+      "run_folder_resume": false,
+      "run_folder_fresh": false,
+      "run_folder_restart": false,
+      "run_folder_no_resume": false,
+      "run_folder_checkpoint": false,
+      "run_folder_commit_each": false,
+      "run_folder_require_clean_git": false,
+      "run_folder_include_specification": false,
+      "run_folder_detach": true,
+      "scheduler_lease_ttl": 60000000000
+    }
+  }
+}
+ENGINE           DESCRIPTION                          CAPABILITIES
+codex            OpenAI Codex CLI adapter using codex exec. supports_model, supports_profile, supports_sandbox, supports_approval, supports_working_directory, supports_web_search, supports_images, supports_resume, supports_headless, supports_interactive_terminal
+{
+  "engines": [
+    {
+      "name": "codex",
+      "description": "OpenAI Codex CLI adapter using codex exec.",
+      "capabilities": {
+        "supports_model": true,
+        "supports_profile": true,
+        "supports_sandbox": true,
+        "supports_approval": true,
+        "supports_working_directory": true,
+        "supports_web_search": true,
+        "supports_images": true,
+        "supports_resume": true,
+        "supports_structured_output": false,
+        "supports_token_usage": false,
+        "supports_cost_usage": false,
+        "supports_headless": true,
+        "supports_interactive_terminal": true,
+        "supports_env": false
+      }
+    }
+  ]
+}
+Engine: codex
+Description: OpenAI Codex CLI adapter using codex exec.
+Capabilities:
+  supports_model                 true
+  supports_profile               true
+  supports_sandbox               true
+  supports_approval              true
+  supports_working_directory     true
+  supports_web_search            true
+  supports_images                true
+  supports_resume                true
+  supports_structured_output     false
+  supports_token_usage           false
+  supports_cost_usage            false
+  supports_headless              true
+  supports_interactive_terminal  true
+  supports_env                   false
+Notes: capability flags are adapter metadata; option handling is delegated to the engine adapter.
+{
+  "error": {
+    "code": "validation_error",
+    "message": "invalid engine \"antigravity\": unknown engine"
+  }
+}

@@ -1,0 +1,21 @@
+2026-08-01T10:40:00Z START seed=pg-et-20260801-a60f68b commit=a60f68bc2516bbe427ffff3027b76fd8b9e5c224
+2026-08-01T10:40:10Z ENV repository guidance and all 59 use-case entries read
+2026-08-01T10:41:00Z BUILD compiled /tmp/promptgrinder-exploratory/promptgrinder PASS
+2026-08-01T10:41:10Z EXEC-001 root help/version PASS
+2026-08-01T10:42:00Z EXEC-002 full Go suite, isolated state, 620 pass events PASS
+2026-08-01T10:43:00Z EXEC-003 recursive command help and flag inventory PASS
+2026-08-01T10:44:00Z EXEC-004 doctor/defaults/engines valid and invalid probes PASS
+2026-08-01T10:44:30Z EXEC-005 setup preview/create/idempotency/replace variations FAIL DEF-001
+2026-08-01T10:45:00Z EXEC-006 validate/render/JSON/compact/invalid engine/input PASS
+2026-08-01T10:45:20Z EXEC-007 dry-run independent/shared/sandbox/policy interactions PASS
+2026-08-01T10:46:00Z EXEC-008 deterministic discovery and repeat execution PASS
+2026-08-01T10:46:30Z EXEC-009 empty-state observability/recovery/lifecycle errors PASS
+2026-08-01T10:47:00Z EXEC-010 themes/plain/completion shells and invalid values PASS
+2026-08-01T10:47:30Z EXEC-011 run-folder preflight/conflicting lifecycle flags FAIL DEF-002
+2026-08-01T10:48:00Z EXEC-012 role/discovery/compiled acceptance focused suite: 98 tests PASS
+2026-08-01T10:48:10Z EXEC-013 worker/task/queue/review focused suite: 43 tests PASS
+2026-08-01T10:48:20Z EXEC-014 runtime/run-folder/terminal/UI focused suite: 113 tests PASS
+2026-08-01T10:49:00Z EXEC-015 full race suite PASS
+2026-08-01T10:50:00Z REMEDIATE DEF-001 and DEF-002 after baseline evidence freeze
+2026-08-01T10:51:00Z RETEST exact defect reproductions PASS
+2026-08-01T10:52:00Z STOP confidence=94 target=80 verdict=pass_with_corrected_findings

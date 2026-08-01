@@ -762,7 +762,9 @@ Examples:
 				return StructuredError{Err: err, Code: ExitSetupFailed}
 			}
 			if !setupJSON {
-				if report.Changed {
+				if report.DryRun && setupHasPlannedMutations(report) {
+					fmt.Fprintln(stdout, "Setup preview complete; planned changes were not written.")
+				} else if report.Changed {
 					fmt.Fprintln(stdout, "Setup complete. Next: promptgrinder doctor")
 				} else {
 					fmt.Fprintln(stdout, "Setup is already complete; no files changed.")
@@ -1005,6 +1007,9 @@ Examples:
 				renderer.Update(event)
 			}
 			summary, err := service.RunPromptFolder(args[0], options)
+			if err != nil && !summary.Started {
+				fmt.Fprintln(stdout, "Error: "+err.Error())
+			}
 			renderer.Finish(err == nil)
 			printRunFolderAggregate(stdout, summary)
 			if err != nil {
@@ -2200,6 +2205,15 @@ task at the tail of its original implementing worker's FIFO.`,
 	root.AddCommand(engineCodex)
 
 	return root
+}
+
+func setupHasPlannedMutations(report firstuse.SetupReport) bool {
+	for _, mutation := range report.Mutations {
+		if mutation.Status == "planned" {
+			return true
+		}
+	}
+	return false
 }
 
 func findRepositoryRoot(path string) (string, error) {

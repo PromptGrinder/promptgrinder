@@ -1,0 +1,133 @@
+Valid: true
+Engine: codex
+Working directory: /Users/anyberg/git/promptgrinder
+Timeout: 20m0s
+Command: '/opt/homebrew/bin/codex' 'exec' '--cd' '/Users/anyberg/git/promptgrinder' '--sandbox' 'workspace-write' '--json'
+Worker launch: false
+# Task Semantics (v1)
+
+## Acceptance Criteria
+
+- The requested result is complete and focused tests pass.
+
+## Allowed Paths
+
+- **
+
+## Forbidden Paths
+
+- .env
+
+## Validation
+
+- Run the focused tests for changed code.
+
+
+Replace this paragraph with one bounded objective.
+
+Expected result:
+
+- Describe the exact change or answer required.
+- Add or update focused tests when code changes.
+- Report the verification commands and results.
+
+Constraints:
+
+- Do not change unrelated files.
+- Preserve pre-existing uncommitted and untracked work.
+{
+  "valid": true,
+  "engine": "codex",
+  "warnings": [],
+  "errors": [],
+  "execution_plan": {
+    "capabilities": {
+      "supports_model": true,
+      "supports_profile": true,
+      "supports_sandbox": true,
+      "supports_approval": true,
+      "supports_working_directory": true,
+      "supports_web_search": true,
+      "supports_images": true,
+      "supports_resume": true,
+      "supports_structured_output": false,
+      "supports_token_usage": false,
+      "supports_cost_usage": false,
+      "supports_headless": true,
+      "supports_interactive_terminal": true,
+      "supports_env": false
+    },
+    "command": {
+      "approval": "never",
+      "command_preview": "'/opt/homebrew/bin/codex' 'exec' '--cd' '/Users/anyberg/git/promptgrinder' '--sandbox' 'workspace-write' '--json'",
+      "engine": "codex",
+      "sandbox": "workspace-write",
+      "working_directory": "/Users/anyberg/git/promptgrinder"
+    },
+    "command_preview": "'/opt/homebrew/bin/codex' 'exec' '--cd' '/Users/anyberg/git/promptgrinder' '--sandbox' 'workspace-write' '--json'",
+    "config": {
+      "engine_codex_approval": "never",
+      "engine_codex_executable": "/opt/homebrew/bin/codex",
+      "engine_codex_sandbox": "workspace-write",
+      "engine_default": "codex",
+      "home_dir": "/tmp/promptgrinder-et-validation-home",
+      "terminal_adapter": "terminal",
+      "terminal_mode": "normal",
+      "worker_heartbeat_interval": "30s",
+      "worker_timeout": ""
+    },
+    "engine": "codex",
+    "metadata": {
+      "engine": {
+        "approval": "never",
+        "name": "codex",
+        "sandbox": "workspace-write",
+        "web_search": false
+      },
+      "labels": [
+        "example"
+      ],
+      "timeout": "20m",
+      "working_directory": "."
+    },
+    "prompt_bytes": 537,
+    "repository_path": "/Users/anyberg/git/promptgrinder",
+    "task_path": "/Users/anyberg/git/promptgrinder/examples/minimal.md",
+    "timeout": "20m0s",
+    "worker_would_start": false,
+    "working_directory": "/Users/anyberg/git/promptgrinder"
+  }
+}
+{"valid":true,"engine":"codex","warnings":[],"errors":[],"execution_plan":{"capabilities":{"supports_model":true,"supports_profile":true,"supports_sandbox":true,"supports_approval":true,"supports_working_directory":true,"supports_web_search":true,"supports_images":true,"supports_resume":true,"supports_structured_output":false,"supports_token_usage":false,"supports_cost_usage":false,"supports_headless":true,"supports_interactive_terminal":true,"supports_env":false},"command":{"approval":"never","command_preview":"'/opt/homebrew/bin/codex' 'exec' '--cd' '/Users/anyberg/git/promptgrinder' '--sandbox' 'workspace-write' '--json'","engine":"codex","sandbox":"workspace-write","working_directory":"/Users/anyberg/git/promptgrinder"},"command_preview":"'/opt/homebrew/bin/codex' 'exec' '--cd' '/Users/anyberg/git/promptgrinder' '--sandbox' 'workspace-write' '--json'","config":{"engine_codex_approval":"never","engine_codex_executable":"/opt/homebrew/bin/codex","engine_codex_sandbox":"workspace-write","engine_default":"codex","home_dir":"/tmp/promptgrinder-et-validation-home","terminal_adapter":"terminal","terminal_mode":"normal","worker_heartbeat_interval":"30s","worker_timeout":""},"engine":"codex","metadata":{"engine":{"approval":"never","name":"codex","sandbox":"workspace-write","web_search":false},"labels":["example"],"timeout":"20m","working_directory":"."},"prompt_bytes":537,"repository_path":"/Users/anyberg/git/promptgrinder","task_path":"/Users/anyberg/git/promptgrinder/examples/minimal.md","timeout":"20m0s","worker_would_start":false,"working_directory":"/Users/anyberg/git/promptgrinder"}}
+Valid: true
+Engine: codex
+Working directory: /Users/anyberg/git/promptgrinder
+Timeout: 20m0s
+Command: '/opt/homebrew/bin/codex' 'exec' '--cd' '/Users/anyberg/git/promptgrinder' '--sandbox' 'workspace-write' '--json'
+Worker launch: false
+Valid: false
+Engine: unknown
+Error: invalid engine "unknown": unknown engine
+Valid: false
+Error: open /tmp/does-not-exist.md: no such file or directory
+Dry run valid: 1 prompt(s), independent contexts. No workers created.
+1. /Users/anyberg/git/promptgrinder/examples/minimal.md
+{
+  "workers": [],
+  "failures": [],
+  "validated_paths": [
+    "/Users/anyberg/git/promptgrinder/examples/minimal.md"
+  ],
+  "dry_run": true
+}
+{"workers":[],"failures":[],"validated_paths":["/Users/anyberg/git/promptgrinder/examples/minimal.md"],"dry_run":true}
+Dry run valid: 1 prompt(s), independent contexts. No workers created.
+1. /Users/anyberg/git/promptgrinder/examples/minimal.md
+Dry run valid: 1 prompt(s), independent contexts. No workers created.
+1. /Users/anyberg/git/promptgrinder/examples/minimal.md
+Dry run valid: 1 prompt(s), independent contexts. No workers created.
+1. /Users/anyberg/git/promptgrinder/examples/minimal.md
+Error: preflight failed for /Users/anyberg/git/promptgrinder/examples/minimal.md: unsupported sandbox value "invalid": use read-only, workspace-write, or danger-full-access
+Dry run valid: 2 prompt(s), one shared context. No workers created.
+1. /Users/anyberg/git/promptgrinder/examples/minimal.md
+2. /Users/anyberg/git/promptgrinder/examples/smoke/read-only.md
