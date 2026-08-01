@@ -209,9 +209,6 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 	if !ok || len(values) == 0 {
 		return fmt.Errorf("recommendation %q has invalid value for field %q", r.ID, r.Field)
 	}
-	if r.Operation == OperationRemove && len(values) != 1 {
-		return fmt.Errorf("recommendation %q removal requires one string value", r.ID)
-	}
 	corpus := groundingCorpus(current, evidence)
 	for _, value := range values {
 		value = strings.TrimSpace(value)
@@ -224,7 +221,7 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 				return fmt.Errorf("recommendation %q proposes ungrounded technology %q", r.ID, value)
 			}
 		case "quality_gates", "runtime.preferred":
-			if !strings.Contains(corpus, strings.ToLower(value)) {
+			if !groundingContains(corpus, value) {
 				return fmt.Errorf("recommendation %q proposes ungrounded %s %q", r.ID, r.Field, value)
 			}
 		case "allowed_paths":
@@ -235,6 +232,30 @@ func validateGroundedValue(r Recommendation, current CurrentState, evidence Evid
 		}
 	}
 	return nil
+}
+
+func groundingContains(corpus, value string) bool {
+	value = strings.ToLower(value)
+	if strings.Contains(corpus, value) {
+		return true
+	}
+	normalizedCorpus := strings.Join(strings.Fields(corpus), " ")
+	if strings.Contains(normalizedCorpus, strings.Join(strings.Fields(value), " ")) {
+		return true
+	}
+	lines := strings.Split(value, "\n")
+	groundedLines := 0
+	for _, line := range lines {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" {
+			continue
+		}
+		groundedLines++
+		if !strings.Contains(normalizedCorpus, line) {
+			return false
+		}
+	}
+	return groundedLines > 1
 }
 
 func knownTechnology(current CurrentState, evidence Evidence, proposed string) bool {
@@ -262,6 +283,47 @@ func knownTechnology(current CurrentState, evidence Evidence, proposed string) b
 			}
 		}
 	}
+	if strings.EqualFold(strings.TrimSpace(proposed), "Jetpack Compose") {
+		for _, source := range evidence.Sources {
+			if source.Kind == EvidenceRepository && containsComposeEvidence(source.Excerpt) {
+				return true
+			}
+		}
+	}
+	if match := versionedJavaTechnology.FindStringSubmatch(strings.TrimSpace(proposed)); len(match) == 2 {
+		for _, source := range evidence.Sources {
+			if source.Kind == EvidenceRepository && javaVersionDeclared(source.Excerpt, match[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var versionedJavaTechnology = regexp.MustCompile(`(?i)^java\s+([0-9]+)$`)
+
+func javaVersionDeclared(text, version string) bool {
+	text = strings.ToLower(strings.Join(strings.Fields(text), ""))
+	for _, marker := range []string{
+		"<java.version>" + version + "</java.version>",
+		"<maven.compiler.release>" + version + "</maven.compiler.release>",
+		"javaversion.version_" + version,
+		"javalanguageversion.of(" + version + ")",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsComposeEvidence(text string) bool {
+	text = strings.ToLower(text)
+	for _, marker := range []string{"androidx.compose", "org.jetbrains.compose", "compose = true", "compose=true"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -287,8 +349,12 @@ func stringValues(value any) ([]string, bool) {
 }
 
 func evidenceHasPath(e Evidence, proposed string) bool {
+	proposed = filepath.ToSlash(filepath.Clean(proposed))
 	for _, s := range e.Sources {
 		if s.Path == proposed || strings.HasPrefix(s.Path, strings.TrimSuffix(proposed, "/")+"/") {
+			return true
+		}
+		if strings.Contains(filepath.ToSlash(s.Excerpt), proposed) {
 			return true
 		}
 	}

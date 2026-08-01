@@ -215,9 +215,6 @@ func proposedValue(old any, r Recommendation) (any, error) {
 		}
 		return vals, nil
 	}
-	if r.Operation == OperationRemove && len(vals) != 1 {
-		return nil, fmt.Errorf("recommendation %q requires one string value", r.ID)
-	}
 	current, ok := old.([]string)
 	if !ok {
 		return nil, fmt.Errorf("recommendation %q requires a list field", r.ID)
@@ -238,14 +235,18 @@ func proposedValue(old any, r Recommendation) (any, error) {
 		}
 		return out, nil
 	}
-	value := vals[0]
 	if r.Operation == OperationRemove {
-		for i, v := range out {
-			if v == value {
-				return append(out[:i:i], out[i+1:]...), nil
+		remove := make(map[string]bool, len(vals))
+		for _, value := range vals {
+			remove[value] = true
+		}
+		kept := out[:0]
+		for _, value := range out {
+			if !remove[value] {
+				kept = append(kept, value)
 			}
 		}
-		return out, nil
+		return kept, nil
 	}
 	return nil, fmt.Errorf("unsupported operation %q", r.Operation)
 }

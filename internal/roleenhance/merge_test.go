@@ -156,3 +156,14 @@ func TestRemovalRequiresIndividualApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestProposedValueRemovesMultipleValuesAfterExplicitApproval(t *testing.T) {
+	recommendation := Recommendation{ID: "remove-many", Operation: OperationRemove, Value: []any{"generated", "stale"}}
+	got, err := proposedValue([]string{"keep", "generated", "stale", "keep-too"}, recommendation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"keep", "keep-too"}) {
+		t.Fatalf("multi-value removal = %#v", got)
+	}
+}

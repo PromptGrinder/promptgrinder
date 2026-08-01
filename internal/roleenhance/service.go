@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
+	"unicode/utf8"
 )
 
 type Advisor interface {
@@ -40,6 +42,7 @@ func (s EnhanceService) Review(ctx context.Context, root string) (CurrentState, 
 	// A file may intentionally be visible to more than one collector. Keep the
 	// kind-distinct source records, but remove exact duplicates.
 	evidence.Sources = dedupeSources(evidence.Sources)
+	evidence = boundAdvisorEvidence(evidence, CollectorLimits{})
 	plan, err := s.Advisor.Recommend(ctx, current, evidence)
 	if err != nil {
 		return current, ReviewPlan{}, err
@@ -55,6 +58,109 @@ func (s EnhanceService) Review(ctx context.Context, root string) (CurrentState, 
 	}
 	validated, err := (RoleDiffGenerator{}).Generate(current, recommendations)
 	return current, validated, err
+}
+
+func boundAdvisorEvidence(in Evidence, limits CollectorLimits) Evidence {
+	limits = limits.normalized()
+	sources := append([]EvidenceSource(nil), in.Sources...)
+	facts := dedupeFacts(in.Facts)
+	sort.SliceStable(sources, func(i, j int) bool {
+		pi, pj := advisorEvidencePriority(sources[i].Path), advisorEvidencePriority(sources[j].Path)
+		if pi != pj {
+			return pi < pj
+		}
+		if sources[i].Path != sources[j].Path {
+			return sources[i].Path < sources[j].Path
+		}
+		return sources[i].Kind < sources[j].Kind
+	})
+	sort.SliceStable(facts, func(i, j int) bool {
+		pi, pj := advisorEvidencePriority(facts[i].Path), advisorEvidencePriority(facts[j].Path)
+		if pi != pj {
+			return pi < pj
+		}
+		if facts[i].Path != facts[j].Path {
+			return facts[i].Path < facts[j].Path
+		}
+		if facts[i].Key != facts[j].Key {
+			return facts[i].Key < facts[j].Key
+		}
+		return facts[i].Value < facts[j].Value
+	})
+
+	out := Evidence{Facts: append([]EvidenceFact(nil), facts[:min(len(facts), limits.MaxFiles)]...)}
+	for _, source := range sources {
+		if len(out.Sources) >= limits.MaxFiles || out.TotalBytes >= limits.MaxTotalBytes {
+			break
+		}
+		remaining := limits.MaxTotalBytes - out.TotalBytes
+		copy := source
+		if len(copy.Excerpt) > remaining {
+			copy.Excerpt = truncateUTF8Bytes(copy.Excerpt, remaining)
+			copy.Truncated = true
+		}
+		if copy.Excerpt == "" {
+			continue
+		}
+		out.Sources = append(out.Sources, copy)
+		out.TotalBytes += len(copy.Excerpt)
+	}
+	return normalizedEvidence(out)
+}
+
+func dedupeFacts(in []EvidenceFact) []EvidenceFact {
+	out := make([]EvidenceFact, 0, len(in))
+	seen := map[string]bool{}
+	for _, fact := range in {
+		key := string(fact.Kind) + "\x00" + fact.Path + "\x00" + fact.Key + "\x00" + fact.Value
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, fact)
+		}
+	}
+	return out
+}
+
+func advisorEvidencePriority(path string) int {
+	path = filepathToSlashLower(path)
+	base := path
+	if slash := strings.LastIndex(path, "/"); slash >= 0 {
+		base = path[slash+1:]
+	}
+	if !strings.Contains(path, "/") || strings.HasPrefix(path, ".github/workflows/") || advisorBuildFile(base) {
+		return 0
+	}
+	if strings.HasPrefix(path, "docs/") || strings.HasPrefix(path, "skills/") || strings.HasPrefix(path, ".agents/") || strings.HasPrefix(path, ".ai/") || strings.HasPrefix(path, ".promptgrinder/") {
+		return 1
+	}
+	return 2
+}
+
+func advisorBuildFile(base string) bool {
+	switch base {
+	case "go.mod", "go.sum", "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "cargo.toml", "pyproject.toml", "requirements.txt", "dockerfile", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml":
+		return true
+	default:
+		return false
+	}
+}
+
+func filepathToSlashLower(path string) string {
+	return strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
+}
+
+func truncateUTF8Bytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(value) <= limit {
+		return value
+	}
+	value = value[:limit]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func dedupeSources(in []EvidenceSource) []EvidenceSource {

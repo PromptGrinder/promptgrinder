@@ -182,8 +182,8 @@ func TestValidateRecommendationsAllowsGroundedMultiValueAppend(t *testing.T) {
 		t.Fatalf("grounded multi-value append rejected: %v", err)
 	}
 	recommendation.Operation = OperationRemove
-	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err == nil || !strings.Contains(err.Error(), "removal requires one string") {
-		t.Fatalf("multi-value removal error = %v", err)
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("grounded multi-value removal rejected: %v", err)
 	}
 }
 
@@ -193,5 +193,65 @@ func TestValidateRecommendationsGroundsQuotedCommandAgainstRawEvidence(t *testin
 	recommendation := Recommendation{ID: "format", RoleID: "backend", Field: "quality_gates", Operation: OperationAppend, Value: `test -z "$(gofmt -l .)"`, Confidence: ConfidenceHigh, Explanation: "exact CI command", Evidence: []Citation{{Path: ".github/workflows/ci.yml"}}}
 	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
 		t.Fatalf("quoted command from raw evidence rejected: %v", err)
+	}
+}
+
+func TestValidateRecommendationsGroundsMultilineCommandAcrossIndentation(t *testing.T) {
+	current, evidence := advisorFixture()
+	evidence.Sources = append(evidence.Sources, EvidenceSource{Kind: EvidenceRepository, Path: ".github/workflows/backend-ci.yml", Excerpt: "run: |\n          ./mvnw -B verify \\\n            -Dsonar.token=\"$SONAR_TOKEN\" \\\n            -Dsonar.projectKey=footybadger"})
+	recommendation := Recommendation{ID: "sonar", RoleID: "backend", Field: "quality_gates", Operation: OperationAppend, Value: "./mvnw -B verify \\\n  -Dsonar.token=\"$SONAR_TOKEN\" \\\n  -Dsonar.projectKey=footybadger", Confidence: ConfidenceHigh, Explanation: "exact workflow command with presentation-only indentation changes", Evidence: []Citation{{Path: ".github/workflows/backend-ci.yml"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("multiline command with equivalent whitespace rejected: %v", err)
+	}
+}
+
+func TestValidateRecommendationsGroundsMultilineCommandFromExactCollectedFragments(t *testing.T) {
+	current, evidence := advisorFixture()
+	evidence.Sources = append(evidence.Sources,
+		EvidenceSource{Kind: EvidenceRepository, Path: ".github/workflows/android-ci.yml", Excerpt: "run: |\n  cd mobile-android\n  ./gradlew \\\n    :app:testLocalDebugUnitTest \\\n    :app:lintLocalDebug"},
+		EvidenceSource{Kind: EvidenceDocumentation, Path: "README.md", Excerpt: "./gradlew \\\n  :app:compileLocalDebugKotlin \\\n  :app:testLocalDebugUnitTest \\\n  :app:lintLocalDebug"},
+	)
+	recommendation := Recommendation{ID: "android", RoleID: "backend", Field: "quality_gates", Operation: OperationAppend, Value: "cd mobile-android\n./gradlew \\\n  :app:compileLocalDebugKotlin \\\n  :app:testLocalDebugUnitTest \\\n  :app:lintLocalDebug", Confidence: ConfidenceHigh, Explanation: "every command fragment is collected", Evidence: []Citation{{Path: ".github/workflows/android-ci.yml"}, {Path: "README.md"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("command composed from exact collected lines rejected: %v", err)
+	}
+	recommendation.Value = recommendation.Value.(string) + " \\\n  :app:inventedTask"
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err == nil || !strings.Contains(err.Error(), "ungrounded quality_gates") {
+		t.Fatalf("command with invented fragment error = %v", err)
+	}
+}
+
+func TestValidateRecommendationsGroundsDeepPathMentionedInEvidence(t *testing.T) {
+	current, evidence := advisorFixture()
+	evidence.Sources = append(evidence.Sources, EvidenceSource{Kind: EvidenceDocumentation, Path: "docs/testing.md", Excerpt: "Local Android tests live under `mobile-android/app/src/test/java`."})
+	recommendation := Recommendation{ID: "android-tests", RoleID: "backend", Field: "allowed_paths", Operation: OperationAppend, Value: "mobile-android/app/src/test", Confidence: ConfidenceHigh, Explanation: "testing guide identifies the test tree", Evidence: []Citation{{Path: "docs/testing.md"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("deep path mentioned by collected evidence rejected: %v", err)
+	}
+	recommendation.Value = "mobile-android/app/src/invented"
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err == nil || !strings.Contains(err.Error(), "ungrounded context path") {
+		t.Fatalf("invented deep path error = %v", err)
+	}
+}
+
+func TestValidateRecommendationsGroundsComposeFromCollectedBuildEvidence(t *testing.T) {
+	current, evidence := advisorFixture()
+	evidence.Sources = append(evidence.Sources, EvidenceSource{Kind: EvidenceRepository, Path: "mobile-android/app/build.gradle.kts", Excerpt: `buildFeatures { compose = true } dependencies { implementation("androidx.compose.ui:ui") }`})
+	recommendation := Recommendation{ID: "compose", RoleID: "backend", Field: "technology", Operation: OperationAppend, Value: "Jetpack Compose", Confidence: ConfidenceHigh, Explanation: "Gradle explicitly enables Compose", Evidence: []Citation{{Path: "mobile-android/app/build.gradle.kts"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("Compose from collected Gradle evidence rejected: %v", err)
+	}
+}
+
+func TestValidateRecommendationsGroundsExplicitJavaVersionFromBuildEvidence(t *testing.T) {
+	current, evidence := advisorFixture()
+	evidence.Sources = append(evidence.Sources, EvidenceSource{Kind: EvidenceRepository, Path: "backend/pom.xml", Excerpt: `<properties><java.version>21</java.version></properties>`})
+	recommendation := Recommendation{ID: "java", RoleID: "backend", Field: "technology", Operation: OperationAppend, Value: "Java 21", Confidence: ConfidenceHigh, Explanation: "Maven declares Java 21", Evidence: []Citation{{Path: "backend/pom.xml"}}}
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err != nil {
+		t.Fatalf("declared Java version rejected: %v", err)
+	}
+	recommendation.Value = "Java 22"
+	if err := ValidateRecommendations(current, evidence, []Recommendation{recommendation}); err == nil || !strings.Contains(err.Error(), "ungrounded technology") {
+		t.Fatalf("undeclared Java version error = %v", err)
 	}
 }
