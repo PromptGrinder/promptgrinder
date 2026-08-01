@@ -15,6 +15,16 @@ binary archives, binary-only checksums, or build metadata. GitHub's automatic
 the tag and are intentionally used by source-based distribution such as
 Homebrew.
 
+Publishing a GitHub release triggers a separate workflow that proposes the
+matching source-based formula update in `PromptGrinder/homebrew-tap`.
+Prereleases are supported and keep their complete suffix (for example,
+`v1.0.0-rc.2.2` becomes formula version `1.0.0-rc.2.2`). The workflow never
+reacts to a tag push or draft release, never merges its pull request, and never
+adds binary assets to the source release. Tap CI must pass before a maintainer
+manually merges the formula pull request. Operational instructions, including
+manual dry runs and token rotation, are in
+[Homebrew formula updates](release/homebrew-formula-updates.md).
+
 The final gate records exact qualified macOS and application versions, commands
 and results, source revision, clean-machine walkthroughs, limitations, upgrade
 and rollback steps, and reviewed scanner findings. macOS installation will be

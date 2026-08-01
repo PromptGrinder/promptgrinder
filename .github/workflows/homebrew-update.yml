@@ -1,0 +1,90 @@
+name: Update Homebrew formula
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published PromptGrinder release tag (for example, v1.0.0-rc.2.2)
+        required: true
+        type: string
+      dry_run:
+        description: Validate the update without creating a branch or pull request
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-formula-${{ github.event.release.tag_name || inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Propose Homebrew formula update
+    if: github.repository == 'PromptGrinder/promptgrinder'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      HOMEBREW_NO_ANALYTICS: 1
+    steps:
+      # actions/checkout v6, reviewed 2026-08-01; Dependabot may propose updates.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Resolve exact release metadata and checksum
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: scripts/homebrew-formula-update.sh plan "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify published release
+        if: github.event_name == 'release' || inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/homebrew-formula-update.sh verify-published "${{ steps.release.outputs.tag }}"
+
+      - name: Check for an existing formula version or pull request
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/homebrew-formula-update.sh check "${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Explain idempotent skip
+        if: steps.existing.outputs.skip == 'true'
+        run: echo "Homebrew update skipped — ${{ steps.existing.outputs.reason }}"
+
+      - name: Validate proposed formula update
+        if: steps.existing.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+        run: >-
+          scripts/homebrew-formula-update.sh bump
+          "${{ steps.release.outputs.version }}"
+          "${{ steps.release.outputs.url }}"
+          "${{ steps.release.outputs.sha256 }}"
+          true
+
+      - name: Configure authenticated tap access
+        if: steps.existing.outputs.skip != 'true' && (github.event_name == 'release' || inputs.dry_run == false)
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git config --global user.name "PromptGrinder release automation"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+
+      - name: Open Homebrew formula update pull request
+        if: steps.existing.outputs.skip != 'true' && (github.event_name == 'release' || inputs.dry_run == false)
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: >-
+          scripts/homebrew-formula-update.sh bump
+          "${{ steps.release.outputs.version }}"
+          "${{ steps.release.outputs.url }}"
+          "${{ steps.release.outputs.sha256 }}"
+          false

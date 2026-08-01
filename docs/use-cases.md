@@ -387,6 +387,15 @@ Beginning with `v1.0.0-rc.2.2`, GitHub releases retain GitHub-generated source
 archives without attaching compiled binaries or binary-only checksums; macOS
 installation will be supported through Homebrew from tagged source.
 
+### UC-58: Propose a Homebrew update after publication
+
+Publishing a stable or prerelease GitHub release starts a separate, source-only
+Homebrew workflow. It preserves the exact tag suffix, calculates the tagged
+source checksum, and opens a reviewable formula pull request when an identical
+version or pull request does not already exist. Drafts and tag pushes alone do
+not update the tap. Tap CI and manual maintainer review remain required; the
+workflow never auto-merges.
+
 ## Product boundaries
 
 PromptGrinder orchestrates engineering work; it does not provide a coding

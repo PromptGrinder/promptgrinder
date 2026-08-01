@@ -11,6 +11,7 @@ the workflow below.
 ### 1. Install
 
 ```sh
+brew tap promptgrinder/tap
 brew install promptgrinder
 promptgrinder --version
 ```
@@ -140,6 +141,32 @@ metadata to these releases.
 The Homebrew installation shown in the quick start builds from tagged source.
 The release workflow does not upload a compiled binary for either Apple
 silicon or Intel Macs.
+
+### Install, upgrade, or uninstall
+
+Add the PromptGrinder tap once, then install the formula by its short name:
+
+```sh
+brew tap promptgrinder/tap
+brew install promptgrinder
+```
+
+Upgrade an existing installation after a new formula is published:
+
+```sh
+brew update
+brew upgrade promptgrinder
+```
+
+Remove the installed command:
+
+```sh
+brew uninstall promptgrinder
+```
+
+Uninstalling the formula does not remove PromptGrinder state under
+`${PROMPTGRINDER_HOME:-$HOME/.promptgrinder}`. If no other formula from the tap
+is needed, remove the tap separately with `brew untap promptgrinder/tap`.
 
 ### Build from source
 
