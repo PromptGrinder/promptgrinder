@@ -34,6 +34,8 @@ jobs:
         run: go mod verify
       - name: Source-only release policy
         run: scripts/verify-source-only-release.sh
+      - name: Homebrew formula update contract
+        run: scripts/test-homebrew-formula-update.sh
 
   tests:
     name: Go tests
