@@ -240,7 +240,12 @@ Automatic per-task commits are conservative: `--commit-each=true` requires a
 clean Git baseline even if `--require-clean-git=false` is supplied, stages only
 the paths attributed to that worker (including deletions), and refuses a commit
 when the index, worktree, or HEAD changes unexpectedly. PromptGrinder state and
-output paths are never included. Start from a clean worktree and use
+output paths are never included. If repository evidence proves that the worker
+already committed exactly the approved changes and left a clean worktree, the
+error identifies that commit and confirms that no changes were lost. It never
+accepts, amends, resets, or removes the worker commit automatically. Continue
+with `--commit-each=false`, or remove commit instructions from prompts and let
+PromptGrinder own commits. Start from a clean worktree and use
 `--require-clean-git`; use `--commit-each=false` unless focused automatic
 commits are intended.
 
