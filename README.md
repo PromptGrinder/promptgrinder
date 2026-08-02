@@ -42,6 +42,10 @@ Discovery creates `.promptgrinder/project.yaml`, generated role YAML under
 review-first: inspect recommendations before applying any with
 `promptgrinder roles apply latest --safe`.
 
+Running discovery again never overwrites different existing configuration. If
+repository analysis has changed, PromptGrinder reports the conflicting file
+and asks you to reconcile it or move `.promptgrinder/` aside first.
+
 Slices are numbered Markdown work orders in one folder. This creates a small
 two-slice example:
 
@@ -179,8 +183,8 @@ go install ./cmd/promptgrinder
 promptgrinder --version
 ```
 
-Linux, Windows, and automatic updates are not supported by this release
-candidate. Direct compiled-archive installation is retained only in historical
+Linux, Windows, and automatic updates are not supported by v1.0.0. Direct
+compiled-archive installation is retained only in historical
 release documentation for releases that actually published those assets.
 
 ## Running prompts
@@ -541,7 +545,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.2.1` release candidate targets macOS on Apple silicon and Intel
+PromptGrinder v1.0.0 targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -552,7 +556,7 @@ and includes the orchestration capabilities documented above:
 
 Exact qualified macOS, Codex, Terminal.app, and iTerm2 versions remain pending
 clean-machine qualification. Linux and Windows may be technically compilable
-in part, but they are untested and unsupported for this release candidate.
+in part, but they are untested and unsupported for v1.0.0.
 Source builds require the Go version declared in [`go.mod`](go.mod).
 
 ## Development
@@ -589,9 +593,11 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
-- [RC.2.1 qualification](docs/release/v1.0.0-rc.2.1-qualification.md)
-- [RC.2.1 final gate](docs/release/v1.0.0-rc.2.1-final-gate.md)
-- [RC.2.1 candidate notes](docs/release/v1.0.0-rc.2.1-release-notes.md)
+- [v1.0.0 qualification](docs/release/v1.0.0-qualification.md)
+- [v1.0.0 final gate](docs/release/v1.0.0-final-gate.md)
+- [v1.0.0 candidate notes](docs/release/v1.0.0-release-notes.md)
+- [Historical RC.2.1 qualification](docs/release/v1.0.0-rc.2.1-qualification.md)
+- [Historical RC.2.1 notes](docs/release/v1.0.0-rc.2.1-release-notes.md)
 - [Historical RC.2 notes](docs/release/v1.0.0-rc.2-release-notes.md)
 - [Historical RC.1 qualification](docs/release/qualification.md)
 - [Historical RC.1 notes](docs/release/v1.0.0-rc.1-release-notes.md)

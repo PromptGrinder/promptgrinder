@@ -191,14 +191,14 @@ func TestDiscoverCommandReportsGenerationConflict(t *testing.T) {
 	cmd := newRootCommand(&fakeService{}, &bytes.Buffer{}, errOut, func() (string, error) {
 		return repo, nil
 	}, func(string) (discovery.Result, error) {
-		return discovery.Result{}, errors.New(`refusing to overwrite conflicting target ".promptgrinder/project.yaml"`)
+		return discovery.Result{}, errors.New(`existing discovery target ".promptgrinder/project.yaml" differs from the current repository analysis; no files were changed. Reconcile the file manually, or move the existing .promptgrinder directory aside before running promptgrinder discover again`)
 	})
 	cmd.SetArgs([]string{"discover"})
 	err := cmd.Execute()
 	if code, ok := ExitCode(err); !ok || code != ExitInvalidInput {
 		t.Fatalf("exit code = %d %v, want %d (error %v)", code, ok, ExitInvalidInput, err)
 	}
-	want := "Error: discover repository: refusing to overwrite conflicting target \".promptgrinder/project.yaml\"\n"
+	want := "Error: discover repository: existing discovery target \".promptgrinder/project.yaml\" differs from the current repository analysis; no files were changed. Reconcile the file manually, or move the existing .promptgrinder directory aside before running promptgrinder discover again\n"
 	if errOut.String() != want {
 		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
 	}

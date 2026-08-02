@@ -4,6 +4,27 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0 release candidate
+
+- Promoted the embedded application version from the release-candidate line to
+  `v1.0.0` while preserving the documented v1 CLI, JSON, configuration, task,
+  and persisted-state compatibility contracts.
+- Completed the local-first worker runtime, deterministic role discovery,
+  reviewable role enhancement, ordered folder execution, semantic completion
+  enforcement, safe commit boundaries, sequence lifecycle controls, and
+  replaceable Codex and Antigravity runtime adapters developed through the RC
+  series.
+- Kept GitHub releases source-only and added review-first Homebrew distribution:
+  publishing a release proposes an exact-version formula update, but never
+  auto-merges it.
+- Improved repeated `discover` failures so conflicting generated configuration
+  names the file, confirms that no files changed, and gives preservation-first
+  recovery guidance.
+
+This entry prepares the final version-bump pull request. `v1.0.0` is not tagged
+or published until the reviewed commit is merged and the separate release
+procedure is explicitly authorized.
+
 ### v1.0.0-rc.2.1 candidate
 
 - Fixed ordered-folder completion parsing when a Codex JSONL command event is

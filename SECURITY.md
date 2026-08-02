@@ -15,7 +15,6 @@ service level are published.
 
 ## Supported versions
 
-The tagged `v1.0.0-rc.1` line and the current `v1.0.0-rc.2.1` candidate branch
-are evaluated during the pre-1.0 period. Users should reproduce reports against
-the newest available revision when practical. Security or data-loss defects
-may require compatibility changes.
+The final `v1.0.0` candidate supersedes the pre-1.0 release-candidate line.
+Users should reproduce reports against the newest available revision when
+practical. Security or data-loss defects may require compatibility changes.
