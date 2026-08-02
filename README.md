@@ -1,6 +1,6 @@
 # PromptGrinder — the app that builds itself
 
-[![CI](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml)
+[![CI](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml) [![Homebrew Tap](https://img.shields.io/badge/homebrew-PromptGrinder%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/PromptGrinder/homebrew-tap)
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
