@@ -1,5 +1,7 @@
 # PromptGrinder — the app that builds itself
 
+[![CI](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml)
+
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
 ## Quick start
