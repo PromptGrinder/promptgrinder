@@ -23,6 +23,9 @@ All notable changes are recorded here. This project uses semantic versioning.
 - Added evidence-backed commit-ownership diagnostics when a worker commits the
   exact approved change set before `--commit-each`, while retaining generic
   fail-closed errors for ambiguous Git states.
+- Added first-use guidance for an unconfigured no-argument invocation and made
+  setup inventory supported runtime CLIs, terminal applications, Git, shell,
+  PATH, and local storage before proposing any writes.
 
 This entry prepares the final version-bump pull request. `v1.0.0` is not tagged
 or published until the reviewed commit is merged and the separate release

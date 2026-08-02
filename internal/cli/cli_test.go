@@ -18,6 +18,7 @@ import (
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/discovery"
 	"promptgrinder/internal/engine"
+	"promptgrinder/internal/firstuse"
 	"promptgrinder/internal/roleenhance"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
@@ -73,16 +74,69 @@ func TestCLISetupDryRunReportsPreviewInsteadOfAlreadyComplete(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "new-home")
 	service := &fakeService{defaultsReport: config.DefaultsReport{HomeDir: home}}
 	out := &bytes.Buffer{}
-	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	scan := func(context.Context, firstuse.DoctorOptions) firstuse.DoctorReport {
+		return firstuse.DoctorReport{OK: true, Checks: []firstuse.Check{{ID: "tool.codex", Status: firstuse.Pass, Summary: "Codex CLI is executable."}}}
+	}
+	cmd := newRootCommandWithDependencies(service, out, &bytes.Buffer{}, os.Getwd, discovery.Discover, nil, scan)
 	cmd.SetArgs([]string{"setup", "--dry-run"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Setup preview complete; planned changes were not written.") || strings.Contains(out.String(), "already complete") {
+	if !strings.Contains(out.String(), "Machine capabilities:") || !strings.Contains(out.String(), "tool.codex") || !strings.Contains(out.String(), "Setup proposal:") || !strings.Contains(out.String(), "Setup preview complete; planned changes were not written.") || strings.Contains(out.String(), "already complete") {
 		t.Fatalf("setup output = %q", out.String())
 	}
 	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dry run wrote home: %v", err)
+	}
+}
+
+func TestCLISetupJSONIncludesMachineCapabilities(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "new-home")
+	service := &fakeService{defaultsReport: config.DefaultsReport{HomeDir: home}}
+	out := &bytes.Buffer{}
+	scan := func(context.Context, firstuse.DoctorOptions) firstuse.DoctorReport {
+		return firstuse.DoctorReport{OK: true, Checks: []firstuse.Check{{ID: "terminal.available.headless", Status: firstuse.Pass, Summary: "Headless execution is available."}}}
+	}
+	cmd := newRootCommandWithDependencies(service, out, &bytes.Buffer{}, os.Getwd, discovery.Discover, nil, scan)
+	cmd.SetArgs([]string{"setup", "--dry-run", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var report firstuse.SetupReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("setup JSON = %q: %v", out.String(), err)
+	}
+	if report.Capabilities == nil || len(report.Capabilities.Checks) != 1 || report.Capabilities.Checks[0].ID != "terminal.available.headless" {
+		t.Fatalf("setup report = %#v", report)
+	}
+	if strings.Contains(out.String(), "Machine capabilities:") {
+		t.Fatalf("JSON output contains human text: %q", out.String())
+	}
+}
+
+func TestRootWithoutArgumentsGuidesUnconfiguredInstallationToSetup(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(&fakeService{defaultsReport: config.DefaultsReport{HomeDir: filepath.Join(t.TempDir(), "new-home")}}, out, &bytes.Buffer{})
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Welcome to PromptGrinder.", "has not been configured", "promptgrinder setup", "inspect local runtimes, terminals, Git, shell configuration"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output = %q, want %q", out.String(), want)
+		}
+	}
+}
+
+func TestRootWithoutArgumentsShowsHelpAfterSetup(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(&fakeService{defaultsReport: config.DefaultsReport{UserConfigExists: true}}, out, &bytes.Buffer{})
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Usage:") || strings.Contains(out.String(), "has not been configured") {
+		t.Fatalf("output = %q", out.String())
 	}
 }
 

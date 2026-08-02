@@ -34,8 +34,35 @@ func TestDoctorCheckSeveritiesAndReadOnly(t *testing.T) {
 	assertCheck(t, report, "codex.readiness", Skipped)
 	assertCheck(t, report, "repo.git", Skipped)
 	assertCheck(t, report, "terminal.active_launch", Skipped)
+	assertCheck(t, report, "terminal.available.headless", Pass)
+	assertCheck(t, report, "tool.antigravity", Pass)
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatalf("doctor created home: %v", err)
+	}
+}
+
+func TestDoctorTreatsMissingOptionalRuntimeAsInventoryWarning(t *testing.T) {
+	home := t.TempDir()
+	exe := fakeExecutable(t, "promptgrinder")
+	tool := fakeExecutable(t, "tool")
+	report := Doctor(context.Background(), DoctorOptions{
+		HomeDir: home, Terminal: "headless", GOOS: "darwin", GOARCH: "arm64", Executable: exe,
+		LookPath: func(name string) (string, error) {
+			if name == "agy" {
+				return "", errors.New("missing")
+			}
+			return tool, nil
+		},
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if reflect.DeepEqual(args, []string{"--version"}) {
+				return []byte("codex-cli 1.2.3"), nil
+			}
+			return []byte("logged in"), nil
+		},
+	})
+	check := findCheck(t, report, "tool.antigravity")
+	if check.Status != Warning || check.Required || !report.OK {
+		t.Fatalf("optional runtime check = %#v, report = %#v", check, report)
 	}
 }
 
