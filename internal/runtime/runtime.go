@@ -515,7 +515,7 @@ func commitSharedChanges(repoRoot, message string, attributed ...any) (string, e
 	}
 	staged, err := runtimeChangedPathSet(repoRoot, "diff", "--cached", "--name-status", "-z", "--find-renames")
 	if err != nil || !samePaths(staged, changed) {
-		return "", fmt.Errorf("staged change set does not exactly match approved worker changes")
+		return "", sharedStagedChangeMismatchError(repoRoot, baseline, changed)
 	}
 	current, err = workerpathpolicy.AttributedChanges(repoRoot, baseline)
 	if err != nil || !samePaths(filterRuntimeStatePaths(current), changed) {
@@ -534,6 +534,14 @@ func commitSharedChanges(repoRoot, message string, attributed ...any) (string, e
 		return "", fmt.Errorf("created commit does not exactly match approved worker changes")
 	}
 	return sha, nil
+}
+
+func sharedStagedChangeMismatchError(repoRoot string, baseline workerpathpolicy.Snapshot, approved []string) error {
+	conflict, err := workerpathpolicy.DetectCommitOwnershipConflict(repoRoot, baseline, approved)
+	if err == nil && conflict != nil {
+		return conflict
+	}
+	return fmt.Errorf("staged change set does not exactly match approved worker changes")
 }
 
 func ordinaryTaskPolicy(taskPath string) (workerdomain.WorkerPolicy, error) {

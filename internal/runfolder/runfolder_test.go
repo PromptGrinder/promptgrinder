@@ -13,6 +13,7 @@ import (
 
 	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 type fakeLauncher struct {
@@ -966,6 +967,56 @@ func TestCommitEachCommitsOnlyWhenThereAreChanges(t *testing.T) {
 	}
 }
 
+func TestGitCommitFocusedReportsWorkerCommitOwnershipConflict(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "tracked.txt", "initial")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "approved.txt", "approved")
+	git(t, dir, "add", "approved.txt")
+	git(t, dir, "commit", "-m", "worker committed approved change")
+	workerCommit := strings.TrimSpace(string(gitOutput(t, dir, "rev-parse", "HEAD")))
+
+	_, err = gitCommitFocused(dir, "PromptGrinder: complete task", baseline, []string{"approved.txt"})
+	if err == nil {
+		t.Fatal("expected commit ownership conflict")
+	}
+	for _, want := range []string{"Commit ownership conflict:", "Worker commit: " + workerCommit, "Worktree: clean", "No changes were lost"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+	}
+	clean, cleanErr := gitClean(dir)
+	if cleanErr != nil || !clean {
+		t.Fatalf("worker commit evidence was modified: clean=%t err=%v", clean, cleanErr)
+	}
+	if got := strings.TrimSpace(string(gitOutput(t, dir, "rev-parse", "HEAD"))); got != workerCommit {
+		t.Fatalf("HEAD = %s, want unchanged worker commit %s", got, workerCommit)
+	}
+}
+
+func TestStagedChangeMismatchRetainsGenericErrorWhenUnproven(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "tracked.txt", "initial")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "unexpected.txt", "unexpected")
+	git(t, dir, "add", "unexpected.txt")
+
+	err = stagedChangeMismatchError(dir, baseline, []string{"approved.txt"})
+	if got, want := err.Error(), "staged change set does not exactly match approved worker changes"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
 func TestRequireCleanGitFailsWhenDirty(t *testing.T) {
 	dir := initGitRepo(t)
 	writePromptFile(t, dir, "10-implement-a.md", "a")
@@ -1084,6 +1135,16 @@ func git(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
 	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v failed: %v", args, err)
+	}
+	return out
 }
 
 func readJSON(t *testing.T, path string, out any) {

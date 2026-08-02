@@ -1668,15 +1668,11 @@ func gitCommitFocused(dir, message string, baseline workerpathpolicy.Snapshot, a
 	if len(approved) == 0 {
 		return "", nil
 	}
-	beforeStage, err := workerpathpolicy.Capture(dir)
-	if err != nil {
-		return "", fmt.Errorf("re-check worktree before staging: %w", err)
-	}
 	actual, err := attributedWorkerChanges(dir, baseline)
 	if err != nil {
 		return "", err
 	}
-	if !equalStrings(actual, approved) || beforeStage.Head != baseline.Head {
+	if !equalStrings(actual, approved) {
 		return "", fmt.Errorf("worktree changed during worker attribution; refusing automatic commit")
 	}
 	args := []string{"-C", dir, "add", "--all", "--"}
@@ -1688,7 +1684,7 @@ func gitCommitFocused(dir, message string, baseline workerpathpolicy.Snapshot, a
 	}
 	staged, err := gitChangedPathSet(dir, "diff", "--cached", "--name-status", "-z", "--find-renames")
 	if err != nil || !equalStrings(staged, approved) {
-		return "", fmt.Errorf("staged change set does not exactly match approved worker changes")
+		return "", stagedChangeMismatchError(dir, baseline, approved)
 	}
 	preCommit, err := workerpathpolicy.Capture(dir)
 	if err != nil {
@@ -1711,6 +1707,14 @@ func gitCommitFocused(dir, message string, baseline workerpathpolicy.Snapshot, a
 		return "", fmt.Errorf("created commit does not exactly match approved worker changes")
 	}
 	return commit, nil
+}
+
+func stagedChangeMismatchError(dir string, baseline workerpathpolicy.Snapshot, approved []string) error {
+	conflict, err := workerpathpolicy.DetectCommitOwnershipConflict(dir, baseline, approved)
+	if err == nil && conflict != nil {
+		return conflict
+	}
+	return fmt.Errorf("staged change set does not exactly match approved worker changes")
 }
 
 func gitNullPaths(dir string, args ...string) ([]string, error) {

@@ -20,6 +20,9 @@ All notable changes are recorded here. This project uses semantic versioning.
 - Improved repeated `discover` failures so conflicting generated configuration
   names the file, confirms that no files changed, and gives preservation-first
   recovery guidance.
+- Added evidence-backed commit-ownership diagnostics when a worker commits the
+  exact approved change set before `--commit-each`, while retaining generic
+  fail-closed errors for ambiguous Git states.
 
 This entry prepares the final version-bump pull request. `v1.0.0` is not tagged
 or published until the reviewed commit is merged and the separate release

@@ -139,7 +139,11 @@ same sequence from the beginning, `--fresh` to create a new sequence, or
 
 Use `--checkpoint` and `--commit-each` to retain prompt-level Git evidence.
 PromptGrinder requires safe baselines when requested and must not include
-pre-existing unrelated changes in a focused worker commit.
+pre-existing unrelated changes in a focused worker commit. If exactly one
+worker commit contains exactly the approved changes and the worktree is clean,
+PromptGrinder reports a commit-ownership conflict with the commit SHA and safe
+recovery choices. Unrelated paths, multiple commits, residual changes, and
+genuine index mismatches retain the generic fail-closed diagnostic.
 
 ### UC-21: Inspect sequence history
 
