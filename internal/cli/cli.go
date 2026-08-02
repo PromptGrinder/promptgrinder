@@ -267,11 +267,17 @@ func NewRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ad
 
 type discoverFunc func(string) (discovery.Result, error)
 
+type doctorFunc func(context.Context, firstuse.DoctorOptions) firstuse.DoctorReport
+
 func newRootCommand(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc) *cobra.Command {
 	return newRootCommandWithRoleAdvisor(service, stdout, stderr, getwd, discover, nil)
 }
 
 func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc, roleAdvisor roleenhance.Advisor) *cobra.Command {
+	return newRootCommandWithDependencies(service, stdout, stderr, getwd, discover, roleAdvisor, firstuse.Doctor)
+}
+
+func newRootCommandWithDependencies(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc, roleAdvisor roleenhance.Advisor, scan doctorFunc) *cobra.Command {
 	var compactJSON bool
 	var plainOutput bool
 	var themeName string
@@ -281,6 +287,17 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 		Version:       buildinfo.String(),
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !service.Defaults().UserConfigExists {
+				fmt.Fprintln(stdout, "Welcome to PromptGrinder.")
+				fmt.Fprintln(stdout, "\nThis installation has not been configured yet.")
+				fmt.Fprintln(stdout, "\nRun:\n  promptgrinder setup")
+				fmt.Fprintln(stdout, "\nSetup will inspect local runtimes, terminals, Git, shell configuration, and PromptGrinder storage before proposing any changes.")
+				return nil
+			}
+			return cmd.Help()
+		},
 	}
 	root.SetVersionTemplate("promptgrinder {{.Version}}\n")
 	root.SetOut(stdout)
@@ -701,7 +718,7 @@ Examples:
 			if doctorActive && !doctorJSON {
 				fmt.Fprintln(stdout, "Active check requested: a visible, short-lived terminal probe may open. It never starts Codex or an AI session.")
 			}
-			report := firstuse.Doctor(cmd.Context(), firstuse.DoctorOptions{
+			report := scan(cmd.Context(), firstuse.DoctorOptions{
 				Repo: doctorRepo, Terminal: doctorTerminal, Active: doctorActive,
 				HomeDir: service.Defaults().HomeDir,
 			})
@@ -742,6 +759,15 @@ Examples:
 				}
 				return StructuredError{Err: err, Code: ExitInvalidInput}
 			}
+			capabilities := scan(cmd.Context(), firstuse.DoctorOptions{
+				HomeDir:  service.Defaults().HomeDir,
+				Terminal: "headless",
+			})
+			if !setupJSON {
+				fmt.Fprintln(stdout, "Machine capabilities:")
+				printDoctor(stdout, capabilities)
+				fmt.Fprintln(stdout, "\nSetup proposal:")
+			}
 			report, err := firstuse.Setup(firstuse.SetupOptions{
 				HomeDir: service.Defaults().HomeDir, DryRun: setupDryRun,
 				NonInteractive: setupNonInteractive, Yes: setupYes,
@@ -753,6 +779,7 @@ Examples:
 					return stdout
 				}(),
 			})
+			report.Capabilities = &capabilities
 			if setupJSON {
 				if writeErr := writeJSON(stdout, report, compactJSON); writeErr != nil {
 					return writeErr

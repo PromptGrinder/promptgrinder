@@ -10,13 +10,17 @@ reference.
 ### UC-01: Check local readiness
 
 Use `promptgrinder doctor` to verify the platform, configuration, state home,
-Git, configured runtimes, and terminal adapter without changing files. Use
-`--active` only when a visible terminal launch probe is wanted.
+supported runtime CLI inventory, Git, repository, generated-worker `PATH`,
+headless availability, installed Terminal.app/iTerm2 applications, and selected
+terminal adapter without modifying files. Use `--active` only when a visible
+terminal launch probe is wanted.
 
 ### UC-02: Set up PromptGrinder-owned local state
 
-Use `promptgrinder setup --dry-run` to preview first-use files, then
-`promptgrinder setup` to create the minimal local configuration and state.
+Running plain `promptgrinder` on an unconfigured installation points to setup
+without writing files. Use `promptgrinder setup --dry-run` to scan machine
+capabilities and preview first-use files, then `promptgrinder setup` to repeat
+the scan and create the minimal local configuration and state after approval.
 When writes are planned, the dry-run summary identifies the output as a
 preview and confirms that the planned changes were not written.
 Setup does not install or authenticate an AI runtime, edit shell profiles, or

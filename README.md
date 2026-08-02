@@ -18,7 +18,24 @@ brew install promptgrinder
 promptgrinder --version
 ```
 
-### 2. Check the setup
+Running `promptgrinder` before setup prints a short first-use guide without
+creating files.
+
+### 2. Scan and configure the machine
+
+```sh
+promptgrinder
+promptgrinder setup --dry-run
+promptgrinder setup
+```
+
+Setup first performs a read-only capability scan for supported runtimes, Git,
+shell and PATH readiness, PromptGrinder storage, headless execution,
+Terminal.app, and iTerm2. It then shows its proposed PromptGrinder-owned files
+and asks before writing them. The dry run performs the scan and preview without
+writing anything.
+
+### 3. Check the setup
 
 ```sh
 promptgrinder doctor --repo . --terminal headless
@@ -27,7 +44,7 @@ promptgrinder doctor --repo . --terminal headless
 A successful check confirms that PromptGrinder can use its local state,
 repository, Git, configured runtime, and a non-GUI terminal adapter.
 
-### 3. Prepare roles and slices
+### 4. Prepare roles and slices
 
 Discover project roles, ask for a reviewable enhancement proposal, and inspect
 the stored review:
@@ -74,7 +91,7 @@ Runnable slice names use `NN-implement-*.md`, `NN-test-*.md`,
 `NN-verify-*.md`, or `NN-review-*.md`. An optional
 `00-specification*.md` supplies shared context.
 
-### 4. Run the slices
+### 5. Run the slices
 
 ```sh
 promptgrinder run-folder tasks/first-change \
@@ -88,7 +105,7 @@ promptgrinder run-folder tasks/first-change \
 in filename order. Detached startup prints the sequence ID and an exact status
 command while workers continue locally.
 
-### 5. Check progress
+### 6. Check progress
 
 ```sh
 promptgrinder sequence current
@@ -274,8 +291,8 @@ commits are intended.
 | `roles apply <id\|latest>` | Apply safe additions or explicitly selected stored items without AI |
 | `roles reject <id\|latest>` | Reject a stored review without writing role YAML |
 | `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
-| `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
-| `setup` | Preview or create PromptGrinder-owned first-use files |
+| `doctor` | Inventory supported runtimes and terminals, then check platform, Git, configuration, state, and readiness |
+| `setup` | Run the read-only machine scan, then preview or create PromptGrinder-owned first-use files |
 | `list` | List workers |
 | `status <worker-id>` | Inspect one worker |
 | `logs <worker-id>` | Read one worker log |
@@ -365,9 +382,10 @@ promptgrinder defaults
 promptgrinder doctor --repo . --json
 ```
 
-`promptgrinder setup --dry-run` previews first-use writes. `setup` does not
-install Codex, authenticate accounts, edit shell profiles, or change macOS
-privacy settings.
+On an unconfigured installation, plain `promptgrinder` points to setup without
+writing files. `promptgrinder setup --dry-run` inventories machine capabilities
+and previews first-use writes. `setup` does not install Codex, authenticate
+accounts, edit shell profiles, or change macOS privacy settings.
 
 ## Validation and safety model
 
