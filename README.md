@@ -65,55 +65,113 @@ Running discovery again never overwrites different existing configuration. If
 repository analysis has changed, PromptGrinder reports the conflicting file
 and asks you to reconcile it or move `.promptgrinder/` aside first.
 
-Slices are numbered Markdown work orders in one folder. This creates a small
-two-slice example:
+Slices are numbered Markdown work orders in one folder. Use them when a feature
+is too large for one safe prompt: separate the domain change, CLI integration,
+tests, and final verification so each worker receives a smaller context and
+produces a reviewable result.
+
+For example, prepare a new `project archive` feature as three bounded slices:
 
 ```sh
-mkdir -p tasks/first-change
+mkdir -p tasks/project-archive
 
-cat > tasks/first-change/10-implement-change.md <<'EOF'
-# Implement the change
+cat > tasks/project-archive/10-implement-domain.md <<'EOF'
+---
+acceptance_criteria:
+  - Archive state is persisted and existing projects remain readable.
+allowed_paths:
+  - internal/project/**
+forbidden_paths:
+  - .github/**
+validation:
+  - go test ./internal/project/...
+---
+# Add project archive behavior
 
-Make one bounded project change. Add focused tests and avoid unrelated files.
+Implement the archive state in the project domain and persistence layer. Add
+focused tests. Do not add CLI behavior in this slice.
 EOF
 
-cat > tasks/first-change/20-test-change.md <<'EOF'
-# Verify the change
+cat > tasks/project-archive/20-implement-cli.md <<'EOF'
+---
+acceptance_criteria:
+  - Users can archive a project through the public CLI.
+allowed_paths:
+  - internal/cli/**
+  - internal/project/**
+validation:
+  - go test ./internal/cli/... ./internal/project/...
+---
+# Expose project archive in the CLI
 
-Run the relevant tests, fix regressions caused by the change, and report the
-commands and results.
+Build on the domain behavior from the previous slice. Add the public command,
+help text, error handling, and focused CLI tests.
 EOF
 
-promptgrinder validate tasks/first-change/10-implement-change.md
-promptgrinder validate tasks/first-change/20-test-change.md
+cat > tasks/project-archive/30-verify-project-archive.md <<'EOF'
+---
+acceptance_criteria:
+  - The feature is covered by focused and repository-wide validation.
+allowed_paths:
+  - internal/cli/**
+  - internal/project/**
+  - README.md
+validation:
+  - go test ./...
+  - go vet ./...
+---
+# Verify project archive end to end
 
-git add .promptgrinder tasks/first-change
-git commit -m "Add PromptGrinder roles and first slices"
+Exercise the public behavior, fix only regressions caused by this feature, and
+run the declared validation. Report any residual risk.
+EOF
+
+promptgrinder validate tasks/project-archive/10-implement-domain.md
+promptgrinder validate tasks/project-archive/20-implement-cli.md
+promptgrinder validate tasks/project-archive/30-verify-project-archive.md
+
+git add .promptgrinder tasks/project-archive
+git commit -m "Add PromptGrinder roles and project archive slices"
 ```
 
 Runnable slice names use `NN-implement-*.md`, `NN-test-*.md`,
 `NN-verify-*.md`, or `NN-review-*.md`. An optional
-`00-specification*.md` supplies shared context.
+`00-specification*.md` supplies shared context. For a large SonarQube cleanup,
+use the same pattern but group related findings into bounded files such as
+`10-implement-sonar-service-errors.md`, `20-implement-sonar-cli-errors.md`, and
+`30-verify-sonar-cleanup.md`; put rule IDs, affected paths, and the relevant
+quality-gate command in each slice instead of sending the entire issue backlog
+to one worker.
+
+Slicing can reduce wasted tokens because each worker receives a bounded task
+instead of repeatedly reasoning over one oversized objective. It also keeps
+commits and reviews smaller and limits the work lost when one task fails;
+smaller contexts can resolve faster. `allowed_paths` and `forbidden_paths`
+enforce a slice's file boundary, while project roles add reusable
+responsibility, runtime, and path restrictions for named workers. These
+controls reduce risk, but they do not replace reviewing the generated changes
+and test evidence.
 
 ### 5. Run the slices
 
 ```sh
-promptgrinder run-folder tasks/first-change \
+promptgrinder run-folder tasks/project-archive \
   --repo . \
   --require-clean-git \
-  --commit-each=false \
+  --commit-each \
   --detach
 ```
 
 `run-folder` requires the slice folder and executes recognized Markdown files
-in filename order. Detached startup prints the sequence ID and an exact status
-command while workers continue locally.
+in filename order. Here PromptGrinder owns one focused commit per successful
+slice; do not also tell the worker to commit. Detached startup prints the
+sequence ID and an exact status command while workers continue locally.
 
 ### 6. Check progress
 
 ```sh
 promptgrinder sequence current
-promptgrinder sequences --folder tasks/first-change
+promptgrinder sequences --folder tasks/project-archive
 ```
 
 `sequence current` shows the overall state, current slice, per-slice results,
