@@ -94,6 +94,7 @@ type StatusSummary struct {
 type RunFolderOptions = runfolder.Options
 type RunFolderSummary = runfolder.Summary
 type RunFolderProgressEvent = runfolder.ProgressEvent
+type RunFolderPreflight = runfolder.PreflightResult
 type SequenceProgress = runfolder.SequenceProgress
 type SequenceState = runfolder.SequenceState
 
@@ -712,7 +713,15 @@ func rollbackSharedChanges(repoRoot, checkpointSHA string) error {
 
 func isPromptGrinderStatePath(name string) bool {
 	name = filepath.ToSlash(strings.TrimSpace(name))
-	return name == ".promptgrinder" || strings.HasPrefix(name, ".promptgrinder/") || strings.Contains(name, "/.promptgrinder/")
+	parts := strings.Split(name, "/")
+	for i, part := range parts {
+		if part != ".promptgrinder" || i+1 >= len(parts) {
+			continue
+		}
+		rest := strings.Join(parts[i+1:], "/")
+		return rest == "run.json" || rest == "summary.md" || strings.HasPrefix(rest, "prompts/")
+	}
+	return false
 }
 
 func reportSharedRunProgress(options RunOptions, index, total int, taskPath string, worker state.Worker, status string, duration time.Duration) {
@@ -819,6 +828,15 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 	return runfolder.Run(path, options, promptLauncher{manager: manager})
 }
 
+func (s Service) PreflightRunFolder(path string, options RunFolderOptions) (RunFolderPreflight, error) {
+	if options.HomeDir == "" {
+		options.HomeDir = filepath.Dir(s.Store.WorkersDir)
+	}
+	options.BaseConfig = s.Worker.BaseConfig
+	options.UseRepoConfig = s.Worker.UseRepoConfig
+	return runfolder.Preflight(path, options)
+}
+
 func (s Service) Sequences() ([]SequenceProgress, error) {
 	return runfolder.ListSequences(filepath.Dir(s.Store.WorkersDir))
 }
@@ -838,6 +856,34 @@ func (s Service) Sequence(sequenceID string) (SequenceState, error) {
 		return runfolder.CurrentSequence(homeDir)
 	}
 	return runfolder.LoadSequence(homeDir, sequenceID)
+}
+
+func (s Service) CancelSequence(sequenceID string) (SequenceState, error) {
+	homeDir := filepath.Dir(s.Store.WorkersDir)
+	sequence, err := runfolder.LoadSequence(homeDir, sequenceID)
+	if err != nil {
+		return SequenceState{}, err
+	}
+	for _, item := range sequence.Items {
+		if item.Status == "running" && item.WorkerID != "" {
+			if _, cancelErr := s.Cancel(item.WorkerID); cancelErr != nil && !errors.Is(cancelErr, os.ErrNotExist) {
+				return SequenceState{}, cancelErr
+			}
+		}
+	}
+	cancelled, err := runfolder.CancelSequence(homeDir, sequenceID)
+	if err != nil {
+		return SequenceState{}, err
+	}
+	if sequence.Supervisor != nil && sequence.Supervisor.PID > 0 && sequence.Supervisor.PID != os.Getpid() {
+		if err := runfolder.StopSequenceSupervisor(homeDir, sequence.Supervisor); err != nil {
+			return cancelled, fmt.Errorf("cancel sequence supervisor: %w", err)
+		}
+		if err := worktree.ReleaseForPID(homeDir, sequence.RepositoryPath, sequence.Supervisor.PID); err != nil {
+			return cancelled, fmt.Errorf("release sequence worktree claim: %w", err)
+		}
+	}
+	return cancelled, nil
 }
 
 func (s Service) TerminalCandidates() ([]TerminalCandidate, error) {

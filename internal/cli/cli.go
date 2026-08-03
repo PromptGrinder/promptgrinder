@@ -45,6 +45,7 @@ type Service interface {
 	RunPathWithOptions(path string, options pgruntime.RunOptions) (pgruntime.RunSummary, error)
 	RunPathsWithOptions(paths []string, options pgruntime.RunOptions) (pgruntime.RunSummary, error)
 	RunPromptFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderSummary, error)
+	PreflightRunFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderPreflight, error)
 	Engines() []engine.Descriptor
 	DescribeEngine(name string) (engine.Descriptor, error)
 	Defaults() config.DefaultsReport
@@ -52,6 +53,7 @@ type Service interface {
 	Sequences() ([]pgruntime.SequenceProgress, error)
 	SequenceID(path string, options pgruntime.RunFolderOptions) (string, error)
 	Sequence(sequenceID string) (pgruntime.SequenceState, error)
+	CancelSequence(sequenceID string) (pgruntime.SequenceState, error)
 	TerminalCandidates() ([]pgruntime.TerminalCandidate, error)
 	CloseTerminals(workerIDs []string) ([]pgruntime.TerminalCandidate, error)
 	List() ([]state.Worker, error)
@@ -997,7 +999,9 @@ Examples:
 		cmd.Flags().BoolVar(&runFolderIncludeSpecification, "include-specification", false, "execute specification prompts instead of using them only as context")
 		cmd.Flags().BoolVar(&runFolderAllowConcurrentWorktree, "allow-concurrent-worktree", false, "allow another PromptGrinder batch to use the same git worktree")
 		if includeDetach {
-			cmd.Flags().BoolVar(&runFolderDetach, "detach", false, "run the folder sequence in the background")
+			detachDefault := service.Defaults().Config.RunFolderDetach
+			runFolderDetach = detachDefault
+			cmd.Flags().BoolVar(&runFolderDetach, "detach", detachDefault, "run in background; use --detach=false for this terminal")
 		}
 	}
 	runFolder := &cobra.Command{
@@ -1131,6 +1135,20 @@ Examples:
 		},
 	}
 	sequenceCmd.Flags().BoolVar(&sequenceJSON, "json", false, "print machine-readable JSON")
+	sequenceCancel := &cobra.Command{
+		Use:   "cancel <sequence-id>",
+		Short: "Cancel an active sequence and preserve resumable checkpoints.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sequence, err := service.CancelSequence(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "Sequence %s cancelled. Completed checkpoints are preserved.\n", sequence.SequenceID)
+			return nil
+		},
+	}
+	sequenceCmd.AddCommand(sequenceCancel)
 	root.AddCommand(sequenceCmd)
 
 	var terminalsJSON bool
@@ -2873,10 +2891,11 @@ func truncate(value string, max int) string {
 }
 
 func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder string, options pgruntime.RunFolderOptions) error {
-	sequenceID, err := service.SequenceID(folder, options)
+	preflight, err := service.PreflightRunFolder(folder, options)
 	if err != nil {
-		return err
+		return fmt.Errorf("detached run-folder preflight failed:\n%w", err)
 	}
+	sequenceID := preflight.SequenceID
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -2920,12 +2939,32 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 	if err := logFile.Close(); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Detached run-folder supervisor started\n")
+	fmt.Fprintf(stdout, "Detached run-folder supervisor starting\n")
 	fmt.Fprintf(stdout, "Sequence: %s\n", sequenceID)
 	fmt.Fprintf(stdout, "Status: promptgrinder sequence %s\n", sequenceID)
 	fmt.Fprintf(stdout, "PID: %d\n", cmd.Process.Pid)
 	fmt.Fprintf(stdout, "Log: %s\n", logPath)
 	fmt.Fprintln(stdout, "Progress: promptgrinder sequences")
+	for attempts := 0; attempts < 10; attempts++ {
+		sequence, sequenceErr := service.Sequence(sequenceID)
+		if sequenceErr == nil {
+			switch sequence.Status {
+			case "completed":
+				fmt.Fprintln(stdout, "State: completed")
+				return nil
+			case "failed", "cancelled", "interrupted":
+				fmt.Fprintf(stdout, "State: %s\n", sequence.Status)
+				return fmt.Errorf("detached sequence %s %s; inspect with promptgrinder sequence %s", sequenceID, sequence.Status, sequenceID)
+			default:
+				if sequence.Supervisor != nil && sequence.Supervisor.Status == "running" {
+					fmt.Fprintln(stdout, "State: running")
+					return nil
+				}
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	fmt.Fprintln(stdout, "State: starting (status not yet persisted)")
 	return nil
 }
 

@@ -383,6 +383,7 @@ commits are intended.
 | `logs <worker-id>` | Read one worker log |
 | `events [worker-id]` | Read or follow worker or global events |
 | `sequence <id\|current>` | Inspect an ordered workflow |
+| `sequence cancel <id>` | Cancel a sequence while preserving completed checkpoints |
 | `sequences [--folder <path>]` | List ordered workflows, optionally filtered by a normalized relative or absolute folder path |
 | `cancel <worker-id>` | Cancel an active worker |
 | `reconcile` | Inspect stale workers and sequences |
@@ -398,8 +399,9 @@ output.
 `NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. It also accepts
 generic `NN-*.md` names when they declare valid `id` and `type` frontmatter.
 README files, notes, completion reports, and untyped numbered files are never runnable.
-Before creating sequence state, PromptGrinder classifies every visible Markdown
-file and validates every included prompt. Numbered task-like files with an
+Before detaching or creating sequence state, PromptGrinder classifies every visible Markdown
+file, validates every included prompt and dependency, resolves roles, and checks
+the Git baseline. Numbered task-like files with an
 unsupported name fail preflight with included/total counts instead of being
 silently skipped; ordinary notes are reported as ignored.
 Specifications are shared context unless `--include-specification` is set.
@@ -416,12 +418,20 @@ Independent `run` commands retain their existing engine behavior.
 Sequence human and JSON output includes UTC created, started, updated, and
 finished timestamps; older records without those fields remain readable.
 Detached startup prints the sequence ID and a copyable `promptgrinder sequence
-<id>` command. Detached completion and failure notifications are deterministic
+<id>` command, and distinguishes starting, running, preflight failure, and an
+immediate terminal result. The effective detach default is shown by
+`promptgrinder run-folder --help`; use `--detach=false` for interactive execution.
+Detached completion and failure notifications are deterministic
 local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
 Foreground execution stays in the invoking terminal, prints the full prompt
 inventory before launch, and shows live status, elapsed time, worker IDs, logs,
 and immediate failure reasons. `--plain` keeps the same information without
 colors, animation, or terminal control sequences.
+
+Run-folder state is stored below `PROMPTGRINDER_HOME/state/run-folders/<sequence-id>`;
+it is not written into the repository. With `--commit-each` or
+`--require-clean-git`, preflight reports modified, added, deleted, conflicted,
+and untracked paths and asks the user to commit, stash, or isolate them before retrying.
 
 For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys

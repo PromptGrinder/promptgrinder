@@ -379,7 +379,7 @@ func TestRunDoesNotMarkRunningWorkerCompleted(t *testing.T) {
 		t.Fatalf("summary = %#v", summary.Run)
 	}
 	var promptState PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &promptState)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &promptState)
 	if promptState.Status != "failed" {
 		t.Fatalf("prompt state = %#v", promptState)
 	}
@@ -448,10 +448,11 @@ func TestFreshCreatesStateAndDefaultResumes(t *testing.T) {
 	writePromptFile(t, dir, "20-implement-b.md", "b")
 	first := &fakeLauncher{failName: "20-implement-b.md"}
 
-	if _, err := Run(dir, Options{}, first); err == nil {
+	firstSummary, err := Run(dir, Options{}, first)
+	if err == nil {
 		t.Fatal("expected failure")
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".promptgrinder", "run.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(folderStateRoot("", firstSummary.Sequence.SequenceID), "run.json")); err != nil {
 		t.Fatal(err)
 	}
 	second := &fakeLauncher{}
@@ -913,7 +914,7 @@ func TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary(t *testing.T) {
 	if !strings.Contains(summary.Sequence.ExecutiveSummary, "10-implement-a.md succeeded") || !strings.Contains(summary.Sequence.ExecutiveSummary, "00-specification.md was used as shared context") {
 		t.Fatalf("executive summary = %q", summary.Sequence.ExecutiveSummary)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ".promptgrinder", "summary.md"))
+	data, err := os.ReadFile(filepath.Join(folderStateRoot(home, summary.Sequence.SequenceID), "summary.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -946,11 +947,12 @@ func TestCheckpointRecordsGitMetadata(t *testing.T) {
 			t.Fatal(err)
 		}
 	}}
-	if _, err := Run(dir, Options{RepoPath: dir, Checkpoint: true}, launcher); err != nil {
+	summary, err := Run(dir, Options{RepoPath: dir, Checkpoint: true}, launcher)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var promptState PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &promptState)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &promptState)
 	if promptState.GitSHABefore == "" || promptState.GitSHAAfter == "" || !contains(promptState.FilesChanged, "changed.txt") {
 		t.Fatalf("prompt state = %#v", promptState)
 	}
@@ -969,11 +971,12 @@ func TestRepoPathControlsGitMetadataForExternalPromptFolder(t *testing.T) {
 		}
 	}}
 
-	if _, err := Run(promptDir, Options{RepoPath: repo, Checkpoint: true}, launcher); err != nil {
+	summary, err := Run(promptDir, Options{RepoPath: repo, Checkpoint: true}, launcher)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var promptState PromptState
-	readJSON(t, filepath.Join(promptDir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &promptState)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &promptState)
 	if promptState.GitSHABefore == "" || promptState.GitSHAAfter == "" || !contains(promptState.FilesChanged, "changed.txt") {
 		t.Fatalf("prompt state = %#v", promptState)
 	}
@@ -993,13 +996,14 @@ func TestCommitEachCommitsOnlyWhenThereAreChanges(t *testing.T) {
 			git(t, filepath.Dir(path), "add", "changed.txt")
 		}
 	}}
-	if _, err := Run(dir, Options{RepoPath: dir, Checkpoint: true, CommitEach: true}, launcher); err != nil {
+	summary, err := Run(dir, Options{RepoPath: dir, Checkpoint: true, CommitEach: true}, launcher)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var first PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &first)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &first)
 	var second PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "20-implement-b.md.json"), &second)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "20-implement-b.md.json"), &second)
 	if first.CommitSHA == "" {
 		t.Fatalf("first prompt was not committed: %#v", first)
 	}
@@ -1068,6 +1072,53 @@ func TestRequireCleanGitFailsWhenDirty(t *testing.T) {
 	_, err := Run(dir, Options{RepoPath: dir, RequireCleanGit: true}, &fakeLauncher{})
 	if err == nil || !strings.Contains(err.Error(), "dirty") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreflightReportsDirtyPathsWithoutCreatingRunState(t *testing.T) {
+	dir := initGitRepo(t)
+	home := t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "tracked.txt", "initial")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	writePromptFile(t, dir, "tracked.txt", "changed")
+	writePromptFile(t, dir, "untracked.txt", "new")
+
+	_, err := Preflight(dir, Options{HomeDir: home, RepoPath: dir, CommitEach: true})
+	if err == nil {
+		t.Fatal("expected dirty baseline error")
+	}
+	for _, want := range []string{"Cannot use --commit-each", "Modified:", "tracked.txt", "Untracked:", "untracked.txt", "Commit, stash, or isolate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%s", want, err)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "state", "sequences")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("preflight created sequence state: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".promptgrinder")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("preflight created worktree state: %v", statErr)
+	}
+}
+
+func TestCancelSequencePreservesCompletedCheckpoint(t *testing.T) {
+	home := t.TempDir()
+	now := time.Now().UTC()
+	sequence := SequenceState{SequenceID: "seq_cancel", Folder: "/tmp/prompts", Status: "running", Items: []SequenceItem{
+		{PromptName: "10-implement-a.md", Status: "succeeded"},
+		{PromptName: "20-test-b.md", Status: "running"},
+		{PromptName: "30-verify-c.md", Status: "pending"},
+	}, StartedAt: &now, UpdatedAt: &now}
+	if err := newSequenceStore(home).save(sequence); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := CancelSequence(home, sequence.SequenceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != "cancelled" || cancelled.Items[0].Status != "succeeded" || cancelled.Items[1].Status != "cancelled" || cancelled.Items[2].Status != "cancelled" {
+		t.Fatalf("cancelled sequence = %#v", cancelled)
 	}
 }
 

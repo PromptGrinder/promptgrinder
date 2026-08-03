@@ -117,8 +117,9 @@ role label—is the enforced ordinary run-folder file policy.
 Before sequence creation, PromptGrinder reports how many Markdown files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
-Foreground failures before sequence state exists print the actionable
-preflight reason.
+The invoking process also resolves roles and dependencies and checks Git
+cleanliness before a detached supervisor is started. Preflight failures print
+the actionable reason synchronously and create no sequence state.
 
 ### UC-16: Stop unsafe sequence continuation
 
@@ -140,7 +141,8 @@ JSON detail.
 ### UC-18: Run a sequence in the background
 
 Use detached mode to return control to the shell while a local supervisor runs
-the sequence. Startup prints the sequence ID and a copyable status command;
+the sequence. Startup reports whether it is starting, running, already
+completed, or failed preflight, then prints the sequence ID and a copyable status command;
 completion and failure are retained as local events.
 
 ### UC-19: Resume or restart ordered work
@@ -158,12 +160,22 @@ worker commit contains exactly the approved changes and the worktree is clean,
 PromptGrinder reports a commit-ownership conflict with the commit SHA and safe
 recovery choices. Unrelated paths, multiple commits, residual changes, and
 genuine index mismatches retain the generic fail-closed diagnostic.
+Dirty preflight diagnostics group the exact modified, added, deleted,
+conflicted, and untracked paths. PromptGrinder-owned run state lives below
+`PROMPTGRINDER_HOME`, outside the worktree.
 
 ### UC-21: Inspect sequence history
 
 Use `promptgrinder sequence <id|current>` for prompt-level progress and
 `promptgrinder sequences` for sequence history. Filter the list by prompt
 folder when investigating repeated or concurrent workflows.
+
+### UC-21a: Cancel a sequence safely
+
+Use `promptgrinder sequence cancel <sequence-id>` to cancel the active worker
+and matching detached supervisor. PromptGrinder marks unfinished slices
+cancelled, releases its worktree claim, and preserves completed checkpoints so
+the folder can be resumed later.
 
 ## Project and role discovery
 

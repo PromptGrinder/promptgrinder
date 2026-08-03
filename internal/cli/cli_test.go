@@ -2380,6 +2380,33 @@ func TestCLIDetachedRunFolderPrintsSequenceInspectionCommand(t *testing.T) {
 	}
 }
 
+func TestCLISequenceCancel(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(&fakeService{}, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"sequence", "cancel", "seq_abc123"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Sequence seq_abc123 cancelled") || !strings.Contains(out.String(), "checkpoints are preserved") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestRunFolderHelpShowsInteractiveDetachFormAndDefault(t *testing.T) {
+	out := &bytes.Buffer{}
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{RunFolderDetach: true}}}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--detach", "--detach=false", "default true"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestCLISequences(t *testing.T) {
 	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
 	service := &fakeService{sequences: []pgruntime.SequenceProgress{{
@@ -2664,6 +2691,17 @@ func (f *fakeService) RunPromptFolder(path string, options pgruntime.RunFolderOp
 	return f.runFolderSummary, f.runFolderErr
 }
 
+func (f *fakeService) PreflightRunFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderPreflight, error) {
+	if f.runFolderErr != nil {
+		return pgruntime.RunFolderPreflight{}, f.runFolderErr
+	}
+	sequenceID := f.sequence.SequenceID
+	if sequenceID == "" {
+		sequenceID = "seq_test"
+	}
+	return pgruntime.RunFolderPreflight{Folder: path, SequenceID: sequenceID}, nil
+}
+
 func (f *fakeService) Engines() []engine.Descriptor {
 	if len(f.engines) > 0 {
 		return f.engines
@@ -2714,6 +2752,10 @@ func (f *fakeService) Sequence(sequenceID string) (pgruntime.SequenceState, erro
 		return pgruntime.SequenceState{}, errTest("sequence not found")
 	}
 	return f.sequence, nil
+}
+
+func (f *fakeService) CancelSequence(sequenceID string) (pgruntime.SequenceState, error) {
+	return pgruntime.SequenceState{SequenceID: sequenceID, Status: "cancelled"}, nil
 }
 
 func (f *fakeService) TerminalCandidates() ([]pgruntime.TerminalCandidate, error) {

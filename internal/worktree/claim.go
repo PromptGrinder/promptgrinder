@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -98,6 +99,32 @@ func (l *Lease) Release() error {
 		return nil
 	}
 	return os.Remove(l.path)
+}
+
+// ReleaseForPID removes a claim only when it still belongs to the specified
+// repository and process. This is used by sequence cancellation after the
+// owning supervisor has been stopped.
+func ReleaseForPID(homeDir, repoRoot string, pid int) error {
+	if pid <= 0 || strings.TrimSpace(repoRoot) == "" {
+		return nil
+	}
+	worktree, err := canonicalPath(repoRoot)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256([]byte(worktree))
+	path := filepath.Join(homeDir, "state", "worktree-claims", hex.EncodeToString(sum[:])+".json")
+	claim, err := load(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if claim.Worktree != worktree || claim.PID != pid {
+		return nil
+	}
+	return os.Remove(path)
 }
 
 // TransferPID keeps a claim active after a detached launch by assigning it to
