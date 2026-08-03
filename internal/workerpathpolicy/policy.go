@@ -62,8 +62,17 @@ func Validate(policy workerdomain.WorkerPolicy) error {
 	if err := policy.Validate(); err != nil {
 		return err
 	}
+	return ValidatePatterns(policy)
+}
+
+// ValidatePatterns checks path syntax without requiring the lifecycle fields
+// used only by persistent named-worker policies.
+func ValidatePatterns(policy workerdomain.WorkerPolicy) error {
 	for _, group := range [][]string{policy.AllowedPaths, policy.ForbiddenPaths} {
 		for _, pattern := range group {
+			if strings.HasSuffix(pattern, "/") {
+				return fmt.Errorf("pattern %q matches only that exact path; did you mean %q?", pattern, pattern+"**")
+			}
 			if _, err := match(pattern, "validation/path"); err != nil {
 				return fmt.Errorf("invalid path policy pattern %q: %w", pattern, err)
 			}

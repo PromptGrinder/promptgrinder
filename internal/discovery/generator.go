@@ -1,6 +1,10 @@
 package discovery
 
-import "sort"
+import (
+	"path/filepath"
+	"sort"
+	"strings"
+)
 
 type RoleGenerator struct{}
 
@@ -12,18 +16,18 @@ func (RoleGenerator) Generate(d Detection) []Role {
 	backendTech := intersection(d.Technologies, []string{"Micronaut", "Quarkus", "Spring Boot"})
 	buildGates := buildQualityGates(d.BuildTools)
 	if len(d.BackendRoots) > 0 {
-		add("backend-feature", "Backend Feature", "Implement backend features within detected backend modules.", backendTech, d.BackendRoots, buildGates)
-		add("backend-sonar", "Backend Sonar", "Maintain backend static-analysis quality within detected backend modules.", backendTech, d.BackendRoots, append(buildGates, "static analysis passes"))
+		add("backend-feature", "Backend Feature", "Implement backend features within detected backend modules.", backendTech, subtreePatterns(d.BackendRoots), buildGates)
+		add("backend-sonar", "Backend Sonar", "Maintain backend static-analysis quality within detected backend modules.", backendTech, subtreePatterns(d.BackendRoots), append(buildGates, "static analysis passes"))
 	}
 	if len(d.BackendTests) > 0 && len(d.BackendRoots) > 0 {
-		add("backend-test", "Backend Test", "Add and maintain backend tests in detected test source sets.", backendTech, d.BackendTests, append(buildGates, "tests pass"))
+		add("backend-test", "Backend Test", "Add and maintain backend tests in detected test source sets.", backendTech, subtreePatterns(d.BackendTests), append(buildGates, "tests pass"))
 	}
 	if len(d.AndroidRoots) > 0 {
-		add("android-ui", "Android UI", "Implement Android user-interface changes in detected Android modules.", []string{"Android"}, d.AndroidRoots, append(buildGates, "Android build passes"))
-		add("android-test", "Android Test", "Add and maintain tests for detected Android modules.", []string{"Android"}, d.AndroidRoots, append(buildGates, "Android tests pass"))
+		add("android-ui", "Android UI", "Implement Android user-interface changes in detected Android modules.", []string{"Android"}, subtreePatterns(d.AndroidRoots), append(buildGates, "Android build passes"))
+		add("android-test", "Android Test", "Add and maintain tests for detected Android modules.", []string{"Android"}, subtreePatterns(d.AndroidRoots), append(buildGates, "Android tests pass"))
 	}
 	if len(d.FrontendRoots) > 0 {
-		add("frontend-feature", "Frontend Feature", "Implement frontend features in detected frontend projects.", intersection(d.Technologies, []string{"Angular", "Frontend", "Next.js", "Vite"}), d.FrontendRoots, []string{"frontend build passes", "frontend tests pass"})
+		add("frontend-feature", "Frontend Feature", "Implement frontend features in detected frontend projects.", intersection(d.Technologies, []string{"Angular", "Frontend", "Next.js", "Vite"}), subtreePatterns(d.FrontendRoots), []string{"frontend build passes", "frontend tests pass"})
 	}
 	if len(d.InfraPaths) > 0 {
 		add("infrastructure", "Infrastructure", "Maintain directly detected infrastructure configuration.", intersection(d.Technologies, []string{"Docker", "Docker Compose", "Helm", "Kubernetes", "Terraform"}), d.InfraPaths, []string{"configuration validates"})
@@ -32,10 +36,24 @@ func (RoleGenerator) Generate(d Detection) []Role {
 		add("ci", "Continuous Integration", "Maintain detected GitHub Actions workflows.", []string{"GitHub Actions"}, d.CIPaths, []string{"workflow syntax validates"})
 	}
 	if len(d.DocPaths) > 0 {
-		add("documentation", "Documentation", "Maintain repository documentation in detected documentation paths.", []string{"Markdown"}, d.DocPaths, []string{"documentation links validate"})
+		add("documentation", "Documentation", "Maintain repository documentation in detected documentation paths.", []string{"Markdown"}, subtreePatterns(d.DocPaths), []string{"documentation links validate"})
 	}
 	sort.Slice(roles, func(i, j int) bool { return roles[i].ID < roles[j].ID })
 	return roles
+}
+
+func subtreePatterns(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "." {
+			out = append(out, "**")
+		} else if base := filepath.Base(value); filepath.Ext(base) != "" && !strings.HasPrefix(base, ".") {
+			out = append(out, value)
+		} else {
+			out = append(out, strings.TrimSuffix(value, "/")+"/**")
+		}
+	}
+	return out
 }
 
 func buildQualityGates(tools []string) []string {

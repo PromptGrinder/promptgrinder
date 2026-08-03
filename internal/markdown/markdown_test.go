@@ -89,6 +89,7 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 		{"absolute", "allowed_paths: [/tmp/**]", "must be repository-relative"},
 		{"escape", "allowed_paths: [../outside/**]", "must not escape"},
 		{"conflict", "allowed_paths: [src/**]\nforbidden_paths: [src/**]", "conflicting path rule"},
+		{"directory shorthand", "allowed_paths: [backend/src/test/]", `did you mean "backend/src/test/**"`},
 		{"secret", "validation: API_TOKEN=super-secret-value", "secret-looking data"},
 	}
 	for _, test := range tests {
@@ -102,6 +103,33 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 				t.Fatalf("err = %v", err)
 			}
 		})
+	}
+}
+
+func TestContractRendersExpectedPaths(t *testing.T) {
+	task, err := Parse("---\nallowed_paths: [backend/**]\nexpected_paths: [backend/service.go]\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "tasks/example.md"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(Render(task)); !strings.Contains(got, "## Expected Paths\n\n- backend/service.go") {
+		t.Fatalf("rendered prompt = %q", got)
+	}
+}
+
+func TestExpectedPathsReadsFencedWorkerManifest(t *testing.T) {
+	task, err := Parse("# Task\n\n```yaml\nworker:\n  id: backend\nexpected_paths:\n  - backend/service.go\n```\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := ExpectedPaths(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "backend/service.go" {
+		t.Fatalf("expected paths = %#v", paths)
 	}
 }
 

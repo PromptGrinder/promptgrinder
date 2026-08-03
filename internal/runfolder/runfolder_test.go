@@ -106,7 +106,7 @@ func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
 }
 
 func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
-	dir := t.TempDir()
+	dir := initGitRepo(t)
 	writePromptFile(t, dir, "00-specification.md", "shared")
 	writePromptFile(t, dir, "10-implement-a.md", "task")
 	launcher := &fakeLauncher{}
@@ -116,6 +116,32 @@ func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
 	content := launcher.calls[0].Content
 	if strings.Count(content, "# Required Completion Report") != 1 || !strings.Contains(content, "STATUS: PASS") || !strings.Contains(content, "NEXT_PROMPT_SAFE: yes") {
 		t.Fatalf("assembled prompt = %q", content)
+	}
+}
+
+func TestCommitEachTellsWorkerNotToCommit(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-a.md", "task")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir(), CommitEach: true}, launcher); err != nil {
+		t.Fatal(err)
+	}
+	content := launcher.calls[0].Content
+	for _, want := range []string{"PromptGrinder is running with --commit-each", "Do not run git commit", "Leave approved changes in the worktree"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("assembled prompt missing %q: %s", want, content)
+		}
+	}
+}
+
+func TestPreflightChecksExpectedPathsAgainstAllowedPaths(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [backend/api/**]\n---\ntask\n```yaml\nworker: {id: backend}\nexpected_paths: [backend/service.go]\n```\n")
+	_, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "expected_paths are not permitted") || !strings.Contains(err.Error(), "backend/service.go") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -1156,9 +1182,17 @@ func TestRunFolderPathPolicyRejectsWorkerCreatedUnallowedPath(t *testing.T) {
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-m", "initial")
 	launcher := &fakeLauncher{onLaunch: func(string) { writePromptFile(t, dir, "outside.txt", "evidence") }}
-	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher)
+	var failureReason string
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir(), Progress: func(event ProgressEvent) {
+		if event.Type == "prompt.failed" {
+			failureReason = event.Reason
+		}
+	}}, launcher)
 	if err == nil || !strings.Contains(err.Error(), "path policy violation") {
 		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(failureReason, "outside.txt (outside allowed paths)") {
+		t.Fatalf("failure reason = %q", failureReason)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "outside.txt")); statErr != nil {
 		t.Fatalf("evidence missing: %v", statErr)

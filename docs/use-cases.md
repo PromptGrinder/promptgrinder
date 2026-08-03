@@ -163,6 +163,10 @@ genuine index mismatches retain the generic fail-closed diagnostic.
 Dirty preflight diagnostics group the exact modified, added, deleted,
 conflicted, and untracked paths. PromptGrinder-owned run state lives below
 `PROMPTGRINDER_HOME`, outside the worktree.
+With `--commit-each`, the rendered worker prompt explicitly forbids worker-owned
+commits and leaves PromptGrinder responsible for the checkpoint. If a worker
+commits anyway, the existing exact-commit diagnostic identifies the commit
+without amending, resetting, or accepting it.
 
 ### UC-21: Inspect sequence history
 
@@ -265,6 +269,10 @@ engine, not the durable worker record.
 Use allowed and forbidden paths, branch naming, clean-worktree requirements,
 and managed worktree selection to keep workers inside their responsibilities.
 Violations remain available for review rather than being silently reverted.
+Directory subtrees must use an explicit glob such as `backend/**`; a trailing
+slash is rejected with a correction. Optional task `expected_paths` are checked
+against allowed and forbidden patterns during preflight. Completion output
+prints the exact violating path and reason immediately.
 
 ### UC-33: Change runtimes without changing roles
 

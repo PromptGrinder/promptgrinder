@@ -18,6 +18,7 @@ import (
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/terminal"
+	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerpathpolicy"
 )
 
@@ -109,6 +110,9 @@ func (m Manager) ValidateContentWithMetadata(taskPath, content string, metadata 
 	if err := validateCommonMetadata(metadata); err != nil {
 		return err
 	}
+	if err := validateExpectedPaths(task, metadata); err != nil {
+		return err
+	}
 	cfg, engineName, resolved, adapter, err := m.resolveLaunchInputs(repoRoot, absTask, metadata)
 	if err != nil {
 		return err
@@ -159,6 +163,9 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 		return invalidValidationPlan("", err), err
 	}
 	if err := validateCommonMetadata(task.Metadata); err != nil {
+		return invalidValidationPlan("", err), err
+	}
+	if err := validateExpectedPaths(task, task.Metadata); err != nil {
 		return invalidValidationPlan("", err), err
 	}
 	cfg, selected, resolved, adapter, err := m.resolveLaunchInputs(repoRoot, absTask, task.Metadata)
@@ -227,6 +234,9 @@ func (m Manager) launchData(absTask string, data []byte, suppliedMetadata map[st
 		taskMetadata = suppliedMetadata
 	}
 	if err := validateCommonMetadata(taskMetadata); err != nil {
+		return LaunchResult{Err: err}
+	}
+	if err := validateExpectedPaths(task, taskMetadata); err != nil {
 		return LaunchResult{Err: err}
 	}
 	cfg, engineName, metadata, adapter, err := m.resolveLaunchInputs(repoRoot, absTask, taskMetadata)
@@ -412,7 +422,7 @@ func resolvedMetadata(metadata map[string]any, cfg config.Config, engineName str
 
 func isSemanticMetadataKey(key string) bool {
 	switch key {
-	case "acceptance_criteria", "allowed_paths", "forbidden_paths", "validation":
+	case "acceptance_criteria", "allowed_paths", "forbidden_paths", "expected_paths", "validation":
 		return true
 	default:
 		return false
@@ -445,6 +455,29 @@ func invalidValidationPlan(engineName string, err error) ValidationPlan {
 }
 
 func validateCommonMetadata(metadata map[string]any) error {
+	values := func(key string) []string {
+		items, _ := metadata[key].([]any)
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if value, ok := item.(string); ok {
+				out = append(out, value)
+			}
+		}
+		return out
+	}
+	policy := workerdomain.WorkerPolicy{AllowedPaths: values("allowed_paths"), ForbiddenPaths: values("forbidden_paths")}
+	if err := workerpathpolicy.ValidatePatterns(policy); err != nil {
+		return err
+	}
+	if expected := values("expected_paths"); len(expected) > 0 {
+		violations, err := workerpathpolicy.Violations(policy, expected)
+		if err != nil {
+			return err
+		}
+		if len(violations) > 0 {
+			return fmt.Errorf("expected_paths are not permitted by the path policy: %s", formatPolicyViolations(violations))
+		}
+	}
 	if err := validateEngineMetadata(metadata["engine"]); err != nil {
 		return err
 	}
@@ -473,6 +506,40 @@ func validateCommonMetadata(metadata map[string]any) error {
 		return err
 	}
 	return nil
+}
+
+func validateExpectedPaths(task markdown.Task, metadata map[string]any) error {
+	expected, err := markdown.ExpectedPaths(task)
+	if err != nil {
+		return err
+	}
+	values := func(key string) []string {
+		items, _ := metadata[key].([]any)
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if value, ok := item.(string); ok {
+				out = append(out, value)
+			}
+		}
+		return out
+	}
+	policy := workerdomain.WorkerPolicy{AllowedPaths: values("allowed_paths"), ForbiddenPaths: values("forbidden_paths")}
+	violations, err := workerpathpolicy.Violations(policy, expected)
+	if err != nil {
+		return err
+	}
+	if len(violations) > 0 {
+		return fmt.Errorf("expected_paths are not permitted by the path policy: %s", formatPolicyViolations(violations))
+	}
+	return nil
+}
+
+func formatPolicyViolations(violations []workerpathpolicy.Violation) string {
+	parts := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		parts = append(parts, fmt.Sprintf("%s (%s)", violation.Path, violation.Reason))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func validateEngineMetadata(value any) error {
