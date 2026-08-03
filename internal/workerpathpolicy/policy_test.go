@@ -11,6 +11,13 @@ import (
 	"promptgrinder/internal/workerdomain"
 )
 
+func TestValidateRejectsDirectoryShorthandWithSuggestion(t *testing.T) {
+	err := ValidatePatterns(workerdomain.WorkerPolicy{AllowedPaths: []string{"backend/src/test/"}})
+	if err == nil || !strings.Contains(err.Error(), `did you mean "backend/src/test/**"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestAttributedChangesEditsAddsDeletesRenamesAndPreexisting(t *testing.T) {
 	repo := disposableRepo(t)
 	write(t, repo, "backend/edit.go", "old\n")

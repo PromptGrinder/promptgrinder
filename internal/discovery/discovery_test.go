@@ -90,7 +90,7 @@ func TestGeneratedContentIsDeterministicAndMinimal(t *testing.T) {
 		}
 	}
 	role := string(first.Files[1].Content)
-	for _, want := range []string{"allowed_paths:\n  - service", "preferred: local", "maven verify passes", "generated: true"} {
+	for _, want := range []string{"allowed_paths:\n  - service/**", "preferred: local", "maven verify passes", "generated: true"} {
 		if !strings.Contains(role, want) {
 			t.Errorf("role YAML missing %q:\n%s", want, role)
 		}

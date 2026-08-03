@@ -647,8 +647,36 @@ func validatePrompts(prompts []Prompt) error {
 		if err := markdown.Validate(parsed, prompt.Path); err != nil {
 			return err
 		}
+		policy := workerdomain.WorkerPolicy{AllowedPaths: metadataStrings(parsed.Metadata, "allowed_paths"), ForbiddenPaths: metadataStrings(parsed.Metadata, "forbidden_paths")}
+		if err := workerpathpolicy.ValidatePatterns(policy); err != nil {
+			return fmt.Errorf("task frontmatter %s: %w", prompt.Name, err)
+		}
+		expected, err := markdown.ExpectedPaths(parsed)
+		if err != nil {
+			return fmt.Errorf("task frontmatter %s: %w", prompt.Name, err)
+		}
+		if len(expected) > 0 {
+			violations, err := workerpathpolicy.Violations(policy, expected)
+			if err != nil {
+				return fmt.Errorf("task frontmatter %s: validate expected_paths: %w", prompt.Name, err)
+			}
+			if len(violations) > 0 {
+				return fmt.Errorf("task frontmatter %s: expected_paths are not permitted by the path policy: %s", prompt.Name, formatViolations(violations))
+			}
+		}
 	}
 	return nil
+}
+
+func metadataStrings(metadata map[string]any, key string) []string {
+	values, _ := metadata[key].([]any)
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		if value, ok := raw.(string); ok {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func promptDuration(prompt PromptState) time.Duration {
@@ -768,7 +796,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHABefore, _ = gitSHA(repoRoot)
 	}
-	content, err := assemblePrompt(prompt.Path, specContext)
+	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach)
 	if err != nil {
 		return promptState, err
 	}
@@ -856,7 +884,9 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	}
 	if len(violations) != 0 {
 		promptState.FilesChanged = changed
-		return promptState, fmt.Errorf("path policy violation at completion: %s; changes retained for review", formatViolations(violations))
+		reason := fmt.Sprintf("path policy violation at completion: %s; changes retained for review", formatViolations(violations))
+		promptState.CompletionReason = reason
+		return promptState, errors.New(reason)
 	}
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHAAfter, _ = gitSHA(repoRoot)
@@ -887,18 +917,7 @@ func taskPathPolicy(taskPath string) (workerdomain.WorkerPolicy, error) {
 	if err != nil {
 		return workerdomain.WorkerPolicy{}, err
 	}
-	toStrings := func(key string) []string {
-		var out []string
-		if values, ok := task.Metadata[key].([]any); ok {
-			for _, value := range values {
-				if text, ok := value.(string); ok {
-					out = append(out, text)
-				}
-			}
-		}
-		return out
-	}
-	policy := workerdomain.WorkerPolicy{AllowedPaths: toStrings("allowed_paths"), ForbiddenPaths: toStrings("forbidden_paths")}
+	policy := workerdomain.WorkerPolicy{AllowedPaths: metadataStrings(task.Metadata, "allowed_paths"), ForbiddenPaths: metadataStrings(task.Metadata, "forbidden_paths")}
 	return policy, nil
 }
 
@@ -934,7 +953,7 @@ func formatViolations(violations []workerpathpolicy.Violation) string {
 	return strings.Join(parts, ", ")
 }
 
-func assemblePrompt(path, specContext string) (string, error) {
+func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
 	active, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -945,12 +964,23 @@ func assemblePrompt(path, specContext string) (string, error) {
 	if strings.TrimSpace(specContext) != "" {
 		assembledBody = "# Shared Context\n\n" + specContext + "\n\n# Active Prompt\n\n"
 	}
-	assembledBody += body + orderedCompletionContract
+	assembledBody += body
+	if commitEach {
+		assembledBody += promptGrinderCommitOwnershipContract
+	}
+	assembledBody += orderedCompletionContract
 	if ok {
 		return frontmatter + assembledBody, nil
 	}
 	return assembledBody, nil
 }
+
+const promptGrinderCommitOwnershipContract = `
+
+# Commit Ownership
+
+PromptGrinder is running with --commit-each and owns the checkpoint commit for this slice. Do not run git commit, amend a commit, or otherwise move HEAD. Leave approved changes in the worktree for PromptGrinder to validate and commit.
+`
 
 const orderedCompletionContract = `
 

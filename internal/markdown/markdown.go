@@ -20,7 +20,7 @@ type Task struct {
 const FrontmatterContractVersion = 2
 
 var (
-	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "validation": true}
+	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
 	engineKeys    = map[string]bool{"name": true, "model": true, "profile": true, "sandbox": true, "approval": true, "web_search": true, "images": true}
 	secretPattern = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(sk-[a-z0-9_-]{8,}|(?:api[_ -]?key|[a-z0-9_]*(?:token|password|secret))\s*[:=]\s*\S+))`)
 )
@@ -167,9 +167,19 @@ func Validate(task Task, source string) error {
 	if err != nil {
 		return fail("%v", err)
 	}
+	expectedRaw, expectedPresent := task.Metadata["expected_paths"]
+	expected, err := pathList(expectedRaw, "expected_paths", false, expectedPresent)
+	if err != nil {
+		return fail("%v", err)
+	}
 	for _, item := range append(append([]string{}, allowed...), forbidden...) {
 		if secretPattern.MatchString(item) {
 			return fail("path semantics contain secret-looking data")
+		}
+	}
+	for _, item := range append(append(append([]string{}, allowed...), forbidden...), expected...) {
+		if strings.HasSuffix(item, "/") {
+			return fail("pattern %q matches only that exact path; did you mean %q?", item, item+"**")
 		}
 	}
 	for _, a := range allowed {
@@ -271,7 +281,7 @@ func pathList(raw any, field string, requiredNonempty, present bool) ([]string, 
 // Render returns the exact AI instruction bytes: a deterministic semantic preamble followed by the untouched body.
 func Render(task Task) []byte {
 	var b bytes.Buffer
-	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"validation", "Validation"}}
+	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"expected_paths", "Expected Paths"}, {"validation", "Validation"}}
 	started := false
 	for _, section := range sections {
 		raw, ok := task.Metadata[section.key]
@@ -300,6 +310,38 @@ func Render(task Task) []byte {
 	}
 	b.WriteString(task.Body)
 	return b.Bytes()
+}
+
+// ExpectedPaths returns explicit task metadata when present, otherwise it
+// reads the first expected_paths list from a fenced YAML worker manifest in
+// the Markdown body. This keeps policy validation deterministic without
+// treating the rest of the body as configuration.
+func ExpectedPaths(task Task) ([]string, error) {
+	if raw, ok := task.Metadata["expected_paths"]; ok {
+		return pathList(raw, "expected_paths", false, true)
+	}
+	lines := strings.Split(task.Body, "\n")
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "```yaml" && strings.TrimSpace(lines[i]) != "```yml" {
+			continue
+		}
+		start := i + 1
+		for i = start; i < len(lines) && strings.TrimSpace(lines[i]) != "```"; i++ {
+		}
+		if i >= len(lines) {
+			break
+		}
+		block := strings.Join(lines[start:i], "\n")
+		if !regexp.MustCompile(`(?m)^expected_paths\s*:`).MatchString(block) {
+			continue
+		}
+		var manifest map[string]any
+		if err := yaml.Unmarshal([]byte(block), &manifest); err != nil {
+			return nil, fmt.Errorf("invalid fenced YAML worker manifest: %w", err)
+		}
+		return pathList(manifest["expected_paths"], "expected_paths", false, true)
+	}
+	return nil, nil
 }
 
 // Warnings returns deterministic, non-fatal contract warnings.

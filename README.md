@@ -513,12 +513,18 @@ task instructions:
 - `acceptance_criteria` is a nonempty string or nonempty list of strings;
 - `allowed_paths` is a nonempty list of repository-relative patterns;
 - `forbidden_paths` is a list of repository-relative patterns and may be empty;
+- `expected_paths` optionally lists concrete paths the slice expects to change;
 - `validation` is a nonempty string or nonempty list of commands or
   instructions.
 
 `allowed_paths` and `forbidden_paths` are enforced for ordinary `run` and
 `run-folder` workers as well as named workers. Forbidden patterns win. Keep
 executable instructions in the Markdown body and use only supported metadata.
+Patterns use explicit glob semantics: `backend` is one exact path, while
+`backend/**` permits its subtree. A trailing slash is rejected with a `/**`
+suggestion. Newly discovered directory-backed roles are generated with `/**`.
+When `expected_paths` is supplied, preflight proves each expected path is
+allowed and not forbidden before launching a worker.
 
 The four semantic fields are rendered, in the order shown above, into a
 `# Task Semantics (v2)` preamble sent to the engine. The Markdown body following
