@@ -68,7 +68,7 @@ func TestContractRendersSemanticsInStableOrderAndPreservesBody(t *testing.T) {
 	if err := Validate(task, "tasks/example.md"); err != nil {
 		t.Fatal(err)
 	}
-	want := "# Task Semantics (v1)\n\n## Acceptance Criteria\n\n- It works\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n\n## Validation\n\n- go test ./...\n\n" + body
+	want := "# Task Semantics (v2)\n\n## Acceptance Criteria\n\n- It works\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n\n## Validation\n\n- go test ./...\n\n" + body
 	if got := string(Render(task)); got != want {
 		t.Fatalf("rendered prompt:\n%q\nwant:\n%q", got, want)
 	}
@@ -78,13 +78,18 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 	tests := []struct{ name, yaml, want string }{
 		{"unknown", "mystery: true", `unknown top-level key "mystery"`},
 		{"nested", "engine:\n  mystery: true", `unknown nested key "engine.mystery"`},
-		{"depends", "depends_on: task-a", "depends_on is not supported"},
+		{"depends type", "depends_on: task-a", "depends_on must be a list"},
+		{"bad id", "id: Not_A_Slug", "id must be a lowercase"},
+		{"bad type", "type: deploy", "type must be one of"},
+		{"bad role", "role: Backend Feature", "role must be a lowercase"},
+		{"duplicate dependency", "depends_on: [task-a, task-a]", `depends_on contains duplicate "task-a"`},
 		{"criteria type", "acceptance_criteria: true", "must be a string or nonempty list"},
 		{"empty validation", "validation: []", "must be a string or nonempty list"},
 		{"null paths", "allowed_paths:", "must be a list of repository-relative patterns"},
 		{"absolute", "allowed_paths: [/tmp/**]", "must be repository-relative"},
 		{"escape", "allowed_paths: [../outside/**]", "must not escape"},
 		{"conflict", "allowed_paths: [src/**]\nforbidden_paths: [src/**]", "conflicting path rule"},
+		{"directory shorthand", "allowed_paths: [backend/src/test/]", `did you mean "backend/src/test/**"`},
 		{"secret", "validation: API_TOKEN=super-secret-value", "secret-looking data"},
 	}
 	for _, test := range tests {
@@ -98,6 +103,47 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 				t.Fatalf("err = %v", err)
 			}
 		})
+	}
+}
+
+func TestContractRendersExpectedPaths(t *testing.T) {
+	task, err := Parse("---\nallowed_paths: [backend/**]\nexpected_paths: [backend/service.go]\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "tasks/example.md"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(Render(task)); !strings.Contains(got, "## Expected Paths\n\n- backend/service.go") {
+		t.Fatalf("rendered prompt = %q", got)
+	}
+}
+
+func TestExpectedPathsReadsFencedWorkerManifest(t *testing.T) {
+	task, err := Parse("# Task\n\n```yaml\nworker:\n  id: backend\nexpected_paths:\n  - backend/service.go\n```\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := ExpectedPaths(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "backend/service.go" {
+		t.Fatalf("expected paths = %#v", paths)
+	}
+}
+
+func TestContractRendersExecutionIdentityAndDependencies(t *testing.T) {
+	task, err := Parse("---\nid: api-contract\ntype: implement\nrole: backend-feature\ndepends_on: [snapshot-reliability]\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "task.md"); err != nil {
+		t.Fatal(err)
+	}
+	want := "# Task Semantics (v2)\n\n## Task ID\n\n- api-contract\n\n## Task Type\n\n- implement\n\n## Role\n\n- backend-feature\n\n## Dependencies\n\n- snapshot-reliability\n\nbody"
+	if got := string(Render(task)); got != want {
+		t.Fatalf("rendered = %q, want %q", got, want)
 	}
 }
 

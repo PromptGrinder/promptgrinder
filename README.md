@@ -1,5 +1,7 @@
 # PromptGrinder — the app that builds itself
 
+[![CI](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PromptGrinder/promptgrinder/actions/workflows/ci.yml) [![Homebrew Tap](https://img.shields.io/badge/homebrew-PromptGrinder%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/PromptGrinder/homebrew-tap)
+
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
 ## Quick start
@@ -16,7 +18,24 @@ brew install promptgrinder
 promptgrinder --version
 ```
 
-### 2. Check the setup
+Running `promptgrinder` before setup prints a short first-use guide without
+creating files.
+
+### 2. Scan and configure the machine
+
+```sh
+promptgrinder
+promptgrinder setup --dry-run
+promptgrinder setup
+```
+
+Setup first performs a read-only capability scan for supported runtimes, Git,
+shell and PATH readiness, PromptGrinder storage, headless execution,
+Terminal.app, and iTerm2. It then shows its proposed PromptGrinder-owned files
+and asks before writing them. The dry run performs the scan and preview without
+writing anything.
+
+### 3. Check the setup
 
 ```sh
 promptgrinder doctor --repo . --terminal headless
@@ -25,7 +44,7 @@ promptgrinder doctor --repo . --terminal headless
 A successful check confirms that PromptGrinder can use its local state,
 repository, Git, configured runtime, and a non-GUI terminal adapter.
 
-### 3. Prepare roles and slices
+### 4. Prepare roles and slices
 
 Discover project roles, ask for a reviewable enhancement proposal, and inspect
 the stored review:
@@ -42,60 +61,145 @@ Discovery creates `.promptgrinder/project.yaml`, generated role YAML under
 review-first: inspect recommendations before applying any with
 `promptgrinder roles apply latest --safe`.
 
-Slices are numbered Markdown work orders in one folder. This creates a small
-two-slice example:
+Running discovery again never overwrites different existing configuration. If
+repository analysis has changed, PromptGrinder reports the conflicting file
+and asks you to reconcile it or move `.promptgrinder/` aside first.
+
+Slices are numbered Markdown work orders in one folder. Use them when a feature
+is too large for one safe prompt: separate the domain change, CLI integration,
+tests, and final verification so each worker receives a smaller context and
+produces a reviewable result.
+
+For example, prepare a new `project archive` feature as three bounded slices:
 
 ```sh
-mkdir -p tasks/first-change
+mkdir -p tasks/project-archive
 
-cat > tasks/first-change/10-implement-change.md <<'EOF'
-# Implement the change
+cat > tasks/project-archive/10-implement-domain.md <<'EOF'
+---
+id: project-archive-domain
+type: implement
+role: backend-feature
+depends_on: []
+acceptance_criteria:
+  - Archive state is persisted and existing projects remain readable.
+allowed_paths:
+  - internal/project/**
+forbidden_paths:
+  - .github/**
+validation:
+  - go test ./internal/project/...
+---
+# Add project archive behavior
 
-Make one bounded project change. Add focused tests and avoid unrelated files.
+Implement the archive state in the project domain and persistence layer. Add
+focused tests. Do not add CLI behavior in this slice.
 EOF
 
-cat > tasks/first-change/20-test-change.md <<'EOF'
-# Verify the change
+cat > tasks/project-archive/20-implement-cli.md <<'EOF'
+---
+id: project-archive-cli
+type: implement
+role: backend-feature
+depends_on:
+  - project-archive-domain
+acceptance_criteria:
+  - Users can archive a project through the public CLI.
+allowed_paths:
+  - internal/cli/**
+  - internal/project/**
+validation:
+  - go test ./internal/cli/... ./internal/project/...
+---
+# Expose project archive in the CLI
 
-Run the relevant tests, fix regressions caused by the change, and report the
-commands and results.
+Build on the domain behavior from the previous slice. Add the public command,
+help text, error handling, and focused CLI tests.
 EOF
 
-promptgrinder validate tasks/first-change/10-implement-change.md
-promptgrinder validate tasks/first-change/20-test-change.md
+cat > tasks/project-archive/30-verify-project-archive.md <<'EOF'
+---
+id: project-archive-verification
+type: verify
+role: backend-test
+depends_on:
+  - project-archive-cli
+acceptance_criteria:
+  - The feature is covered by focused and repository-wide validation.
+allowed_paths:
+  - internal/cli/**
+  - internal/project/**
+  - README.md
+validation:
+  - go test ./...
+  - go vet ./...
+---
+# Verify project archive end to end
 
-git add .promptgrinder tasks/first-change
-git commit -m "Add PromptGrinder roles and first slices"
+Exercise the public behavior, fix only regressions caused by this feature, and
+run the declared validation. Report any residual risk.
+EOF
+
+promptgrinder validate tasks/project-archive/10-implement-domain.md
+promptgrinder validate tasks/project-archive/20-implement-cli.md
+promptgrinder validate tasks/project-archive/30-verify-project-archive.md
+
+git add .promptgrinder tasks/project-archive
+git commit -m "Add PromptGrinder roles and project archive slices"
 ```
 
 Runnable slice names use `NN-implement-*.md`, `NN-test-*.md`,
 `NN-verify-*.md`, or `NN-review-*.md`. An optional
-`00-specification*.md` supplies shared context.
+`00-specification*.md` supplies shared context. Existing descriptive filenames
+such as `01-snapshot-reliability.md` are also safe when frontmatter declares a
+stable `id` and explicit `type`; `role` identifies the worker responsibility
+and `depends_on` names earlier task IDs. For a large SonarQube cleanup,
+use the same pattern but group related findings into bounded files such as
+`10-implement-sonar-service-errors.md`, `20-implement-sonar-cli-errors.md`, and
+`30-verify-sonar-cleanup.md`; put rule IDs, affected paths, and the relevant
+quality-gate command in each slice instead of sending the entire issue backlog
+to one worker.
 
-### 4. Run the slices
+Slicing can reduce wasted tokens because each worker receives a bounded task
+instead of repeatedly reasoning over one oversized objective. It also keeps
+commits and reviews smaller and limits the work lost when one task fails;
+smaller contexts can resolve faster. `allowed_paths` and `forbidden_paths`
+enforce a slice's file boundary, while project roles add reusable
+responsibility, runtime, and path restrictions for named workers. These
+controls reduce risk, but they do not replace reviewing the generated changes
+and test evidence.
+
+### 5. Run the slices
 
 ```sh
-promptgrinder run-folder tasks/first-change \
+promptgrinder run-folder tasks/project-archive \
   --repo . \
   --require-clean-git \
-  --commit-each=false \
+  --commit-each \
   --detach
 ```
 
 `run-folder` requires the slice folder and executes recognized Markdown files
-in filename order. Detached startup prints the sequence ID and an exact status
-command while workers continue locally.
+in filename order. Here PromptGrinder owns one focused commit per successful
+slice; do not also tell the worker to commit. Detached startup prints the
+sequence ID and an exact status command while workers continue locally.
 
-### 5. Check progress
+### 6. Check progress
 
 ```sh
 promptgrinder sequence current
-promptgrinder sequences --folder tasks/first-change
+promptgrinder sequences --folder tasks/project-archive
 ```
 
 `sequence current` shows the overall state, current slice, per-slice results,
 worker IDs, completion safety, and retained logs. `sequences --folder` is useful
 when the same slice folder has been run more than once.
+
+Completed terminal rows stay compact while showing the effective boundary and
+runtime: `task.md|slice-policy|codex/gpt-5.6-sol|4m 39s`. Tasks without path
+restrictions show `unscoped`; models selected implicitly by a runtime show
+the model reported by that runtime when available, otherwise `default`. Use
+sequence status or JSON output for exact paths, worker IDs, and logs.
 
 ![PromptGrinder executing five sequential work orders successfully](docs/images/sequential-workflow.png)
 
@@ -240,7 +344,12 @@ Automatic per-task commits are conservative: `--commit-each=true` requires a
 clean Git baseline even if `--require-clean-git=false` is supplied, stages only
 the paths attributed to that worker (including deletions), and refuses a commit
 when the index, worktree, or HEAD changes unexpectedly. PromptGrinder state and
-output paths are never included. Start from a clean worktree and use
+output paths are never included. If repository evidence proves that the worker
+already committed exactly the approved changes and left a clean worktree, the
+error identifies that commit and confirms that no changes were lost. It never
+accepts, amends, resets, or removes the worker commit automatically. Continue
+with `--commit-each=false`, or remove commit instructions from prompts and let
+PromptGrinder own commits. Start from a clean worktree and use
 `--require-clean-git`; use `--commit-each=false` unless focused automatic
 commits are intended.
 
@@ -267,13 +376,14 @@ commits are intended.
 | `roles apply <id\|latest>` | Apply safe additions or explicitly selected stored items without AI |
 | `roles reject <id\|latest>` | Reject a stored review without writing role YAML |
 | `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
-| `doctor` | Check platform, Codex, Git, configuration, state, and terminal readiness |
-| `setup` | Preview or create PromptGrinder-owned first-use files |
+| `doctor` | Inventory supported runtimes and terminals, then check platform, Git, configuration, state, and readiness |
+| `setup` | Run the read-only machine scan, then preview or create PromptGrinder-owned first-use files |
 | `list` | List workers |
 | `status <worker-id>` | Inspect one worker |
 | `logs <worker-id>` | Read one worker log |
 | `events [worker-id]` | Read or follow worker or global events |
 | `sequence <id\|current>` | Inspect an ordered workflow |
+| `sequence cancel <id>` | Cancel a sequence while preserving completed checkpoints |
 | `sequences [--folder <path>]` | List ordered workflows, optionally filtered by a normalized relative or absolute folder path |
 | `cancel <worker-id>` | Cancel an active worker |
 | `reconcile` | Inspect stale workers and sequences |
@@ -284,12 +394,14 @@ output.
 
 ### Ordered folder completion contract
 
-`run-folder` discovers only recognized numbered Markdown names:
+`run-folder` discovers recognized typed Markdown names:
 `00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
-`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. README files,
-notes, completion reports, and unknown numbered file types are never runnable.
-Before creating sequence state, PromptGrinder classifies every visible Markdown
-file and validates every included prompt. Numbered task-like files with an
+`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. It also accepts
+generic `NN-*.md` names when they declare valid `id` and `type` frontmatter.
+README files, notes, completion reports, and untyped numbered files are never runnable.
+Before detaching or creating sequence state, PromptGrinder classifies every visible Markdown
+file, validates every included prompt and dependency, resolves roles, and checks
+the Git baseline. Numbered task-like files with an
 unsupported name fail preflight with included/total counts instead of being
 silently skipped; ordinary notes are reported as ignored.
 Specifications are shared context unless `--include-specification` is set.
@@ -306,12 +418,20 @@ Independent `run` commands retain their existing engine behavior.
 Sequence human and JSON output includes UTC created, started, updated, and
 finished timestamps; older records without those fields remain readable.
 Detached startup prints the sequence ID and a copyable `promptgrinder sequence
-<id>` command. Detached completion and failure notifications are deterministic
+<id>` command, and distinguishes starting, running, preflight failure, and an
+immediate terminal result. The effective detach default is shown by
+`promptgrinder run-folder --help`; use `--detach=false` for interactive execution.
+Detached completion and failure notifications are deterministic
 local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
 Foreground execution stays in the invoking terminal, prints the full prompt
 inventory before launch, and shows live status, elapsed time, worker IDs, logs,
 and immediate failure reasons. `--plain` keeps the same information without
 colors, animation, or terminal control sequences.
+
+Run-folder state is stored below `PROMPTGRINDER_HOME/state/run-folders/<sequence-id>`;
+it is not written into the repository. With `--commit-each` or
+`--require-clean-git`, preflight reports modified, added, deleted, conflicted,
+and untracked paths and asks the user to commit, stash, or isolate them before retrying.
 
 For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys
@@ -358,9 +478,10 @@ promptgrinder defaults
 promptgrinder doctor --repo . --json
 ```
 
-`promptgrinder setup --dry-run` previews first-use writes. `setup` does not
-install Codex, authenticate accounts, edit shell profiles, or change macOS
-privacy settings.
+On an unconfigured installation, plain `promptgrinder` points to setup without
+writing files. `promptgrinder setup --dry-run` inventories machine capabilities
+and previews first-use writes. `setup` does not install Codex, authenticate
+accounts, edit shell profiles, or change macOS privacy settings.
 
 ## Validation and safety model
 
@@ -373,12 +494,16 @@ PromptGrinder provides orchestration controls, not a security guarantee:
 - shared-context workflows require Git and a clean worktree by default;
 - no hosted PromptGrinder service is required.
 
-### Task frontmatter contract v1
+### Task frontmatter contract v2
 
 Frontmatter is a strict, versioned contract. Unknown top-level keys and unknown
-keys nested under `engine` are errors; YAML anchors/aliases and `depends_on` are
-not supported. Errors name the source task. Runtime metadata remains separate
-from task instructions:
+keys nested under `engine` are errors; YAML anchors and aliases are not
+supported. Errors name the source task. Runtime metadata remains separate from
+task instructions:
+
+- `id` provides stable task identity, `type` is `implement`, `test`, `verify`,
+  or `review`, `role` identifies the declared execution responsibility, and
+  `depends_on` lists stable IDs that must appear earlier in a serialized folder;
 
 - `engine` (a name or mapping with `name`, `model`, `profile`, `sandbox`,
   `approval`, `web_search`, and `images`), plus the compatible top-level engine
@@ -388,15 +513,21 @@ from task instructions:
 - `acceptance_criteria` is a nonempty string or nonempty list of strings;
 - `allowed_paths` is a nonempty list of repository-relative patterns;
 - `forbidden_paths` is a list of repository-relative patterns and may be empty;
+- `expected_paths` optionally lists concrete paths the slice expects to change;
 - `validation` is a nonempty string or nonempty list of commands or
   instructions.
 
 `allowed_paths` and `forbidden_paths` are enforced for ordinary `run` and
 `run-folder` workers as well as named workers. Forbidden patterns win. Keep
 executable instructions in the Markdown body and use only supported metadata.
+Patterns use explicit glob semantics: `backend` is one exact path, while
+`backend/**` permits its subtree. A trailing slash is rejected with a `/**`
+suggestion. Newly discovered directory-backed roles are generated with `/**`.
+When `expected_paths` is supplied, preflight proves each expected path is
+allowed and not forbidden before launching a worker.
 
 The four semantic fields are rendered, in the order shown above, into a
-`# Task Semantics (v1)` preamble sent to the engine. The Markdown body following
+`# Task Semantics (v2)` preamble sent to the engine. The Markdown body following
 frontmatter is otherwise byte-for-byte unchanged. Validation entries are AI
 instructions only: PromptGrinder never executes them as shell commands.
 Absolute or repository-escaping path patterns, identical allowed/forbidden
@@ -541,7 +672,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.2.1` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.2.3` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -589,6 +720,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
+- [RC.2.3 qualification](docs/release/v1.0.0-rc.2.3-qualification.md)
+- [RC.2.3 final gate](docs/release/v1.0.0-rc.2.3-final-gate.md)
+- [RC.2.3 candidate notes](docs/release/v1.0.0-rc.2.3-release-notes.md)
 - [RC.2.1 qualification](docs/release/v1.0.0-rc.2.1-qualification.md)
 - [RC.2.1 final gate](docs/release/v1.0.0-rc.2.1-final-gate.md)
 - [RC.2.1 candidate notes](docs/release/v1.0.0-rc.2.1-release-notes.md)

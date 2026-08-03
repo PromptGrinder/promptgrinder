@@ -13,6 +13,7 @@ import (
 
 	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 type fakeLauncher struct {
@@ -105,7 +106,7 @@ func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
 }
 
 func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
-	dir := t.TempDir()
+	dir := initGitRepo(t)
 	writePromptFile(t, dir, "00-specification.md", "shared")
 	writePromptFile(t, dir, "10-implement-a.md", "task")
 	launcher := &fakeLauncher{}
@@ -115,6 +116,32 @@ func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
 	content := launcher.calls[0].Content
 	if strings.Count(content, "# Required Completion Report") != 1 || !strings.Contains(content, "STATUS: PASS") || !strings.Contains(content, "NEXT_PROMPT_SAFE: yes") {
 		t.Fatalf("assembled prompt = %q", content)
+	}
+}
+
+func TestCommitEachTellsWorkerNotToCommit(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-a.md", "task")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir(), CommitEach: true}, launcher); err != nil {
+		t.Fatal(err)
+	}
+	content := launcher.calls[0].Content
+	for _, want := range []string{"PromptGrinder is running with --commit-each", "Do not run git commit", "Leave approved changes in the worktree"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("assembled prompt missing %q: %s", want, content)
+		}
+	}
+}
+
+func TestPreflightChecksExpectedPathsAgainstAllowedPaths(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [backend/api/**]\n---\ntask\n```yaml\nworker: {id: backend}\nexpected_paths: [backend/service.go]\n```\n")
+	_, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "expected_paths are not permitted") || !strings.Contains(err.Error(), "backend/service.go") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -242,6 +269,47 @@ func TestDiscoverIncludesOnlyRecognizedNumberedPrompts(t *testing.T) {
 	}
 }
 
+func TestDiscoverUsesExplicitMetadataForGenericNumberedPrompts(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "01-snapshot-reliability.md", "---\nid: snapshot-reliability\ntype: implement\nrole: backend-feature\ndepends_on: []\n---\nfirst")
+	writePromptFile(t, dir, "02-api-contract.md", "---\nid: api-contract\ntype: review\nrole: reviewer\ndepends_on: [snapshot-reliability]\n---\nsecond")
+
+	prompts, err := Discover(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 2 || prompts[0].ID != "snapshot-reliability" || prompts[0].Type != TypeImplement || prompts[0].Role != "backend-feature" || prompts[1].Type != TypeReview || strings.Join(prompts[1].DependsOn, ",") != "snapshot-reliability" {
+		t.Fatalf("prompts = %#v", prompts)
+	}
+}
+
+func TestDiscoverRejectsInvalidExplicitDependencyGraph(t *testing.T) {
+	for _, test := range []struct {
+		name, first, second, want string
+	}{
+		{name: "unknown", first: "id: first\ntype: implement", second: "id: second\ntype: test\ndepends_on: [missing]", want: `depends on unknown task id "missing"`},
+		{name: "forward", first: "id: first\ntype: implement\ndepends_on: [second]", second: "id: second\ntype: test", want: "must appear earlier"},
+		{name: "duplicate", first: "id: same\ntype: implement", second: "id: same\ntype: test", want: `duplicate task id "same"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writePromptFile(t, dir, "01-first.md", "---\n"+test.first+"\n---\nfirst")
+			writePromptFile(t, dir, "02-second.md", "---\n"+test.second+"\n---\nsecond")
+			if _, err := Discover(dir); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestDiscoverGenericPromptRequiresExplicitID(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "01-task.md", "---\ntype: implement\n---\ntask")
+	if _, err := Discover(dir); err == nil || !strings.Contains(err.Error(), "must declare id") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestRunPreflightValidatesEveryPromptBeforeCreatingState(t *testing.T) {
 	dir := t.TempDir()
 	writePromptFile(t, dir, "10-implement-valid.md", "valid")
@@ -337,7 +405,7 @@ func TestRunDoesNotMarkRunningWorkerCompleted(t *testing.T) {
 		t.Fatalf("summary = %#v", summary.Run)
 	}
 	var promptState PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &promptState)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &promptState)
 	if promptState.Status != "failed" {
 		t.Fatalf("prompt state = %#v", promptState)
 	}
@@ -406,10 +474,11 @@ func TestFreshCreatesStateAndDefaultResumes(t *testing.T) {
 	writePromptFile(t, dir, "20-implement-b.md", "b")
 	first := &fakeLauncher{failName: "20-implement-b.md"}
 
-	if _, err := Run(dir, Options{}, first); err == nil {
+	firstSummary, err := Run(dir, Options{}, first)
+	if err == nil {
 		t.Fatal("expected failure")
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".promptgrinder", "run.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(folderStateRoot("", firstSummary.Sequence.SequenceID), "run.json")); err != nil {
 		t.Fatal(err)
 	}
 	second := &fakeLauncher{}
@@ -871,7 +940,7 @@ func TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary(t *testing.T) {
 	if !strings.Contains(summary.Sequence.ExecutiveSummary, "10-implement-a.md succeeded") || !strings.Contains(summary.Sequence.ExecutiveSummary, "00-specification.md was used as shared context") {
 		t.Fatalf("executive summary = %q", summary.Sequence.ExecutiveSummary)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ".promptgrinder", "summary.md"))
+	data, err := os.ReadFile(filepath.Join(folderStateRoot(home, summary.Sequence.SequenceID), "summary.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,11 +973,12 @@ func TestCheckpointRecordsGitMetadata(t *testing.T) {
 			t.Fatal(err)
 		}
 	}}
-	if _, err := Run(dir, Options{RepoPath: dir, Checkpoint: true}, launcher); err != nil {
+	summary, err := Run(dir, Options{RepoPath: dir, Checkpoint: true}, launcher)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var promptState PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &promptState)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &promptState)
 	if promptState.GitSHABefore == "" || promptState.GitSHAAfter == "" || !contains(promptState.FilesChanged, "changed.txt") {
 		t.Fatalf("prompt state = %#v", promptState)
 	}
@@ -927,11 +997,12 @@ func TestRepoPathControlsGitMetadataForExternalPromptFolder(t *testing.T) {
 		}
 	}}
 
-	if _, err := Run(promptDir, Options{RepoPath: repo, Checkpoint: true}, launcher); err != nil {
+	summary, err := Run(promptDir, Options{RepoPath: repo, Checkpoint: true}, launcher)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var promptState PromptState
-	readJSON(t, filepath.Join(promptDir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &promptState)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &promptState)
 	if promptState.GitSHABefore == "" || promptState.GitSHAAfter == "" || !contains(promptState.FilesChanged, "changed.txt") {
 		t.Fatalf("prompt state = %#v", promptState)
 	}
@@ -951,18 +1022,69 @@ func TestCommitEachCommitsOnlyWhenThereAreChanges(t *testing.T) {
 			git(t, filepath.Dir(path), "add", "changed.txt")
 		}
 	}}
-	if _, err := Run(dir, Options{RepoPath: dir, Checkpoint: true, CommitEach: true}, launcher); err != nil {
+	summary, err := Run(dir, Options{RepoPath: dir, Checkpoint: true, CommitEach: true}, launcher)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var first PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "10-implement-a.md.json"), &first)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "10-implement-a.md.json"), &first)
 	var second PromptState
-	readJSON(t, filepath.Join(dir, ".promptgrinder", "prompts", "20-implement-b.md.json"), &second)
+	readJSON(t, filepath.Join(folderStateRoot("", summary.Sequence.SequenceID), "prompts", "20-implement-b.md.json"), &second)
 	if first.CommitSHA == "" {
 		t.Fatalf("first prompt was not committed: %#v", first)
 	}
 	if second.CommitSHA != "" {
 		t.Fatalf("second prompt should not commit without changes: %#v", second)
+	}
+}
+
+func TestGitCommitFocusedReportsWorkerCommitOwnershipConflict(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "tracked.txt", "initial")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "approved.txt", "approved")
+	git(t, dir, "add", "approved.txt")
+	git(t, dir, "commit", "-m", "worker committed approved change")
+	workerCommit := strings.TrimSpace(string(gitOutput(t, dir, "rev-parse", "HEAD")))
+
+	_, err = gitCommitFocused(dir, "PromptGrinder: complete task", baseline, []string{"approved.txt"})
+	if err == nil {
+		t.Fatal("expected commit ownership conflict")
+	}
+	for _, want := range []string{"Commit ownership conflict:", "Worker commit: " + workerCommit, "Worktree: clean", "No changes were lost"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+	}
+	clean, cleanErr := gitClean(dir)
+	if cleanErr != nil || !clean {
+		t.Fatalf("worker commit evidence was modified: clean=%t err=%v", clean, cleanErr)
+	}
+	if got := strings.TrimSpace(string(gitOutput(t, dir, "rev-parse", "HEAD"))); got != workerCommit {
+		t.Fatalf("HEAD = %s, want unchanged worker commit %s", got, workerCommit)
+	}
+}
+
+func TestStagedChangeMismatchRetainsGenericErrorWhenUnproven(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "tracked.txt", "initial")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "unexpected.txt", "unexpected")
+	git(t, dir, "add", "unexpected.txt")
+
+	err = stagedChangeMismatchError(dir, baseline, []string{"approved.txt"})
+	if got, want := err.Error(), "staged change set does not exactly match approved worker changes"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
 
@@ -976,6 +1098,53 @@ func TestRequireCleanGitFailsWhenDirty(t *testing.T) {
 	_, err := Run(dir, Options{RepoPath: dir, RequireCleanGit: true}, &fakeLauncher{})
 	if err == nil || !strings.Contains(err.Error(), "dirty") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreflightReportsDirtyPathsWithoutCreatingRunState(t *testing.T) {
+	dir := initGitRepo(t)
+	home := t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "tracked.txt", "initial")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	writePromptFile(t, dir, "tracked.txt", "changed")
+	writePromptFile(t, dir, "untracked.txt", "new")
+
+	_, err := Preflight(dir, Options{HomeDir: home, RepoPath: dir, CommitEach: true})
+	if err == nil {
+		t.Fatal("expected dirty baseline error")
+	}
+	for _, want := range []string{"Cannot use --commit-each", "Modified:", "tracked.txt", "Untracked:", "untracked.txt", "Commit, stash, or isolate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%s", want, err)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "state", "sequences")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("preflight created sequence state: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".promptgrinder")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("preflight created worktree state: %v", statErr)
+	}
+}
+
+func TestCancelSequencePreservesCompletedCheckpoint(t *testing.T) {
+	home := t.TempDir()
+	now := time.Now().UTC()
+	sequence := SequenceState{SequenceID: "seq_cancel", Folder: "/tmp/prompts", Status: "running", Items: []SequenceItem{
+		{PromptName: "10-implement-a.md", Status: "succeeded"},
+		{PromptName: "20-test-b.md", Status: "running"},
+		{PromptName: "30-verify-c.md", Status: "pending"},
+	}, StartedAt: &now, UpdatedAt: &now}
+	if err := newSequenceStore(home).save(sequence); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := CancelSequence(home, sequence.SequenceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != "cancelled" || cancelled.Items[0].Status != "succeeded" || cancelled.Items[1].Status != "cancelled" || cancelled.Items[2].Status != "cancelled" {
+		t.Fatalf("cancelled sequence = %#v", cancelled)
 	}
 }
 
@@ -1013,9 +1182,17 @@ func TestRunFolderPathPolicyRejectsWorkerCreatedUnallowedPath(t *testing.T) {
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-m", "initial")
 	launcher := &fakeLauncher{onLaunch: func(string) { writePromptFile(t, dir, "outside.txt", "evidence") }}
-	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher)
+	var failureReason string
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir(), Progress: func(event ProgressEvent) {
+		if event.Type == "prompt.failed" {
+			failureReason = event.Reason
+		}
+	}}, launcher)
 	if err == nil || !strings.Contains(err.Error(), "path policy violation") {
 		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(failureReason, "outside.txt (outside allowed paths)") {
+		t.Fatalf("failure reason = %q", failureReason)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "outside.txt")); statErr != nil {
 		t.Fatalf("evidence missing: %v", statErr)
@@ -1084,6 +1261,16 @@ func git(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
 	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v failed: %v", args, err)
+	}
+	return out
 }
 
 func readJSON(t *testing.T, path string, out any) {

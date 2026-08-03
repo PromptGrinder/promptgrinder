@@ -90,7 +90,7 @@ func TestGeneratedContentIsDeterministicAndMinimal(t *testing.T) {
 		}
 	}
 	role := string(first.Files[1].Content)
-	for _, want := range []string{"allowed_paths:\n  - service", "preferred: local", "maven verify passes", "generated: true"} {
+	for _, want := range []string{"allowed_paths:\n  - service/**", "preferred: local", "maven verify passes", "generated: true"} {
 		if !strings.Contains(role, want) {
 			t.Errorf("role YAML missing %q:\n%s", want, role)
 		}
@@ -174,8 +174,18 @@ func TestWritePlanPreflightsAllConflictsWithoutPartialWrites(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, map[string]string{".promptgrinder/roles/backend-feature.yaml": "owned by user"})
 	plan := Plan{Files: []File{{Path: ".promptgrinder/project.yaml", Content: []byte("name: x\n")}, {Path: ".promptgrinder/roles/backend-feature.yaml", Content: []byte("id: backend-feature\n")}}}
-	if err := WritePlan(root, plan); err == nil {
+	err := WritePlan(root, plan)
+	if err == nil {
 		t.Fatal("expected overwrite conflict")
+	}
+	for _, want := range []string{
+		`existing discovery target ".promptgrinder/roles/backend-feature.yaml" differs from the current repository analysis`,
+		"no files were changed",
+		"move the existing .promptgrinder directory aside",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(root, ".promptgrinder", "project.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("project file was partially written: %v", err)

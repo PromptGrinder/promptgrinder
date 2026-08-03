@@ -121,6 +121,7 @@ func Doctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		}
 	}
 	checks = append(checks, codexCheck, checkCodexReadiness(ctx, codexPath, options))
+	checks = append(checks, checkOptionalRuntime(ctx, "antigravity", "Antigravity CLI", "agy", cfg.RuntimeOptions["antigravity"], options))
 
 	gitPath, _ := options.LookPath("git")
 	checks = append(checks, executableCheck("tool.git", "Git", gitPath, options.Repo != "", "Install Git/Xcode command-line tools before using repository workflows."))
@@ -130,6 +131,7 @@ func Doctor(ctx context.Context, options DoctorOptions) DoctorReport {
 	osascriptPath, _ := options.LookPath("osascript")
 	needsOSA := options.Terminal == "terminal" || options.Terminal == "iterm"
 	checks = append(checks, executableCheck("tool.osascript", "osascript", osascriptPath, needsOSA, "Use --terminal headless or restore the macOS osascript tool."))
+	checks = append(checks, terminalInventory()...)
 	checks = append(checks, checkTerminal(options))
 	checks = append(checks, checkWorkerPath(options, pgPath, codexPath, gitPath))
 	checks = append(checks, checkActive(ctx, options))
@@ -145,6 +147,29 @@ func Doctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		}
 	}
 	return report
+}
+
+func checkOptionalRuntime(ctx context.Context, id, name, command string, configured map[string]any, options DoctorOptions) Check {
+	executable := ""
+	source := "PATH"
+	if value, ok := configured["executable"].(string); ok && strings.TrimSpace(value) != "" {
+		executable = resolveConfiguredExecutable(value, options.LookPath)
+		source = "runtime." + id + ".executable"
+	} else {
+		executable, _ = options.LookPath(command)
+	}
+	check := executableCheck("tool."+id, name, executable, false, "Install "+name+" separately or configure runtime."+id+".executable; it is optional unless a worker selects it.")
+	if executable == "" || check.Status != Pass {
+		return check
+	}
+	check.Evidence["source"] = source
+	versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	version, err := options.Run(versionCtx, executable, "--version")
+	if err == nil && strings.TrimSpace(string(version)) != "" {
+		check.Evidence["version"] = RedactText(strings.TrimSpace(string(version)))
+	}
+	return check
 }
 
 func checkPromptGrinderPath(o DoctorOptions, executable string) Check {
@@ -432,6 +457,23 @@ func checkTerminal(o DoctorOptions) Check {
 	default:
 		return Check{ID: "terminal.adapter", Status: Fail, Required: true, Summary: fmt.Sprintf("Unsupported terminal adapter %q.", o.Terminal), Remediation: "Use --terminal terminal, --terminal iterm, or --terminal headless."}
 	}
+}
+
+func terminalInventory() []Check {
+	return []Check{
+		{ID: "terminal.available.headless", Status: Pass, Required: false, Summary: "Headless execution is available.", Evidence: map[string]any{"adapter": "headless"}},
+		applicationInventoryCheck("terminal.available.terminal", "Terminal.app", []string{"/System/Applications/Utilities/Terminal.app", "/Applications/Utilities/Terminal.app"}),
+		applicationInventoryCheck("terminal.available.iterm", "iTerm2", []string{"/Applications/iTerm.app", "/Applications/iTerm2.app"}),
+	}
+}
+
+func applicationInventoryCheck(id, name string, candidates []string) Check {
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return Check{ID: id, Status: Pass, Required: false, Summary: name + " is installed.", Evidence: map[string]any{"path": candidate}}
+		}
+	}
+	return Check{ID: id, Status: Warning, Required: false, Summary: name + " was not found at a standard location.", Evidence: map[string]any{"searched_paths": candidates}, Remediation: "Install " + name + " only if you want to use its terminal adapter; headless execution remains available."}
 }
 
 func applicationCheck(name, path, adapter string) Check {

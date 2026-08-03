@@ -10,7 +10,7 @@ func TestFormatIncludesShortRevisionAndDirtyState(t *testing.T) {
 		{Key: "vcs.revision", Value: "5716a42123456789"},
 		{Key: "vcs.modified", Value: "true"},
 	}
-	if got, want := format("v1.0.0-rc.2.1", settings), "v1.0.0-rc.2.1 (5716a42, dirty)"; got != want {
+	if got, want := format("v1.0.0-rc.2.3", settings), "v1.0.0-rc.2.3 (5716a42, dirty)"; got != want {
 		t.Fatalf("format() = %q, want %q", got, want)
 	}
 }
@@ -26,9 +26,9 @@ func TestStringPrefersInjectedRevision(t *testing.T) {
 	t.Cleanup(func() {
 		Version, Revision = oldVersion, oldRevision
 	})
-	Version = "v1.0.0-rc.2.1"
+	Version = "v1.0.0-rc.2.3"
 	Revision = "5716a42123456789"
-	if got, want := String(), "v1.0.0-rc.2.1 (5716a42)"; got != want {
+	if got, want := String(), "v1.0.0-rc.2.3 (5716a42)"; got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
 	}
 }

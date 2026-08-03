@@ -18,10 +18,11 @@ type Mutation struct {
 }
 
 type SetupReport struct {
-	OK        bool       `json:"ok"`
-	DryRun    bool       `json:"dry_run"`
-	Changed   bool       `json:"changed"`
-	Mutations []Mutation `json:"mutations"`
+	OK           bool          `json:"ok"`
+	DryRun       bool          `json:"dry_run"`
+	Changed      bool          `json:"changed"`
+	Capabilities *DoctorReport `json:"capabilities,omitempty"`
+	Mutations    []Mutation    `json:"mutations"`
 }
 
 type SetupOptions struct {

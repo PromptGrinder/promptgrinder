@@ -45,6 +45,7 @@ type Service interface {
 	RunPathWithOptions(path string, options pgruntime.RunOptions) (pgruntime.RunSummary, error)
 	RunPathsWithOptions(paths []string, options pgruntime.RunOptions) (pgruntime.RunSummary, error)
 	RunPromptFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderSummary, error)
+	PreflightRunFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderPreflight, error)
 	Engines() []engine.Descriptor
 	DescribeEngine(name string) (engine.Descriptor, error)
 	Defaults() config.DefaultsReport
@@ -52,6 +53,7 @@ type Service interface {
 	Sequences() ([]pgruntime.SequenceProgress, error)
 	SequenceID(path string, options pgruntime.RunFolderOptions) (string, error)
 	Sequence(sequenceID string) (pgruntime.SequenceState, error)
+	CancelSequence(sequenceID string) (pgruntime.SequenceState, error)
 	TerminalCandidates() ([]pgruntime.TerminalCandidate, error)
 	CloseTerminals(workerIDs []string) ([]pgruntime.TerminalCandidate, error)
 	List() ([]state.Worker, error)
@@ -267,11 +269,17 @@ func NewRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ad
 
 type discoverFunc func(string) (discovery.Result, error)
 
+type doctorFunc func(context.Context, firstuse.DoctorOptions) firstuse.DoctorReport
+
 func newRootCommand(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc) *cobra.Command {
 	return newRootCommandWithRoleAdvisor(service, stdout, stderr, getwd, discover, nil)
 }
 
 func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc, roleAdvisor roleenhance.Advisor) *cobra.Command {
+	return newRootCommandWithDependencies(service, stdout, stderr, getwd, discover, roleAdvisor, firstuse.Doctor)
+}
+
+func newRootCommandWithDependencies(service Service, stdout, stderr io.Writer, getwd func() (string, error), discover discoverFunc, roleAdvisor roleenhance.Advisor, scan doctorFunc) *cobra.Command {
 	var compactJSON bool
 	var plainOutput bool
 	var themeName string
@@ -281,6 +289,17 @@ func newRootCommandWithRoleAdvisor(service Service, stdout, stderr io.Writer, ge
 		Version:       buildinfo.String(),
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !service.Defaults().UserConfigExists {
+				fmt.Fprintln(stdout, "Welcome to PromptGrinder.")
+				fmt.Fprintln(stdout, "\nThis installation has not been configured yet.")
+				fmt.Fprintln(stdout, "\nRun:\n  promptgrinder setup")
+				fmt.Fprintln(stdout, "\nSetup will inspect local runtimes, terminals, Git, shell configuration, and PromptGrinder storage before proposing any changes.")
+				return nil
+			}
+			return cmd.Help()
+		},
 	}
 	root.SetVersionTemplate("promptgrinder {{.Version}}\n")
 	root.SetOut(stdout)
@@ -701,7 +720,7 @@ Examples:
 			if doctorActive && !doctorJSON {
 				fmt.Fprintln(stdout, "Active check requested: a visible, short-lived terminal probe may open. It never starts Codex or an AI session.")
 			}
-			report := firstuse.Doctor(cmd.Context(), firstuse.DoctorOptions{
+			report := scan(cmd.Context(), firstuse.DoctorOptions{
 				Repo: doctorRepo, Terminal: doctorTerminal, Active: doctorActive,
 				HomeDir: service.Defaults().HomeDir,
 			})
@@ -742,6 +761,15 @@ Examples:
 				}
 				return StructuredError{Err: err, Code: ExitInvalidInput}
 			}
+			capabilities := scan(cmd.Context(), firstuse.DoctorOptions{
+				HomeDir:  service.Defaults().HomeDir,
+				Terminal: "headless",
+			})
+			if !setupJSON {
+				fmt.Fprintln(stdout, "Machine capabilities:")
+				printDoctor(stdout, capabilities)
+				fmt.Fprintln(stdout, "\nSetup proposal:")
+			}
 			report, err := firstuse.Setup(firstuse.SetupOptions{
 				HomeDir: service.Defaults().HomeDir, DryRun: setupDryRun,
 				NonInteractive: setupNonInteractive, Yes: setupYes,
@@ -753,6 +781,7 @@ Examples:
 					return stdout
 				}(),
 			})
+			report.Capabilities = &capabilities
 			if setupJSON {
 				if writeErr := writeJSON(stdout, report, compactJSON); writeErr != nil {
 					return writeErr
@@ -970,7 +999,9 @@ Examples:
 		cmd.Flags().BoolVar(&runFolderIncludeSpecification, "include-specification", false, "execute specification prompts instead of using them only as context")
 		cmd.Flags().BoolVar(&runFolderAllowConcurrentWorktree, "allow-concurrent-worktree", false, "allow another PromptGrinder batch to use the same git worktree")
 		if includeDetach {
-			cmd.Flags().BoolVar(&runFolderDetach, "detach", false, "run the folder sequence in the background")
+			detachDefault := service.Defaults().Config.RunFolderDetach
+			runFolderDetach = detachDefault
+			cmd.Flags().BoolVar(&runFolderDetach, "detach", detachDefault, "run in background; use --detach=false for this terminal")
 		}
 	}
 	runFolder := &cobra.Command{
@@ -1104,6 +1135,20 @@ Examples:
 		},
 	}
 	sequenceCmd.Flags().BoolVar(&sequenceJSON, "json", false, "print machine-readable JSON")
+	sequenceCancel := &cobra.Command{
+		Use:   "cancel <sequence-id>",
+		Short: "Cancel an active sequence and preserve resumable checkpoints.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sequence, err := service.CancelSequence(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "Sequence %s cancelled. Completed checkpoints are preserved.\n", sequence.SequenceID)
+			return nil
+		},
+	}
+	sequenceCmd.AddCommand(sequenceCancel)
 	root.AddCommand(sequenceCmd)
 
 	var terminalsJSON bool
@@ -2846,10 +2891,11 @@ func truncate(value string, max int) string {
 }
 
 func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder string, options pgruntime.RunFolderOptions) error {
-	sequenceID, err := service.SequenceID(folder, options)
+	preflight, err := service.PreflightRunFolder(folder, options)
 	if err != nil {
-		return err
+		return fmt.Errorf("detached run-folder preflight failed:\n%w", err)
 	}
+	sequenceID := preflight.SequenceID
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -2893,12 +2939,32 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 	if err := logFile.Close(); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Detached run-folder supervisor started\n")
+	fmt.Fprintf(stdout, "Detached run-folder supervisor starting\n")
 	fmt.Fprintf(stdout, "Sequence: %s\n", sequenceID)
 	fmt.Fprintf(stdout, "Status: promptgrinder sequence %s\n", sequenceID)
 	fmt.Fprintf(stdout, "PID: %d\n", cmd.Process.Pid)
 	fmt.Fprintf(stdout, "Log: %s\n", logPath)
 	fmt.Fprintln(stdout, "Progress: promptgrinder sequences")
+	for attempts := 0; attempts < 10; attempts++ {
+		sequence, sequenceErr := service.Sequence(sequenceID)
+		if sequenceErr == nil {
+			switch sequence.Status {
+			case "completed":
+				fmt.Fprintln(stdout, "State: completed")
+				return nil
+			case "failed", "cancelled", "interrupted":
+				fmt.Fprintf(stdout, "State: %s\n", sequence.Status)
+				return fmt.Errorf("detached sequence %s %s; inspect with promptgrinder sequence %s", sequenceID, sequence.Status, sequenceID)
+			default:
+				if sequence.Supervisor != nil && sequence.Supervisor.Status == "running" {
+					fmt.Fprintln(stdout, "State: running")
+					return nil
+				}
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	fmt.Fprintln(stdout, "State: starting (status not yet persisted)")
 	return nil
 }
 

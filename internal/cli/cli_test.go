@@ -18,6 +18,7 @@ import (
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/discovery"
 	"promptgrinder/internal/engine"
+	"promptgrinder/internal/firstuse"
 	"promptgrinder/internal/roleenhance"
 	"promptgrinder/internal/runfolder"
 	pgruntime "promptgrinder/internal/runtime"
@@ -73,16 +74,69 @@ func TestCLISetupDryRunReportsPreviewInsteadOfAlreadyComplete(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "new-home")
 	service := &fakeService{defaultsReport: config.DefaultsReport{HomeDir: home}}
 	out := &bytes.Buffer{}
-	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	scan := func(context.Context, firstuse.DoctorOptions) firstuse.DoctorReport {
+		return firstuse.DoctorReport{OK: true, Checks: []firstuse.Check{{ID: "tool.codex", Status: firstuse.Pass, Summary: "Codex CLI is executable."}}}
+	}
+	cmd := newRootCommandWithDependencies(service, out, &bytes.Buffer{}, os.Getwd, discovery.Discover, nil, scan)
 	cmd.SetArgs([]string{"setup", "--dry-run"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Setup preview complete; planned changes were not written.") || strings.Contains(out.String(), "already complete") {
+	if !strings.Contains(out.String(), "Machine capabilities:") || !strings.Contains(out.String(), "tool.codex") || !strings.Contains(out.String(), "Setup proposal:") || !strings.Contains(out.String(), "Setup preview complete; planned changes were not written.") || strings.Contains(out.String(), "already complete") {
 		t.Fatalf("setup output = %q", out.String())
 	}
 	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dry run wrote home: %v", err)
+	}
+}
+
+func TestCLISetupJSONIncludesMachineCapabilities(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "new-home")
+	service := &fakeService{defaultsReport: config.DefaultsReport{HomeDir: home}}
+	out := &bytes.Buffer{}
+	scan := func(context.Context, firstuse.DoctorOptions) firstuse.DoctorReport {
+		return firstuse.DoctorReport{OK: true, Checks: []firstuse.Check{{ID: "terminal.available.headless", Status: firstuse.Pass, Summary: "Headless execution is available."}}}
+	}
+	cmd := newRootCommandWithDependencies(service, out, &bytes.Buffer{}, os.Getwd, discovery.Discover, nil, scan)
+	cmd.SetArgs([]string{"setup", "--dry-run", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var report firstuse.SetupReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("setup JSON = %q: %v", out.String(), err)
+	}
+	if report.Capabilities == nil || len(report.Capabilities.Checks) != 1 || report.Capabilities.Checks[0].ID != "terminal.available.headless" {
+		t.Fatalf("setup report = %#v", report)
+	}
+	if strings.Contains(out.String(), "Machine capabilities:") {
+		t.Fatalf("JSON output contains human text: %q", out.String())
+	}
+}
+
+func TestRootWithoutArgumentsGuidesUnconfiguredInstallationToSetup(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(&fakeService{defaultsReport: config.DefaultsReport{HomeDir: filepath.Join(t.TempDir(), "new-home")}}, out, &bytes.Buffer{})
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Welcome to PromptGrinder.", "has not been configured", "promptgrinder setup", "inspect local runtimes, terminals, Git, shell configuration"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output = %q, want %q", out.String(), want)
+		}
+	}
+}
+
+func TestRootWithoutArgumentsShowsHelpAfterSetup(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(&fakeService{defaultsReport: config.DefaultsReport{UserConfigExists: true}}, out, &bytes.Buffer{})
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Usage:") || strings.Contains(out.String(), "has not been configured") {
+		t.Fatalf("output = %q", out.String())
 	}
 }
 
@@ -191,14 +245,14 @@ func TestDiscoverCommandReportsGenerationConflict(t *testing.T) {
 	cmd := newRootCommand(&fakeService{}, &bytes.Buffer{}, errOut, func() (string, error) {
 		return repo, nil
 	}, func(string) (discovery.Result, error) {
-		return discovery.Result{}, errors.New(`refusing to overwrite conflicting target ".promptgrinder/project.yaml"`)
+		return discovery.Result{}, errors.New(`existing discovery target ".promptgrinder/project.yaml" differs from the current repository analysis; no files were changed. Reconcile the file manually, or move the existing .promptgrinder directory aside before running promptgrinder discover again`)
 	})
 	cmd.SetArgs([]string{"discover"})
 	err := cmd.Execute()
 	if code, ok := ExitCode(err); !ok || code != ExitInvalidInput {
 		t.Fatalf("exit code = %d %v, want %d (error %v)", code, ok, ExitInvalidInput, err)
 	}
-	want := "Error: discover repository: refusing to overwrite conflicting target \".promptgrinder/project.yaml\"\n"
+	want := "Error: discover repository: existing discovery target \".promptgrinder/project.yaml\" differs from the current repository analysis; no files were changed. Reconcile the file manually, or move the existing .promptgrinder directory aside before running promptgrinder discover again\n"
 	if errOut.String() != want {
 		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
 	}
@@ -1135,7 +1189,7 @@ func TestCLIRunSharedContextAllowsCommitOptOut(t *testing.T) {
 func TestCLIRunSharedContextPrintsPromptProgress(t *testing.T) {
 	service := &fakeService{runProgress: []pgruntime.SharedRunProgress{
 		{Index: 1, Total: 2, TaskPath: "/prompts/02A-task.md", Status: pgruntime.SharedRunStarted},
-		{Index: 1, Total: 2, TaskPath: "/prompts/02A-task.md", Status: pgruntime.SharedRunSucceeded},
+		{Index: 1, Total: 2, TaskPath: "/prompts/02A-task.md", Status: pgruntime.SharedRunSucceeded, Scope: "slice-policy", Engine: "codex", Model: "gpt-5.6-sol"},
 	}}
 	out := &bytes.Buffer{}
 	cmd := NewRootCommand(service, out, &bytes.Buffer{})
@@ -1145,7 +1199,7 @@ func TestCLIRunSharedContextPrintsPromptProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "[1/2] 02A-task.md - In progress") ||
-		!strings.Contains(out.String(), "[1/2] 02A-task.md - Completed successfully") {
+		!strings.Contains(out.String(), "✓ [1/2] 02A-task.md|slice-policy|codex/gpt-5.6-sol|<1s") {
 		t.Fatalf("output = %q", out.String())
 	}
 }
@@ -1214,7 +1268,7 @@ func TestCLIValidateJSON(t *testing.T) {
 }
 
 func TestCLIValidateRenderPrintsExactPromptBytes(t *testing.T) {
-	want := "# Task Semantics (v1)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
+	want := "# Task Semantics (v2)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
 	service := &fakeService{validatePlan: worker.ValidationPlan{Valid: true, Engine: "codex", RenderedPrompt: want, ExecutionPlan: map[string]any{}}}
 	out := &bytes.Buffer{}
 	cmd := NewRootCommand(service, out, &bytes.Buffer{})
@@ -2211,7 +2265,7 @@ func TestCLIRunFolderForegroundRendersLifecycleWithoutDuplicateInventory(t *test
 		{Type: "prompt.started", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "running"},
 		{Type: "prompt.skipped", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "skipped"},
 		{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "running"},
-		{Type: "prompt.succeeded", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "succeeded", WorkerID: "wrk_1", LogPath: "/tmp/worker.log", Duration: time.Second},
+		{Type: "prompt.succeeded", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "succeeded", WorkerID: "wrk_1", Scope: "slice-policy", Engine: "codex", Model: "gpt-5.6-sol", LogPath: "/tmp/worker.log", Duration: time.Second, Completed: 2, Total: 2},
 		{Type: "run.completed", SequenceID: "seq_cli"},
 	}
 	service := &fakeService{runFolderProgress: events}
@@ -2233,7 +2287,7 @@ func TestCLIRunFolderForegroundRendersLifecycleWithoutDuplicateInventory(t *test
 				t.Fatal(err)
 			}
 			got := tc.out.(interface{ String() string }).String()
-			for _, want := range []string{"Mode: foreground", "Sequence: seq_cli", "00-spec.md [specification] - skipped", "10-implement.md [implement] - succeeded", "worker: wrk_1", "Result: succeeded"} {
+			for _, want := range []string{"Mode: foreground", "Sequence: seq_cli", "00-spec.md [specification] - skipped", "10-implement.md|slice-policy|codex/gpt-5.6-sol|1s", "Result: succeeded"} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("output missing %q: %q", want, got)
 				}
@@ -2269,7 +2323,7 @@ func TestCLIRunFolderForegroundResumeFailureQuotesFolder(t *testing.T) {
 		t.Fatalf("exit code = %d %v, want %d", code, ok, ExitExecutionFailed)
 	}
 	got := out.String()
-	for _, want := range []string{"10-done.md [implement] - succeeded", "20-next.md [test] - failed", "Result: failed", `Resume: promptgrinder run-folder 'tasks/odd path;$(touch nope)'"'"'s' --resume`} {
+	for _, want := range []string{"10-done.md [implement] - succeeded", "✗ [2/2] 20-next.md|unscoped|unknown-engine/default|<1s", "Result: failed", `Resume: promptgrinder run-folder 'tasks/odd path;$(touch nope)'"'"'s' --resume`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q: %q", want, got)
 		}
@@ -2322,6 +2376,33 @@ func TestCLIDetachedRunFolderPrintsSequenceInspectionCommand(t *testing.T) {
 	for _, want := range []string{"Sequence: seq_detached", "Status: promptgrinder sequence seq_detached"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output = %q, missing %q", out.String(), want)
+		}
+	}
+}
+
+func TestCLISequenceCancel(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(&fakeService{}, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"sequence", "cancel", "seq_abc123"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Sequence seq_abc123 cancelled") || !strings.Contains(out.String(), "checkpoints are preserved") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestRunFolderHelpShowsInteractiveDetachFormAndDefault(t *testing.T) {
+	out := &bytes.Buffer{}
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{RunFolderDetach: true}}}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--detach", "--detach=false", "default true"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help missing %q:\n%s", want, out.String())
 		}
 	}
 }
@@ -2610,6 +2691,17 @@ func (f *fakeService) RunPromptFolder(path string, options pgruntime.RunFolderOp
 	return f.runFolderSummary, f.runFolderErr
 }
 
+func (f *fakeService) PreflightRunFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderPreflight, error) {
+	if f.runFolderErr != nil {
+		return pgruntime.RunFolderPreflight{}, f.runFolderErr
+	}
+	sequenceID := f.sequence.SequenceID
+	if sequenceID == "" {
+		sequenceID = "seq_test"
+	}
+	return pgruntime.RunFolderPreflight{Folder: path, SequenceID: sequenceID}, nil
+}
+
 func (f *fakeService) Engines() []engine.Descriptor {
 	if len(f.engines) > 0 {
 		return f.engines
@@ -2660,6 +2752,10 @@ func (f *fakeService) Sequence(sequenceID string) (pgruntime.SequenceState, erro
 		return pgruntime.SequenceState{}, errTest("sequence not found")
 	}
 	return f.sequence, nil
+}
+
+func (f *fakeService) CancelSequence(sequenceID string) (pgruntime.SequenceState, error) {
+	return pgruntime.SequenceState{SequenceID: sequenceID, Status: "cancelled"}, nil
 }
 
 func (f *fakeService) TerminalCandidates() ([]pgruntime.TerminalCandidate, error) {

@@ -426,6 +426,17 @@ func TestParseResultDoesNotInventUsageOrCost(t *testing.T) {
 	}
 }
 
+func TestParseResultCapturesRuntimeReportedModel(t *testing.T) {
+	log := []byte("OpenAI Codex v1\n--------\nmodel: gpt-5.6-sol\nprovider: openai\n--------\n")
+	result := Engine{}.ParseResult(execution.Context{}, log)
+	if result.Diagnostics["model"] != "gpt-5.6-sol" {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
+	}
+	if got := reportedModel([]byte("model: $(touch nope)\n")); got != "" {
+		t.Fatalf("unsafe model accepted: %q", got)
+	}
+}
+
 func TestParseResultExtractsCodexThreadID(t *testing.T) {
 	log := []byte("PromptGrinder dev\n{\"type\":\"thread.started\",\"thread_id\":\"thread-123\"}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Implemented the feature.\"}}\n")
 	result := Engine{}.ParseResult(execution.Context{}, log)

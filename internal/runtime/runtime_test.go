@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/engine"
@@ -19,6 +20,7 @@ import (
 	"promptgrinder/internal/terminal"
 	"promptgrinder/internal/testsupport"
 	"promptgrinder/internal/worker"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 type synchronousTerminal struct {
@@ -94,6 +96,22 @@ func TestRunFolderCreatesMultipleWorkers(t *testing.T) {
 	}
 	if len(workers) != 2 {
 		t.Fatalf("workers = %#v", workers)
+	}
+}
+
+func TestReportSharedRunProgressIncludesRuntimeIdentity(t *testing.T) {
+	var got SharedRunProgress
+	options := RunOptions{OnProgress: func(progress SharedRunProgress) { got = progress }}
+	worker := state.Worker{
+		ID: "wrk_test", Engine: "codex",
+		ResolvedMetadata: map[string]any{
+			"allowed_paths": []any{"backend/**"},
+			"engine":        map[string]any{"name": "codex", "model": "gpt-5.6-sol"},
+		},
+	}
+	reportSharedRunProgress(options, 0, 6, "/tasks/02-backend.md", worker, SharedRunSucceeded, time.Minute)
+	if got.Scope != "slice-policy" || got.Engine != "codex" || got.Model != "gpt-5.6-sol" || got.WorkerID != "wrk_test" {
+		t.Fatalf("progress = %#v", got)
 	}
 }
 
@@ -178,6 +196,34 @@ func TestSharedGitCommitCreatesPromptCheckpoint(t *testing.T) {
 	out := runGit(t, repo, "log", "-1", "--pretty=%s")
 	if strings.TrimSpace(out) != "PromptGrinder: complete 01A-task.md" {
 		t.Fatalf("commit subject = %q", out)
+	}
+}
+
+func TestSharedGitCommitReportsWorkerCommitOwnershipConflict(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	writeFile(t, repo, "existing.txt", "before\n")
+	runGit(t, repo, "add", "existing.txt")
+	runGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, repo, "feature.txt", "implemented\n")
+	runGit(t, repo, "add", "feature.txt")
+	runGit(t, repo, "-c", "user.name=Worker", "-c", "user.email=worker@example.invalid", "commit", "-m", "worker commit")
+	workerCommit := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+
+	_, err = commitSharedChanges(repo, "PromptGrinder: complete 01A-task.md", baseline, []string{"feature.txt"})
+	if err == nil {
+		t.Fatal("expected commit ownership conflict")
+	}
+	if !strings.Contains(err.Error(), "Commit ownership conflict:") || !strings.Contains(err.Error(), "Worker commit: "+workerCommit) {
+		t.Fatalf("error = %q", err)
+	}
+	clean, cleanErr := sharedGitClean(repo)
+	if cleanErr != nil || !clean {
+		t.Fatalf("worker commit evidence was modified: clean=%t err=%v", clean, cleanErr)
 	}
 }
 

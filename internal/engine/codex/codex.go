@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -99,6 +100,9 @@ func (e Engine) Build(ctx execution.Context, prompt []byte, executablePath strin
 
 func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResult {
 	result := state.EngineResult{}
+	if model := reportedModel(log); model != "" {
+		result.Diagnostics = map[string]any{"model": model}
+	}
 	scanner := bufio.NewScanner(bytes.NewReader(log))
 	// Codex command-execution events can contain large aggregated output in a
 	// single JSONL record. The Scanner default is only 64 KiB; hitting it used
@@ -127,6 +131,24 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 	}
 	result.CompletionStatus, result.NextPromptSafe, result.CompletionReason = state.ParseOrderedCompletionReport(result.Summary)
 	return result
+}
+
+var reportedModelPattern = regexp.MustCompile(`(?m)^model:[ \t]+([A-Za-z0-9][A-Za-z0-9._/-]*)[ \t]*$`)
+
+func reportedModel(log []byte) string {
+	header := bytes.Index(log, []byte("OpenAI Codex "))
+	if header < 0 {
+		return ""
+	}
+	log = log[header:]
+	if len(log) > 4096 {
+		log = log[:4096]
+	}
+	match := reportedModelPattern.FindSubmatch(log)
+	if len(match) != 2 {
+		return ""
+	}
+	return string(match[1])
 }
 
 func (e Engine) BuildScript(worker state.Worker, executablePath string) string {

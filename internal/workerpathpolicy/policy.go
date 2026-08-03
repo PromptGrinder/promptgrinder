@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,12 +46,33 @@ type Event struct {
 	Message       string      `json:"message"`
 }
 
+// CommitOwnershipConflict records the narrow case where a worker committed
+// exactly the approved changes before PromptGrinder could create its own
+// --commit-each checkpoint. It is diagnostic only: callers must not rewrite
+// either the commit or the index in response.
+type CommitOwnershipConflict struct {
+	WorkerCommit string
+}
+
+func (e CommitOwnershipConflict) Error() string {
+	return fmt.Sprintf("Commit ownership conflict: the worker committed the approved changes before PromptGrinder's --commit-each step.\n\nWorker commit: %s\nWorktree: clean\nApproved changes: found in worker commit\n\nNo changes were lost. Run remaining prompts with --commit-each=false, or remove commit instructions from the prompts and let PromptGrinder own commits.", e.WorkerCommit)
+}
+
 func Validate(policy workerdomain.WorkerPolicy) error {
 	if err := policy.Validate(); err != nil {
 		return err
 	}
+	return ValidatePatterns(policy)
+}
+
+// ValidatePatterns checks path syntax without requiring the lifecycle fields
+// used only by persistent named-worker policies.
+func ValidatePatterns(policy workerdomain.WorkerPolicy) error {
 	for _, group := range [][]string{policy.AllowedPaths, policy.ForbiddenPaths} {
 		for _, pattern := range group {
+			if strings.HasSuffix(pattern, "/") {
+				return fmt.Errorf("pattern %q matches only that exact path; did you mean %q?", pattern, pattern+"**")
+			}
 			if _, err := match(pattern, "validation/path"); err != nil {
 				return fmt.Errorf("invalid path policy pattern %q: %w", pattern, err)
 			}
@@ -121,6 +143,53 @@ func AttributedChanges(repo string, before Snapshot) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+// DetectCommitOwnershipConflict returns a diagnostic only when repository
+// evidence proves that exactly one commit was created after the baseline, its
+// complete path set equals the approved changes, and no staged, unstaged, or
+// untracked changes remain. Every ambiguous state deliberately returns nil so
+// the caller preserves its generic fail-closed mismatch error.
+func DetectCommitOwnershipConflict(repo string, before Snapshot, approved []string) (*CommitOwnershipConflict, error) {
+	after, err := Capture(repo)
+	if err != nil {
+		return nil, err
+	}
+	if after.Head == before.Head || len(after.Entries) != 0 {
+		return nil, nil
+	}
+	countBytes, err := gitBytes(repo, "rev-list", "--count", before.Head+".."+after.Head)
+	if err != nil {
+		return nil, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(countBytes)))
+	if err != nil || count != 1 {
+		return nil, nil
+	}
+	raw, err := gitBytes(repo, "diff", "--name-status", "-z", "--find-renames", before.Head, after.Head)
+	if err != nil {
+		return nil, err
+	}
+	if !samePathSet(nameStatusPaths(raw), approved) {
+		return nil, nil
+	}
+	return &CommitOwnershipConflict{WorkerCommit: after.Head}, nil
+}
+
+func samePathSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	a := append([]string(nil), left...)
+	b := append([]string(nil), right...)
+	sort.Strings(a)
+	sort.Strings(b)
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func Violations(policy workerdomain.WorkerPolicy, paths []string) ([]Violation, error) {

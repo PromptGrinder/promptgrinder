@@ -4,6 +4,22 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.2.3 candidate
+
+- Added first-run machine capability guidance through `setup` and expanded
+  `doctor` diagnostics without changing local-first or read-only defaults.
+- Added compact run-folder role/runtime identity, synchronous detached
+  preflight, external sequence state, explicit detach lifecycle reporting, and
+  sequence-level cancellation with resumable checkpoints.
+- Hardened slice path policies with directory-pattern suggestions,
+  `expected_paths` validation, generated subtree roles, visible enforcement
+  reasons, and explicit PromptGrinder commit ownership.
+- Improved conflicting `discover` output so it names the file, confirms that
+  nothing was written, and gives preservation-first recovery guidance.
+
+RC.2.3 is a stabilization candidate. It remains source-only and is not tagged
+or published by merging this branch.
+
 ### v1.0.0-rc.2.1 candidate
 
 - Fixed ordered-folder completion parsing when a Codex JSONL command event is

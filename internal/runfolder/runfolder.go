@@ -23,6 +23,7 @@ import (
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workeridentity"
 	"promptgrinder/internal/workerpathpolicy"
 )
 
@@ -126,6 +127,9 @@ type ProgressEvent struct {
 	PromptType       PromptType       `json:"prompt_type,omitempty"`
 	Status           string           `json:"status,omitempty"`
 	WorkerID         string           `json:"worker_id,omitempty"`
+	Scope            string           `json:"scope,omitempty"`
+	Engine           string           `json:"engine,omitempty"`
+	Model            string           `json:"model,omitempty"`
 	LogPath          string           `json:"log_path,omitempty"`
 	Completed        int              `json:"completed"`
 	Total            int              `json:"total"`
@@ -154,9 +158,12 @@ type persistedProgressEvent struct {
 }
 
 type Prompt struct {
-	Path string
-	Name string
-	Type PromptType
+	Path      string
+	Name      string
+	ID        string
+	Type      PromptType
+	Role      string
+	DependsOn []string
 }
 
 type FolderInspection struct {
@@ -179,6 +186,7 @@ type RunState struct {
 type SequenceState struct {
 	SequenceID       string         `json:"sequence_id"`
 	Folder           string         `json:"folder"`
+	RepositoryPath   string         `json:"repository_path,omitempty"`
 	Status           string         `json:"status"`
 	Template         string         `json:"template"`
 	Engine           string         `json:"engine,omitempty"`
@@ -293,23 +301,104 @@ func Inspect(folder string) (FolderInspection, error) {
 			inspection.Ignored = append(inspection.Ignored, name)
 			continue
 		}
-		promptType := Classify(name)
-		if promptType == TypeUnknown {
+		prompt, err := inspectPrompt(filepath.Join(abs, name), name)
+		if err != nil {
+			return FolderInspection{}, err
+		}
+		if prompt.Type == TypeUnknown {
 			inspection.Invalid = append(inspection.Invalid, name)
 			continue
 		}
-		inspection.Prompts = append(inspection.Prompts, Prompt{Path: filepath.Join(abs, name), Name: name, Type: promptType})
+		inspection.Prompts = append(inspection.Prompts, prompt)
 	}
 	sort.SliceStable(inspection.Prompts, func(i, j int) bool {
 		return inspection.Prompts[i].Name < inspection.Prompts[j].Name
 	})
 	sort.Strings(inspection.Ignored)
 	sort.Strings(inspection.Invalid)
+	if err := validatePromptDependencies(inspection.Prompts); err != nil {
+		return FolderInspection{}, fmt.Errorf("run-folder preflight: %w", err)
+	}
 	return inspection, nil
 }
 
+func inspectPrompt(promptPath, name string) (Prompt, error) {
+	data, err := os.ReadFile(promptPath)
+	if err != nil {
+		return Prompt{}, err
+	}
+	task, err := markdown.Parse(string(data))
+	if err != nil {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s: %w", name, err)
+	}
+	if err := markdown.Validate(task, name); err != nil {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %w", err)
+	}
+	filenameType := Classify(name)
+	declaredType := promptTypeValue(task.Metadata["type"])
+	if filenameType != TypeUnknown && filenameType != TypeSpecification && declaredType != TypeUnknown && filenameType != declaredType {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s declares type %q but filename declares %q", name, declaredType, filenameType)
+	}
+	promptType := filenameType
+	if promptType == TypeUnknown {
+		promptType = declaredType
+	}
+	id, _ := task.Metadata["id"].(string)
+	if filenameType == TypeUnknown && promptType != TypeUnknown && id == "" {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s uses an untyped filename and must declare id in frontmatter", name)
+	}
+	if id == "" {
+		id = strings.TrimSuffix(name, filepath.Ext(name))
+	}
+	role, _ := task.Metadata["role"].(string)
+	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"])}, nil
+}
+
+func promptTypeValue(value any) PromptType {
+	text, _ := value.(string)
+	switch PromptType(text) {
+	case TypeImplement, TypeTest, TypeVerify, TypeReview:
+		return PromptType(text)
+	default:
+		return TypeUnknown
+	}
+}
+
+func stringListValue(value any) []string {
+	items, _ := value.([]any)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func validatePromptDependencies(prompts []Prompt) error {
+	positions := make(map[string]int, len(prompts))
+	for index, prompt := range prompts {
+		if previous, exists := positions[prompt.ID]; exists {
+			return fmt.Errorf("duplicate task id %q in %s and %s", prompt.ID, prompts[previous].Name, prompt.Name)
+		}
+		positions[prompt.ID] = index
+	}
+	for index, prompt := range prompts {
+		for _, dependency := range prompt.DependsOn {
+			position, exists := positions[dependency]
+			if !exists {
+				return fmt.Errorf("%s depends on unknown task id %q", prompt.Name, dependency)
+			}
+			if position >= index {
+				return fmt.Errorf("%s depends on %q, which must appear earlier in filename order", prompt.Name, dependency)
+			}
+		}
+	}
+	return nil
+}
+
 func invalidPromptNamesError(inspection FolderInspection) error {
-	return fmt.Errorf("run-folder preflight: %d of %d Markdown files included; unsupported numbered prompt name(s): %s; use 00-specification*.md or NN-implement-, NN-test-, NN-verify-, NN-final-verify-, or NN-review- filenames", len(inspection.Prompts), inspection.MarkdownTotal, strings.Join(inspection.Invalid, ", "))
+	return fmt.Errorf("run-folder preflight: %d of %d Markdown files included; unsupported numbered prompt name(s): %s; use a typed filename or declare id and type in frontmatter", len(inspection.Prompts), inspection.MarkdownTotal, strings.Join(inspection.Invalid, ", "))
 }
 
 // ResolveSequenceID computes the stable identity used by Run without creating
@@ -349,11 +438,9 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 }
 
 func Run(folder string, options Options, launcher Launcher) (summary Summary, runErr error) {
-	if options.Resume && options.Fresh {
-		return Summary{}, fmt.Errorf("--resume and --fresh are mutually exclusive")
-	}
-	if options.Restart && options.NoResume {
-		return Summary{}, fmt.Errorf("--restart and --no-resume are mutually exclusive")
+	preflight, err := Preflight(folder, options)
+	if err != nil {
+		return Summary{}, err
 	}
 	if options.Restart || options.NoResume {
 		options.Fresh = true
@@ -367,44 +454,17 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	if launcher == nil {
 		return Summary{}, fmt.Errorf("run-folder requires an execution backend")
 	}
-	absFolder, err := filepath.Abs(folder)
-	if err != nil {
-		return Summary{}, err
-	}
-	repoPath := options.RepoPath
-	if repoPath == "" {
-		repoPath = "."
-	}
-	absRepoPath, err := filepath.Abs(repoPath)
-	if err != nil {
-		return Summary{}, err
-	}
-	repoRoot, err := repository.DetectRoot(absRepoPath)
-	if err != nil {
-		return Summary{}, err
-	}
+	absFolder, repoRoot := preflight.Folder, preflight.Repository
 	options.RepoPath = repoRoot
-	inspection, err := Inspect(absFolder)
-	if err != nil {
-		return Summary{}, err
-	}
-	if len(inspection.Invalid) > 0 {
-		return Summary{}, invalidPromptNamesError(inspection)
-	}
+	inspection := preflight.Inspection
 	prompts := inspection.Prompts
-	if len(prompts) == 0 {
-		return Summary{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
-	}
-	if err := validatePrompts(prompts); err != nil {
-		return Summary{}, fmt.Errorf("run-folder preflight: %w", err)
-	}
 
 	sequenceStore := newSequenceStore(options.HomeDir)
 	sequence, sequenceResumed, err := sequenceStore.loadOrCreate(absFolder, repoRoot, prompts, options)
 	if err != nil {
 		return Summary{}, err
 	}
-	store := folderStore{Root: filepath.Join(absFolder, ".promptgrinder")}
+	store := folderStore{Root: folderStateRoot(options.HomeDir, sequence.SequenceID), LegacyRoot: filepath.Join(absFolder, ".promptgrinder")}
 	runState, resumed, err := store.loadOrCreate(absFolder, options)
 	if err != nil {
 		return Summary{}, err
@@ -416,6 +476,11 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	stopSupervisor := startSupervisorHeartbeat(options, &sequence)
 	if stopSupervisor != nil {
 		defer func() {
+			if persisted, err := sequenceStore.load(sequence.SequenceID); err == nil && persisted.Status == "cancelled" {
+				sequence = persisted
+				stopSupervisor("cancelled")
+				return
+			}
 			status := "completed"
 			if runErr != nil {
 				status = "interrupted"
@@ -521,7 +586,8 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			_ = store.saveRun(runState)
 			summary.Run = runState
 			summary.Failed = err
-			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
+			identity := workeridentity.FromWorker(promptState.Worker)
+			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
 			return summary, err
 		}
 		if err := store.savePrompt(promptState); err != nil {
@@ -542,7 +608,8 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			return summary, err
 		}
 		completed[prompt.Name] = true
-		emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "succeeded", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Completed: len(runState.Completed), Total: len(prompts)})
+		identity := workeridentity.FromWorker(promptState.Worker)
+		emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "succeeded", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Completed: len(runState.Completed), Total: len(prompts)})
 	}
 	runState.Status = "completed"
 	runState.Current = ""
@@ -580,8 +647,36 @@ func validatePrompts(prompts []Prompt) error {
 		if err := markdown.Validate(parsed, prompt.Path); err != nil {
 			return err
 		}
+		policy := workerdomain.WorkerPolicy{AllowedPaths: metadataStrings(parsed.Metadata, "allowed_paths"), ForbiddenPaths: metadataStrings(parsed.Metadata, "forbidden_paths")}
+		if err := workerpathpolicy.ValidatePatterns(policy); err != nil {
+			return fmt.Errorf("task frontmatter %s: %w", prompt.Name, err)
+		}
+		expected, err := markdown.ExpectedPaths(parsed)
+		if err != nil {
+			return fmt.Errorf("task frontmatter %s: %w", prompt.Name, err)
+		}
+		if len(expected) > 0 {
+			violations, err := workerpathpolicy.Violations(policy, expected)
+			if err != nil {
+				return fmt.Errorf("task frontmatter %s: validate expected_paths: %w", prompt.Name, err)
+			}
+			if len(violations) > 0 {
+				return fmt.Errorf("task frontmatter %s: expected_paths are not permitted by the path policy: %s", prompt.Name, formatViolations(violations))
+			}
+		}
 	}
 	return nil
+}
+
+func metadataStrings(metadata map[string]any, key string) []string {
+	values, _ := metadata[key].([]any)
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		if value, ok := raw.(string); ok {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func promptDuration(prompt PromptState) time.Duration {
@@ -701,7 +796,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHABefore, _ = gitSHA(repoRoot)
 	}
-	content, err := assemblePrompt(prompt.Path, specContext)
+	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach)
 	if err != nil {
 		return promptState, err
 	}
@@ -789,7 +884,9 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	}
 	if len(violations) != 0 {
 		promptState.FilesChanged = changed
-		return promptState, fmt.Errorf("path policy violation at completion: %s; changes retained for review", formatViolations(violations))
+		reason := fmt.Sprintf("path policy violation at completion: %s; changes retained for review", formatViolations(violations))
+		promptState.CompletionReason = reason
+		return promptState, errors.New(reason)
 	}
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHAAfter, _ = gitSHA(repoRoot)
@@ -820,18 +917,7 @@ func taskPathPolicy(taskPath string) (workerdomain.WorkerPolicy, error) {
 	if err != nil {
 		return workerdomain.WorkerPolicy{}, err
 	}
-	toStrings := func(key string) []string {
-		var out []string
-		if values, ok := task.Metadata[key].([]any); ok {
-			for _, value := range values {
-				if text, ok := value.(string); ok {
-					out = append(out, text)
-				}
-			}
-		}
-		return out
-	}
-	policy := workerdomain.WorkerPolicy{AllowedPaths: toStrings("allowed_paths"), ForbiddenPaths: toStrings("forbidden_paths")}
+	policy := workerdomain.WorkerPolicy{AllowedPaths: metadataStrings(task.Metadata, "allowed_paths"), ForbiddenPaths: metadataStrings(task.Metadata, "forbidden_paths")}
 	return policy, nil
 }
 
@@ -867,7 +953,7 @@ func formatViolations(violations []workerpathpolicy.Violation) string {
 	return strings.Join(parts, ", ")
 }
 
-func assemblePrompt(path, specContext string) (string, error) {
+func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
 	active, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -878,12 +964,23 @@ func assemblePrompt(path, specContext string) (string, error) {
 	if strings.TrimSpace(specContext) != "" {
 		assembledBody = "# Shared Context\n\n" + specContext + "\n\n# Active Prompt\n\n"
 	}
-	assembledBody += body + orderedCompletionContract
+	assembledBody += body
+	if commitEach {
+		assembledBody += promptGrinderCommitOwnershipContract
+	}
+	assembledBody += orderedCompletionContract
 	if ok {
 		return frontmatter + assembledBody, nil
 	}
 	return assembledBody, nil
 }
+
+const promptGrinderCommitOwnershipContract = `
+
+# Commit Ownership
+
+PromptGrinder is running with --commit-each and owns the checkpoint commit for this slice. Do not run git commit, amend a commit, or otherwise move HEAD. Leave approved changes in the worktree for PromptGrinder to validate and commit.
+`
 
 const orderedCompletionContract = `
 
@@ -936,7 +1033,14 @@ func readSpecificationContext(prompts []Prompt) (string, error) {
 }
 
 type folderStore struct {
-	Root string
+	Root       string
+	LegacyRoot string
+}
+
+func folderStateRoot(homeDir, sequenceID string) string {
+	sequenceRoot := newSequenceStore(homeDir).Root
+	resolvedHome := filepath.Dir(filepath.Dir(sequenceRoot))
+	return filepath.Join(resolvedHome, "state", "run-folders", sequenceID)
 }
 
 func (s folderStore) ensure() error {
@@ -973,6 +1077,9 @@ func (s folderStore) loadOrCreate(folder string, options Options) (RunState, boo
 
 func (s folderStore) loadRun() (RunState, error) {
 	data, err := os.ReadFile(filepath.Join(s.Root, "run.json"))
+	if errors.Is(err, os.ErrNotExist) && s.LegacyRoot != "" {
+		data, err = os.ReadFile(filepath.Join(s.LegacyRoot, "run.json"))
+	}
 	if err != nil {
 		return RunState{}, err
 	}
@@ -1067,6 +1174,7 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 func sequenceStatus(items []SequenceItem) string {
 	hasFailed := false
 	hasInterrupted := false
+	hasCancelled := false
 	hasPending := false
 	for _, item := range items {
 		switch item.Status {
@@ -1074,6 +1182,8 @@ func sequenceStatus(items []SequenceItem) string {
 			hasFailed = true
 		case "interrupted":
 			hasInterrupted = true
+		case "cancelled":
+			hasCancelled = true
 		case "pending", "running":
 			hasPending = true
 		}
@@ -1083,6 +1193,9 @@ func sequenceStatus(items []SequenceItem) string {
 	}
 	if hasInterrupted {
 		return "interrupted"
+	}
+	if hasCancelled {
+		return "cancelled"
 	}
 	if hasPending {
 		return "running"
@@ -1098,6 +1211,7 @@ type SequenceProgress struct {
 	Succeeded    int        `json:"succeeded"`
 	Failed       int        `json:"failed"`
 	Interrupted  int        `json:"interrupted"`
+	Cancelled    int        `json:"cancelled"`
 	Pending      int        `json:"pending"`
 	Current      string     `json:"current"`
 	Next         string     `json:"next"`
@@ -1124,6 +1238,8 @@ func (s SequenceState) Progress() SequenceProgress {
 			if progress.Current == "" {
 				progress.Current = item.PromptName
 			}
+		case "cancelled":
+			progress.Cancelled++
 		case "running":
 			progress.Pending++
 			if progress.Current == "" {
@@ -1275,6 +1391,75 @@ func ListSequences(homeDir string) ([]SequenceProgress, error) {
 func LoadSequence(homeDir, sequenceID string) (SequenceState, error) {
 	store := newSequenceStore(homeDir)
 	return store.load(sequenceID)
+}
+
+// CancelSequence marks unfinished work as cancelled while preserving completed
+// checkpoints. The sequence remains resumable because a later run treats
+// cancelled items as unfinished work.
+func CancelSequence(homeDir, sequenceID string) (SequenceState, error) {
+	store := newSequenceStore(homeDir)
+	sequence, err := store.load(sequenceID)
+	if err != nil {
+		return SequenceState{}, err
+	}
+	if sequence.Status == "completed" || sequence.Status == "failed" {
+		return sequence, fmt.Errorf("sequence %s is already %s", sequenceID, sequence.Status)
+	}
+	now := time.Now().UTC()
+	for i := range sequence.Items {
+		switch sequence.Items[i].Status {
+		case "succeeded", "skipped", "failed":
+			continue
+		default:
+			sequence.Items[i].Status = "cancelled"
+			sequence.Items[i].FinishedAt = &now
+			sequence.Items[i].Error = "cancelled by user"
+		}
+	}
+	sequence.Status = "cancelled"
+	sequence.FinishedAt = &now
+	sequence.UpdatedAt = &now
+	sequence.refreshSummary()
+	if err := store.save(sequence); err != nil {
+		return SequenceState{}, err
+	}
+	return sequence, nil
+}
+
+// StopSequenceSupervisor signals only a process whose persisted supervisor
+// record still matches the sequence state. This prevents stale sequence data
+// from terminating an unrelated process after PID reuse.
+func StopSequenceSupervisor(homeDir string, supervisor *Supervisor) error {
+	if supervisor == nil || supervisor.ID == "" || supervisor.PID <= 0 || supervisor.PID == os.Getpid() {
+		return nil
+	}
+	path := filepath.Join(homeDir, "state", "supervisors", safeName(supervisor.ID)+".json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var record Supervisor
+	if err := json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	if record.ID != supervisor.ID || record.PID != supervisor.PID || record.Status != "running" {
+		return nil
+	}
+	if err := syscall.Kill(record.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	now := time.Now().UTC()
+	record.Status = "cancelled"
+	record.HeartbeatAt = &now
+	record.FinishedAt = &now
+	encoded, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(encoded, '\n'), 0o644)
 }
 
 func CurrentSequence(homeDir string) (SequenceState, error) {
@@ -1484,7 +1669,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 	}
 	sum := sha256.Sum256([]byte(strings.Join(hashInput, "\n")))
 	id := "seq_" + hex.EncodeToString(sum[:])[:16]
-	return SequenceState{SequenceID: id, Folder: folder, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
+	return SequenceState{SequenceID: id, Folder: folder, RepositoryPath: repoRoot, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
 }
 
 func sequenceConfig(repoRoot string, options Options) (config.Config, error) {
@@ -1668,15 +1853,11 @@ func gitCommitFocused(dir, message string, baseline workerpathpolicy.Snapshot, a
 	if len(approved) == 0 {
 		return "", nil
 	}
-	beforeStage, err := workerpathpolicy.Capture(dir)
-	if err != nil {
-		return "", fmt.Errorf("re-check worktree before staging: %w", err)
-	}
 	actual, err := attributedWorkerChanges(dir, baseline)
 	if err != nil {
 		return "", err
 	}
-	if !equalStrings(actual, approved) || beforeStage.Head != baseline.Head {
+	if !equalStrings(actual, approved) {
 		return "", fmt.Errorf("worktree changed during worker attribution; refusing automatic commit")
 	}
 	args := []string{"-C", dir, "add", "--all", "--"}
@@ -1688,7 +1869,7 @@ func gitCommitFocused(dir, message string, baseline workerpathpolicy.Snapshot, a
 	}
 	staged, err := gitChangedPathSet(dir, "diff", "--cached", "--name-status", "-z", "--find-renames")
 	if err != nil || !equalStrings(staged, approved) {
-		return "", fmt.Errorf("staged change set does not exactly match approved worker changes")
+		return "", stagedChangeMismatchError(dir, baseline, approved)
 	}
 	preCommit, err := workerpathpolicy.Capture(dir)
 	if err != nil {
@@ -1711,6 +1892,14 @@ func gitCommitFocused(dir, message string, baseline workerpathpolicy.Snapshot, a
 		return "", fmt.Errorf("created commit does not exactly match approved worker changes")
 	}
 	return commit, nil
+}
+
+func stagedChangeMismatchError(dir string, baseline workerpathpolicy.Snapshot, approved []string) error {
+	conflict, err := workerpathpolicy.DetectCommitOwnershipConflict(dir, baseline, approved)
+	if err == nil && conflict != nil {
+		return conflict
+	}
+	return fmt.Errorf("staged change set does not exactly match approved worker changes")
 }
 
 func gitNullPaths(dir string, args ...string) ([]string, error) {
@@ -1768,5 +1957,5 @@ func equalStrings(a, b []string) bool {
 
 func isPromptGrinderStatePath(name string) bool {
 	name = filepath.ToSlash(strings.TrimSpace(name))
-	return name == ".promptgrinder" || strings.HasPrefix(name, ".promptgrinder/") || strings.Contains(name, "/.promptgrinder/")
+	return legacyRunStatePath(name)
 }

@@ -10,13 +10,17 @@ reference.
 ### UC-01: Check local readiness
 
 Use `promptgrinder doctor` to verify the platform, configuration, state home,
-Git, configured runtimes, and terminal adapter without changing files. Use
-`--active` only when a visible terminal launch probe is wanted.
+supported runtime CLI inventory, Git, repository, generated-worker `PATH`,
+headless availability, installed Terminal.app/iTerm2 applications, and selected
+terminal adapter without modifying files. Use `--active` only when a visible
+terminal launch probe is wanted.
 
 ### UC-02: Set up PromptGrinder-owned local state
 
-Use `promptgrinder setup --dry-run` to preview first-use files, then
-`promptgrinder setup` to create the minimal local configuration and state.
+Running plain `promptgrinder` on an unconfigured installation points to setup
+without writing files. Use `promptgrinder setup --dry-run` to scan machine
+capabilities and preview first-use files, then `promptgrinder setup` to repeat
+the scan and create the minimal local configuration and state after approval.
 When writes are planned, the dry-run summary identifies the output as a
 preview and confirms that the planned changes were not written.
 Setup does not install or authenticate an AI runtime, edit shell profiles, or
@@ -105,11 +109,17 @@ the configured defaults.
 Use `promptgrinder run-folder <folder>` to execute recognized numbered
 Markdown tasks in order. A `00-specification*.md` file supplies shared context
 without running unless `--include-specification` is selected.
+Typed filenames remain supported. A generic numbered filename is runnable when
+frontmatter supplies a stable `id` and explicit `type`; optional `role` becomes
+the displayed execution identity, and `depends_on` references must resolve to
+earlier task IDs before the sequence can start. Slice path metadata—not the
+role label—is the enforced ordinary run-folder file policy.
 Before sequence creation, PromptGrinder reports how many Markdown files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
-Foreground failures before sequence state exists print the actionable
-preflight reason.
+The invoking process also resolves roles and dependencies and checks Git
+cleanliness before a detached supervisor is started. Preflight failures print
+the actionable reason synchronously and create no sequence state.
 
 ### UC-16: Stop unsafe sequence continuation
 
@@ -120,13 +130,19 @@ completion reports stop the sequence even when the runtime process exits zero.
 ### UC-17: Run a sequence in the foreground
 
 Use `--detach=false` to keep the sequence in the invoking terminal with prompt
-inventory, current activity, elapsed time, worker IDs, compact log links, and
-immediate failure reasons.
+inventory, current activity, elapsed time, and immediate failure reasons.
+Finished rows compactly identify the enforced scope and effective runtime, for
+example `task.md|slice-policy|codex/gpt-5.6-sol|4m 39s`. An unrestricted task
+is labeled `unscoped`. PromptGrinder uses the model reported by the runtime;
+when no trustworthy model evidence is available it displays `default` rather
+than guessing. Exact worker IDs, paths, policy, and logs remain in worker and
+JSON detail.
 
 ### UC-18: Run a sequence in the background
 
 Use detached mode to return control to the shell while a local supervisor runs
-the sequence. Startup prints the sequence ID and a copyable status command;
+the sequence. Startup reports whether it is starting, running, already
+completed, or failed preflight, then prints the sequence ID and a copyable status command;
 completion and failure are retained as local events.
 
 ### UC-19: Resume or restart ordered work
@@ -139,13 +155,31 @@ same sequence from the beginning, `--fresh` to create a new sequence, or
 
 Use `--checkpoint` and `--commit-each` to retain prompt-level Git evidence.
 PromptGrinder requires safe baselines when requested and must not include
-pre-existing unrelated changes in a focused worker commit.
+pre-existing unrelated changes in a focused worker commit. If exactly one
+worker commit contains exactly the approved changes and the worktree is clean,
+PromptGrinder reports a commit-ownership conflict with the commit SHA and safe
+recovery choices. Unrelated paths, multiple commits, residual changes, and
+genuine index mismatches retain the generic fail-closed diagnostic.
+Dirty preflight diagnostics group the exact modified, added, deleted,
+conflicted, and untracked paths. PromptGrinder-owned run state lives below
+`PROMPTGRINDER_HOME`, outside the worktree.
+With `--commit-each`, the rendered worker prompt explicitly forbids worker-owned
+commits and leaves PromptGrinder responsible for the checkpoint. If a worker
+commits anyway, the existing exact-commit diagnostic identifies the commit
+without amending, resetting, or accepting it.
 
 ### UC-21: Inspect sequence history
 
 Use `promptgrinder sequence <id|current>` for prompt-level progress and
 `promptgrinder sequences` for sequence history. Filter the list by prompt
 folder when investigating repeated or concurrent workflows.
+
+### UC-21a: Cancel a sequence safely
+
+Use `promptgrinder sequence cancel <sequence-id>` to cancel the active worker
+and matching detached supervisor. PromptGrinder marks unfinished slices
+cancelled, releases its worktree claim, and preserves completed checkpoints so
+the folder can be resumed later.
 
 ## Project and role discovery
 
@@ -155,7 +189,10 @@ Run `promptgrinder discover` at a repository root to detect supported
 languages, frameworks, build tools, CI, documentation, infrastructure, and
 project structure without an AI call. It creates a new `.promptgrinder/`
 project manifest, role YAML files, and context directory without overwriting
-existing files.
+existing files. If an existing generated target differs from current analysis,
+discovery reports the exact conflict, confirms that nothing was written, and
+explains how to preserve and reconcile the existing configuration before
+trying again.
 
 ### UC-23: Discover roles for a monorepo
 
@@ -235,6 +272,10 @@ engine, not the durable worker record.
 Use allowed and forbidden paths, branch naming, clean-worktree requirements,
 and managed worktree selection to keep workers inside their responsibilities.
 Violations remain available for review rather than being silently reverted.
+Directory subtrees must use an explicit glob such as `backend/**`; a trailing
+slash is rejected with a correction. Optional task `expected_paths` are checked
+against allowed and forbidden patterns during preflight. Completion output
+prints the exact violating path and reason immediately.
 
 ### UC-33: Change runtimes without changing roles
 
@@ -362,8 +403,9 @@ theme with `--theme`.
 ### UC-54: Use stable plain output
 
 Use `--plain` to disable colors, animation, and terminal control sequences
-while retaining status, sequence IDs, worker IDs, logs, elapsed time, and
-failure reasons.
+while retaining status, sequence IDs, compact scope/runtime identity, elapsed
+time, and failure reasons. Exact worker and log detail remains inspectable with
+the status commands and JSON output.
 
 ### UC-55: Integrate PromptGrinder into local automation
 
