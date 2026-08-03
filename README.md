@@ -77,6 +77,10 @@ mkdir -p tasks/project-archive
 
 cat > tasks/project-archive/10-implement-domain.md <<'EOF'
 ---
+id: project-archive-domain
+type: implement
+role: backend-feature
+depends_on: []
 acceptance_criteria:
   - Archive state is persisted and existing projects remain readable.
 allowed_paths:
@@ -94,6 +98,11 @@ EOF
 
 cat > tasks/project-archive/20-implement-cli.md <<'EOF'
 ---
+id: project-archive-cli
+type: implement
+role: backend-feature
+depends_on:
+  - project-archive-domain
 acceptance_criteria:
   - Users can archive a project through the public CLI.
 allowed_paths:
@@ -110,6 +119,11 @@ EOF
 
 cat > tasks/project-archive/30-verify-project-archive.md <<'EOF'
 ---
+id: project-archive-verification
+type: verify
+role: backend-test
+depends_on:
+  - project-archive-cli
 acceptance_criteria:
   - The feature is covered by focused and repository-wide validation.
 allowed_paths:
@@ -136,7 +150,10 @@ git commit -m "Add PromptGrinder roles and project archive slices"
 
 Runnable slice names use `NN-implement-*.md`, `NN-test-*.md`,
 `NN-verify-*.md`, or `NN-review-*.md`. An optional
-`00-specification*.md` supplies shared context. For a large SonarQube cleanup,
+`00-specification*.md` supplies shared context. Existing descriptive filenames
+such as `01-snapshot-reliability.md` are also safe when frontmatter declares a
+stable `id` and explicit `type`; `role` identifies the worker responsibility
+and `depends_on` names earlier task IDs. For a large SonarQube cleanup,
 use the same pattern but group related findings into bounded files such as
 `10-implement-sonar-service-errors.md`, `20-implement-sonar-cli-errors.md`, and
 `30-verify-sonar-cleanup.md`; put rule IDs, affected paths, and the relevant
@@ -177,6 +194,12 @@ promptgrinder sequences --folder tasks/project-archive
 `sequence current` shows the overall state, current slice, per-slice results,
 worker IDs, completion safety, and retained logs. `sequences --folder` is useful
 when the same slice folder has been run more than once.
+
+Completed terminal rows stay compact while showing the effective boundary and
+runtime: `task.md|slice-policy|codex/gpt-5.6-sol|4m 39s`. Tasks without path
+restrictions show `unscoped`; models selected implicitly by a runtime show
+the model reported by that runtime when available, otherwise `default`. Use
+sequence status or JSON output for exact paths, worker IDs, and logs.
 
 ![PromptGrinder executing five sequential work orders successfully](docs/images/sequential-workflow.png)
 
@@ -370,10 +393,11 @@ output.
 
 ### Ordered folder completion contract
 
-`run-folder` discovers only recognized numbered Markdown names:
+`run-folder` discovers recognized typed Markdown names:
 `00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
-`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. README files,
-notes, completion reports, and unknown numbered file types are never runnable.
+`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. It also accepts
+generic `NN-*.md` names when they declare valid `id` and `type` frontmatter.
+README files, notes, completion reports, and untyped numbered files are never runnable.
 Before creating sequence state, PromptGrinder classifies every visible Markdown
 file and validates every included prompt. Numbered task-like files with an
 unsupported name fail preflight with included/total counts instead of being
@@ -460,12 +484,16 @@ PromptGrinder provides orchestration controls, not a security guarantee:
 - shared-context workflows require Git and a clean worktree by default;
 - no hosted PromptGrinder service is required.
 
-### Task frontmatter contract v1
+### Task frontmatter contract v2
 
 Frontmatter is a strict, versioned contract. Unknown top-level keys and unknown
-keys nested under `engine` are errors; YAML anchors/aliases and `depends_on` are
-not supported. Errors name the source task. Runtime metadata remains separate
-from task instructions:
+keys nested under `engine` are errors; YAML anchors and aliases are not
+supported. Errors name the source task. Runtime metadata remains separate from
+task instructions:
+
+- `id` provides stable task identity, `type` is `implement`, `test`, `verify`,
+  or `review`, `role` identifies the declared execution responsibility, and
+  `depends_on` lists stable IDs that must appear earlier in a serialized folder;
 
 - `engine` (a name or mapping with `name`, `model`, `profile`, `sandbox`,
   `approval`, `web_search`, and `images`), plus the compatible top-level engine
@@ -483,7 +511,7 @@ from task instructions:
 executable instructions in the Markdown body and use only supported metadata.
 
 The four semantic fields are rendered, in the order shown above, into a
-`# Task Semantics (v1)` preamble sent to the engine. The Markdown body following
+`# Task Semantics (v2)` preamble sent to the engine. The Markdown body following
 frontmatter is otherwise byte-for-byte unchanged. Validation entries are AI
 instructions only: PromptGrinder never executes them as shell commands.
 Absolute or repository-escaping path patterns, identical allowed/forbidden

@@ -68,7 +68,7 @@ func TestContractRendersSemanticsInStableOrderAndPreservesBody(t *testing.T) {
 	if err := Validate(task, "tasks/example.md"); err != nil {
 		t.Fatal(err)
 	}
-	want := "# Task Semantics (v1)\n\n## Acceptance Criteria\n\n- It works\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n\n## Validation\n\n- go test ./...\n\n" + body
+	want := "# Task Semantics (v2)\n\n## Acceptance Criteria\n\n- It works\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n\n## Validation\n\n- go test ./...\n\n" + body
 	if got := string(Render(task)); got != want {
 		t.Fatalf("rendered prompt:\n%q\nwant:\n%q", got, want)
 	}
@@ -78,7 +78,11 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 	tests := []struct{ name, yaml, want string }{
 		{"unknown", "mystery: true", `unknown top-level key "mystery"`},
 		{"nested", "engine:\n  mystery: true", `unknown nested key "engine.mystery"`},
-		{"depends", "depends_on: task-a", "depends_on is not supported"},
+		{"depends type", "depends_on: task-a", "depends_on must be a list"},
+		{"bad id", "id: Not_A_Slug", "id must be a lowercase"},
+		{"bad type", "type: deploy", "type must be one of"},
+		{"bad role", "role: Backend Feature", "role must be a lowercase"},
+		{"duplicate dependency", "depends_on: [task-a, task-a]", `depends_on contains duplicate "task-a"`},
 		{"criteria type", "acceptance_criteria: true", "must be a string or nonempty list"},
 		{"empty validation", "validation: []", "must be a string or nonempty list"},
 		{"null paths", "allowed_paths:", "must be a list of repository-relative patterns"},
@@ -98,6 +102,20 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 				t.Fatalf("err = %v", err)
 			}
 		})
+	}
+}
+
+func TestContractRendersExecutionIdentityAndDependencies(t *testing.T) {
+	task, err := Parse("---\nid: api-contract\ntype: implement\nrole: backend-feature\ndepends_on: [snapshot-reliability]\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "task.md"); err != nil {
+		t.Fatal(err)
+	}
+	want := "# Task Semantics (v2)\n\n## Task ID\n\n- api-contract\n\n## Task Type\n\n- implement\n\n## Role\n\n- backend-feature\n\n## Dependencies\n\n- snapshot-reliability\n\nbody"
+	if got := string(Render(task)); got != want {
+		t.Fatalf("rendered = %q, want %q", got, want)
 	}
 }
 

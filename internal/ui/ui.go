@@ -71,16 +71,20 @@ func (r *SharedProgressRenderer) Update(progress pgruntime.SharedRunProgress) {
 	}
 
 	name := filepath.Base(progress.TaskPath)
-	label := progressLabel(progress)
+	label := compactProgressLabel(progress)
 	if r.animated {
 		prefix := colorizeStatusIcon("✓", "succeeded", r.color)
 		if progress.Status == pgruntime.SharedRunFailed {
 			prefix = colorizeStatusIcon("✗", "failed", r.color)
 		}
-		fmt.Fprintf(r.w, "\r\033[2K%s [%d/%d] %s - %s\n", prefix, progress.Index, progress.Total, name, label)
+		fmt.Fprintf(r.w, "\r\033[2K%s [%d/%d] %s|%s\n", prefix, progress.Index, progress.Total, name, label)
 		return
 	}
-	fmt.Fprintf(r.w, "[%d/%d] %s - %s\n", progress.Index, progress.Total, name, label)
+	prefix := "✓"
+	if progress.Status == pgruntime.SharedRunFailed {
+		prefix = "✗"
+	}
+	fmt.Fprintf(r.w, "%s [%d/%d] %s|%s\n", prefix, progress.Index, progress.Total, name, label)
 }
 
 func colorizeStatusIcon(icon, status, successColor string) string {
@@ -97,15 +101,18 @@ func colorizeStatusIcon(icon, status, successColor string) string {
 	return color + icon + "\033[0m"
 }
 
-func progressLabel(progress pgruntime.SharedRunProgress) string {
-	label := "Completed successfully"
-	if progress.Status == pgruntime.SharedRunFailed {
-		label = "Failed"
+func compactProgressLabel(progress pgruntime.SharedRunProgress) string {
+	scope, engine, model := progress.Scope, progress.Engine, progress.Model
+	if scope == "" {
+		scope = "unscoped"
 	}
-	if progress.Duration > 0 {
-		label += " in " + formatDuration(progress.Duration)
+	if engine == "" {
+		engine = "unknown-engine"
 	}
-	return label
+	if model == "" {
+		model = "default"
+	}
+	return scope + "|" + engine + "/" + model + "|" + formatDuration(progress.Duration)
 }
 
 func formatDuration(duration time.Duration) string {

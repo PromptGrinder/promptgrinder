@@ -23,6 +23,7 @@ import (
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workeridentity"
 	"promptgrinder/internal/workerpathpolicy"
 )
 
@@ -126,6 +127,9 @@ type ProgressEvent struct {
 	PromptType       PromptType       `json:"prompt_type,omitempty"`
 	Status           string           `json:"status,omitempty"`
 	WorkerID         string           `json:"worker_id,omitempty"`
+	Scope            string           `json:"scope,omitempty"`
+	Engine           string           `json:"engine,omitempty"`
+	Model            string           `json:"model,omitempty"`
 	LogPath          string           `json:"log_path,omitempty"`
 	Completed        int              `json:"completed"`
 	Total            int              `json:"total"`
@@ -154,9 +158,12 @@ type persistedProgressEvent struct {
 }
 
 type Prompt struct {
-	Path string
-	Name string
-	Type PromptType
+	Path      string
+	Name      string
+	ID        string
+	Type      PromptType
+	Role      string
+	DependsOn []string
 }
 
 type FolderInspection struct {
@@ -293,23 +300,104 @@ func Inspect(folder string) (FolderInspection, error) {
 			inspection.Ignored = append(inspection.Ignored, name)
 			continue
 		}
-		promptType := Classify(name)
-		if promptType == TypeUnknown {
+		prompt, err := inspectPrompt(filepath.Join(abs, name), name)
+		if err != nil {
+			return FolderInspection{}, err
+		}
+		if prompt.Type == TypeUnknown {
 			inspection.Invalid = append(inspection.Invalid, name)
 			continue
 		}
-		inspection.Prompts = append(inspection.Prompts, Prompt{Path: filepath.Join(abs, name), Name: name, Type: promptType})
+		inspection.Prompts = append(inspection.Prompts, prompt)
 	}
 	sort.SliceStable(inspection.Prompts, func(i, j int) bool {
 		return inspection.Prompts[i].Name < inspection.Prompts[j].Name
 	})
 	sort.Strings(inspection.Ignored)
 	sort.Strings(inspection.Invalid)
+	if err := validatePromptDependencies(inspection.Prompts); err != nil {
+		return FolderInspection{}, fmt.Errorf("run-folder preflight: %w", err)
+	}
 	return inspection, nil
 }
 
+func inspectPrompt(promptPath, name string) (Prompt, error) {
+	data, err := os.ReadFile(promptPath)
+	if err != nil {
+		return Prompt{}, err
+	}
+	task, err := markdown.Parse(string(data))
+	if err != nil {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s: %w", name, err)
+	}
+	if err := markdown.Validate(task, name); err != nil {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %w", err)
+	}
+	filenameType := Classify(name)
+	declaredType := promptTypeValue(task.Metadata["type"])
+	if filenameType != TypeUnknown && filenameType != TypeSpecification && declaredType != TypeUnknown && filenameType != declaredType {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s declares type %q but filename declares %q", name, declaredType, filenameType)
+	}
+	promptType := filenameType
+	if promptType == TypeUnknown {
+		promptType = declaredType
+	}
+	id, _ := task.Metadata["id"].(string)
+	if filenameType == TypeUnknown && promptType != TypeUnknown && id == "" {
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s uses an untyped filename and must declare id in frontmatter", name)
+	}
+	if id == "" {
+		id = strings.TrimSuffix(name, filepath.Ext(name))
+	}
+	role, _ := task.Metadata["role"].(string)
+	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"])}, nil
+}
+
+func promptTypeValue(value any) PromptType {
+	text, _ := value.(string)
+	switch PromptType(text) {
+	case TypeImplement, TypeTest, TypeVerify, TypeReview:
+		return PromptType(text)
+	default:
+		return TypeUnknown
+	}
+}
+
+func stringListValue(value any) []string {
+	items, _ := value.([]any)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func validatePromptDependencies(prompts []Prompt) error {
+	positions := make(map[string]int, len(prompts))
+	for index, prompt := range prompts {
+		if previous, exists := positions[prompt.ID]; exists {
+			return fmt.Errorf("duplicate task id %q in %s and %s", prompt.ID, prompts[previous].Name, prompt.Name)
+		}
+		positions[prompt.ID] = index
+	}
+	for index, prompt := range prompts {
+		for _, dependency := range prompt.DependsOn {
+			position, exists := positions[dependency]
+			if !exists {
+				return fmt.Errorf("%s depends on unknown task id %q", prompt.Name, dependency)
+			}
+			if position >= index {
+				return fmt.Errorf("%s depends on %q, which must appear earlier in filename order", prompt.Name, dependency)
+			}
+		}
+	}
+	return nil
+}
+
 func invalidPromptNamesError(inspection FolderInspection) error {
-	return fmt.Errorf("run-folder preflight: %d of %d Markdown files included; unsupported numbered prompt name(s): %s; use 00-specification*.md or NN-implement-, NN-test-, NN-verify-, NN-final-verify-, or NN-review- filenames", len(inspection.Prompts), inspection.MarkdownTotal, strings.Join(inspection.Invalid, ", "))
+	return fmt.Errorf("run-folder preflight: %d of %d Markdown files included; unsupported numbered prompt name(s): %s; use a typed filename or declare id and type in frontmatter", len(inspection.Prompts), inspection.MarkdownTotal, strings.Join(inspection.Invalid, ", "))
 }
 
 // ResolveSequenceID computes the stable identity used by Run without creating
@@ -521,7 +609,8 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			_ = store.saveRun(runState)
 			summary.Run = runState
 			summary.Failed = err
-			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
+			identity := workeridentity.FromWorker(promptState.Worker)
+			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
 			return summary, err
 		}
 		if err := store.savePrompt(promptState); err != nil {
@@ -542,7 +631,8 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			return summary, err
 		}
 		completed[prompt.Name] = true
-		emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "succeeded", WorkerID: promptState.WorkerID, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Completed: len(runState.Completed), Total: len(prompts)})
+		identity := workeridentity.FromWorker(promptState.Worker)
+		emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "succeeded", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Completed: len(runState.Completed), Total: len(prompts)})
 	}
 	runState.Status = "completed"
 	runState.Current = ""

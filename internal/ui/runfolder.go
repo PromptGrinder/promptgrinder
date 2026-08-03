@@ -217,6 +217,12 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 }
 
 func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent) {
+	if event.Type == "prompt.succeeded" || event.Type == "prompt.failed" {
+		index, total := r.eventPositionLocked(event)
+		fmt.Fprintf(r.w, "%s [%d/%d] %s|%s\n", stateIcon(event.Status), index, total, event.PromptName, compactRunFolderIdentity(event))
+		writeFailureDetails(r.w, event)
+		return
+	}
 	duration := ""
 	if event.Type != "prompt.started" {
 		duration = " in " + formatDuration(event.Duration)
@@ -230,6 +236,23 @@ func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent)
 	}
 	fmt.Fprintln(r.w)
 	writeFailureDetails(r.w, event)
+}
+
+func (r *RunFolderRenderer) eventPositionLocked(event runfolder.ProgressEvent) (int, int) {
+	total := event.Total
+	if total == 0 {
+		total = len(r.items)
+	}
+	for index, item := range r.items {
+		if item.Name == event.PromptName {
+			return index + 1, total
+		}
+	}
+	index := event.Completed
+	if event.Type == "prompt.failed" {
+		index++
+	}
+	return index, total
 }
 
 func (r *RunFolderRenderer) renderDashboardLocked() {
@@ -267,10 +290,10 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 			duration = " " + formatDuration(detail.Duration)
 		}
 		line := fmt.Sprintf("%s [%d/%d] %s [%s] - %s%s", icon, i+1, len(r.items), item.Name, item.Type, stateLabel(item.Status), duration)
-		if detail.WorkerID != "" {
-			line += " (worker: " + detail.WorkerID + ")"
+		if item.Status == "succeeded" || item.Status == "failed" {
+			line = fmt.Sprintf("%s [%d/%d] %s|%s", icon, i+1, len(r.items), item.Name, compactRunFolderIdentity(detail))
 		}
-		if detail.LogPath != "" {
+		if item.Status == "failed" && detail.LogPath != "" {
 			line += " (log: " + terminalFileLink(detail.LogPath) + ")"
 		}
 		lines = append(lines, line)
@@ -281,6 +304,20 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	for _, line := range lines {
 		fmt.Fprint(r.w, "\033[2K"+line+"\n")
 	}
+}
+
+func compactRunFolderIdentity(event runfolder.ProgressEvent) string {
+	scope, engine, model := event.Scope, event.Engine, event.Model
+	if scope == "" {
+		scope = "unscoped"
+	}
+	if engine == "" {
+		engine = "unknown-engine"
+	}
+	if model == "" {
+		model = "default"
+	}
+	return scope + "|" + engine + "/" + model + "|" + formatDuration(event.Duration)
 }
 
 func terminalFileLink(path string) string {
