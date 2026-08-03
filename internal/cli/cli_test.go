@@ -1189,7 +1189,7 @@ func TestCLIRunSharedContextAllowsCommitOptOut(t *testing.T) {
 func TestCLIRunSharedContextPrintsPromptProgress(t *testing.T) {
 	service := &fakeService{runProgress: []pgruntime.SharedRunProgress{
 		{Index: 1, Total: 2, TaskPath: "/prompts/02A-task.md", Status: pgruntime.SharedRunStarted},
-		{Index: 1, Total: 2, TaskPath: "/prompts/02A-task.md", Status: pgruntime.SharedRunSucceeded},
+		{Index: 1, Total: 2, TaskPath: "/prompts/02A-task.md", Status: pgruntime.SharedRunSucceeded, Scope: "slice-policy", Engine: "codex", Model: "gpt-5.6-sol"},
 	}}
 	out := &bytes.Buffer{}
 	cmd := NewRootCommand(service, out, &bytes.Buffer{})
@@ -1199,7 +1199,7 @@ func TestCLIRunSharedContextPrintsPromptProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "[1/2] 02A-task.md - In progress") ||
-		!strings.Contains(out.String(), "[1/2] 02A-task.md - Completed successfully") {
+		!strings.Contains(out.String(), "✓ [1/2] 02A-task.md|slice-policy|codex/gpt-5.6-sol|<1s") {
 		t.Fatalf("output = %q", out.String())
 	}
 }
@@ -1268,7 +1268,7 @@ func TestCLIValidateJSON(t *testing.T) {
 }
 
 func TestCLIValidateRenderPrintsExactPromptBytes(t *testing.T) {
-	want := "# Task Semantics (v1)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
+	want := "# Task Semantics (v2)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
 	service := &fakeService{validatePlan: worker.ValidationPlan{Valid: true, Engine: "codex", RenderedPrompt: want, ExecutionPlan: map[string]any{}}}
 	out := &bytes.Buffer{}
 	cmd := NewRootCommand(service, out, &bytes.Buffer{})
@@ -2265,7 +2265,7 @@ func TestCLIRunFolderForegroundRendersLifecycleWithoutDuplicateInventory(t *test
 		{Type: "prompt.started", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "running"},
 		{Type: "prompt.skipped", PromptName: "00-spec.md", PromptType: runfolder.TypeSpecification, Status: "skipped"},
 		{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "running"},
-		{Type: "prompt.succeeded", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "succeeded", WorkerID: "wrk_1", LogPath: "/tmp/worker.log", Duration: time.Second},
+		{Type: "prompt.succeeded", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "succeeded", WorkerID: "wrk_1", Scope: "slice-policy", Engine: "codex", Model: "gpt-5.6-sol", LogPath: "/tmp/worker.log", Duration: time.Second, Completed: 2, Total: 2},
 		{Type: "run.completed", SequenceID: "seq_cli"},
 	}
 	service := &fakeService{runFolderProgress: events}
@@ -2287,7 +2287,7 @@ func TestCLIRunFolderForegroundRendersLifecycleWithoutDuplicateInventory(t *test
 				t.Fatal(err)
 			}
 			got := tc.out.(interface{ String() string }).String()
-			for _, want := range []string{"Mode: foreground", "Sequence: seq_cli", "00-spec.md [specification] - skipped", "10-implement.md [implement] - succeeded", "worker: wrk_1", "Result: succeeded"} {
+			for _, want := range []string{"Mode: foreground", "Sequence: seq_cli", "00-spec.md [specification] - skipped", "10-implement.md|slice-policy|codex/gpt-5.6-sol|1s", "Result: succeeded"} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("output missing %q: %q", want, got)
 				}
@@ -2323,7 +2323,7 @@ func TestCLIRunFolderForegroundResumeFailureQuotesFolder(t *testing.T) {
 		t.Fatalf("exit code = %d %v, want %d", code, ok, ExitExecutionFailed)
 	}
 	got := out.String()
-	for _, want := range []string{"10-done.md [implement] - succeeded", "20-next.md [test] - failed", "Result: failed", `Resume: promptgrinder run-folder 'tasks/odd path;$(touch nope)'"'"'s' --resume`} {
+	for _, want := range []string{"10-done.md [implement] - succeeded", "✗ [2/2] 20-next.md|unscoped|unknown-engine/default|<1s", "Result: failed", `Resume: promptgrinder run-folder 'tasks/odd path;$(touch nope)'"'"'s' --resume`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q: %q", want, got)
 		}

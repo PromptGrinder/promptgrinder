@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"promptgrinder/internal/config"
 	"promptgrinder/internal/engine"
@@ -95,6 +96,22 @@ func TestRunFolderCreatesMultipleWorkers(t *testing.T) {
 	}
 	if len(workers) != 2 {
 		t.Fatalf("workers = %#v", workers)
+	}
+}
+
+func TestReportSharedRunProgressIncludesRuntimeIdentity(t *testing.T) {
+	var got SharedRunProgress
+	options := RunOptions{OnProgress: func(progress SharedRunProgress) { got = progress }}
+	worker := state.Worker{
+		ID: "wrk_test", Engine: "codex",
+		ResolvedMetadata: map[string]any{
+			"allowed_paths": []any{"backend/**"},
+			"engine":        map[string]any{"name": "codex", "model": "gpt-5.6-sol"},
+		},
+	}
+	reportSharedRunProgress(options, 0, 6, "/tasks/02-backend.md", worker, SharedRunSucceeded, time.Minute)
+	if got.Scope != "slice-policy" || got.Engine != "codex" || got.Model != "gpt-5.6-sol" || got.WorkerID != "wrk_test" {
+		t.Fatalf("progress = %#v", got)
 	}
 }
 

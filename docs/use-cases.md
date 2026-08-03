@@ -109,6 +109,11 @@ the configured defaults.
 Use `promptgrinder run-folder <folder>` to execute recognized numbered
 Markdown tasks in order. A `00-specification*.md` file supplies shared context
 without running unless `--include-specification` is selected.
+Typed filenames remain supported. A generic numbered filename is runnable when
+frontmatter supplies a stable `id` and explicit `type`; optional `role` becomes
+the displayed execution identity, and `depends_on` references must resolve to
+earlier task IDs before the sequence can start. Slice path metadata—not the
+role label—is the enforced ordinary run-folder file policy.
 Before sequence creation, PromptGrinder reports how many Markdown files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
@@ -124,8 +129,13 @@ completion reports stop the sequence even when the runtime process exits zero.
 ### UC-17: Run a sequence in the foreground
 
 Use `--detach=false` to keep the sequence in the invoking terminal with prompt
-inventory, current activity, elapsed time, worker IDs, compact log links, and
-immediate failure reasons.
+inventory, current activity, elapsed time, and immediate failure reasons.
+Finished rows compactly identify the enforced scope and effective runtime, for
+example `task.md|slice-policy|codex/gpt-5.6-sol|4m 39s`. An unrestricted task
+is labeled `unscoped`. PromptGrinder uses the model reported by the runtime;
+when no trustworthy model evidence is available it displays `default` rather
+than guessing. Exact worker IDs, paths, policy, and logs remain in worker and
+JSON detail.
 
 ### UC-18: Run a sequence in the background
 
@@ -373,8 +383,9 @@ theme with `--theme`.
 ### UC-54: Use stable plain output
 
 Use `--plain` to disable colors, animation, and terminal control sequences
-while retaining status, sequence IDs, worker IDs, logs, elapsed time, and
-failure reasons.
+while retaining status, sequence IDs, compact scope/runtime identity, elapsed
+time, and failure reasons. Exact worker and log detail remains inspectable with
+the status commands and JSON output.
 
 ### UC-55: Integrate PromptGrinder into local automation
 

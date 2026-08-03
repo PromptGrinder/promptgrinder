@@ -243,6 +243,47 @@ func TestDiscoverIncludesOnlyRecognizedNumberedPrompts(t *testing.T) {
 	}
 }
 
+func TestDiscoverUsesExplicitMetadataForGenericNumberedPrompts(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "01-snapshot-reliability.md", "---\nid: snapshot-reliability\ntype: implement\nrole: backend-feature\ndepends_on: []\n---\nfirst")
+	writePromptFile(t, dir, "02-api-contract.md", "---\nid: api-contract\ntype: review\nrole: reviewer\ndepends_on: [snapshot-reliability]\n---\nsecond")
+
+	prompts, err := Discover(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 2 || prompts[0].ID != "snapshot-reliability" || prompts[0].Type != TypeImplement || prompts[0].Role != "backend-feature" || prompts[1].Type != TypeReview || strings.Join(prompts[1].DependsOn, ",") != "snapshot-reliability" {
+		t.Fatalf("prompts = %#v", prompts)
+	}
+}
+
+func TestDiscoverRejectsInvalidExplicitDependencyGraph(t *testing.T) {
+	for _, test := range []struct {
+		name, first, second, want string
+	}{
+		{name: "unknown", first: "id: first\ntype: implement", second: "id: second\ntype: test\ndepends_on: [missing]", want: `depends on unknown task id "missing"`},
+		{name: "forward", first: "id: first\ntype: implement\ndepends_on: [second]", second: "id: second\ntype: test", want: "must appear earlier"},
+		{name: "duplicate", first: "id: same\ntype: implement", second: "id: same\ntype: test", want: `duplicate task id "same"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writePromptFile(t, dir, "01-first.md", "---\n"+test.first+"\n---\nfirst")
+			writePromptFile(t, dir, "02-second.md", "---\n"+test.second+"\n---\nsecond")
+			if _, err := Discover(dir); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestDiscoverGenericPromptRequiresExplicitID(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "01-task.md", "---\ntype: implement\n---\ntask")
+	if _, err := Discover(dir); err == nil || !strings.Contains(err.Error(), "must declare id") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestRunPreflightValidatesEveryPromptBeforeCreatingState(t *testing.T) {
 	dir := t.TempDir()
 	writePromptFile(t, dir, "10-implement-valid.md", "valid")

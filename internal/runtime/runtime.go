@@ -24,6 +24,7 @@ import (
 	"promptgrinder/internal/terminal"
 	"promptgrinder/internal/worker"
 	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workeridentity"
 	"promptgrinder/internal/workerpathpolicy"
 	"promptgrinder/internal/workerstate"
 	"promptgrinder/internal/worktree"
@@ -59,6 +60,9 @@ type SharedRunProgress struct {
 	Total    int
 	TaskPath string
 	WorkerID string
+	Scope    string
+	Engine   string
+	Model    string
 	Status   string
 	Duration time.Duration
 }
@@ -325,15 +329,15 @@ func (s Service) runSharedPaths(ordered []string, options RunOptions, manager wo
 			summary.Workers = append(summary.Workers, result.Worker)
 		}
 		if result.Err != nil {
-			reportSharedRunProgress(options, index, len(ordered), path, result.Worker.ID, SharedRunFailed, workerDuration(result.Worker))
+			reportSharedRunProgress(options, index, len(ordered), path, result.Worker, SharedRunFailed, workerDuration(result.Worker))
 			summary.Failed = append(summary.Failed, result.Err)
 			return summary, result.Err
 		}
 		worker := result.Worker
-		reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunStarted, 0)
+		reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunStarted, 0)
 		if worker.TerminalAdapter == "dry-run" && !state.IsTerminalStatus(worker.Status) {
 			err := fmt.Errorf("shared-context run requires workers to finish; dry-run workers do not execute")
-			reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
+			reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunFailed, workerDuration(worker))
 			summary.Failed = append(summary.Failed, err)
 			return summary, err
 		}
@@ -342,7 +346,7 @@ func (s Service) runSharedPaths(ordered []string, options RunOptions, manager wo
 			var err error
 			worker, err = manager.Store.Load(worker.ID)
 			if err != nil {
-				reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
+				reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunFailed, workerDuration(worker))
 				summary.Failed = append(summary.Failed, err)
 				return summary, err
 			}
@@ -352,14 +356,14 @@ func (s Service) runSharedPaths(ordered []string, options RunOptions, manager wo
 			err := sharedWorkerFailure(path, worker)
 			workerStopped := worker.Status == state.StatusFailed || worker.Status == state.StatusLaunchFailed
 			err = rollbackSharedFailure(repoRoot, checkpointSHA, rollbackArmed && workerStopped, err)
-			reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
+			reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunFailed, workerDuration(worker))
 			summary.Failed = append(summary.Failed, err)
 			return summary, err
 		}
 		if worker.EngineResult == nil || worker.EngineResult.SessionID == "" {
 			err := fmt.Errorf("Codex did not report a session id for %s", path)
 			err = rollbackSharedFailure(repoRoot, checkpointSHA, rollbackArmed, err)
-			reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
+			reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunFailed, workerDuration(worker))
 			summary.Failed = append(summary.Failed, err)
 			return summary, err
 		}
@@ -378,14 +382,14 @@ func (s Service) runSharedPaths(ordered []string, options RunOptions, manager wo
 		}
 		if len(violations) != 0 {
 			err := fmt.Errorf("path policy violation at completion: %d path(s); changes retained for review", len(violations))
-			reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
+			reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunFailed, workerDuration(worker))
 			summary.Failed = append(summary.Failed, err)
 			return summary, err
 		}
 		if options.CommitEach {
 			commitSHA, err := commitSharedChanges(repoRoot, "PromptGrinder: complete "+filepath.Base(path), baseline, changes)
 			if err != nil {
-				reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunFailed, workerDuration(worker))
+				reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunFailed, workerDuration(worker))
 				summary.Failed = append(summary.Failed, err)
 				return summary, err
 			}
@@ -396,7 +400,7 @@ func (s Service) runSharedPaths(ordered []string, options RunOptions, manager wo
 				rollbackArmed = true
 			}
 		}
-		reportSharedRunProgress(options, index, len(ordered), path, worker.ID, SharedRunSucceeded, workerDuration(worker))
+		reportSharedRunProgress(options, index, len(ordered), path, worker, SharedRunSucceeded, workerDuration(worker))
 		sessionID = worker.EngineResult.SessionID
 		previousTask = filepath.Base(path)
 		previousCompletionReport = worker.EngineResult.Summary
@@ -711,15 +715,19 @@ func isPromptGrinderStatePath(name string) bool {
 	return name == ".promptgrinder" || strings.HasPrefix(name, ".promptgrinder/") || strings.Contains(name, "/.promptgrinder/")
 }
 
-func reportSharedRunProgress(options RunOptions, index, total int, taskPath, workerID, status string, duration time.Duration) {
+func reportSharedRunProgress(options RunOptions, index, total int, taskPath string, worker state.Worker, status string, duration time.Duration) {
 	if options.OnProgress == nil {
 		return
 	}
+	identity := workeridentity.FromWorker(worker)
 	options.OnProgress(SharedRunProgress{
 		Index:    index + 1,
 		Total:    total,
 		TaskPath: taskPath,
-		WorkerID: workerID,
+		WorkerID: worker.ID,
+		Scope:    identity.Scope,
+		Engine:   identity.Engine,
+		Model:    identity.Model,
 		Status:   status,
 		Duration: duration,
 	})

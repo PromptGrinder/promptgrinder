@@ -40,7 +40,7 @@ func TestAssignmentSnapshotsMarkdownAndUpdatesWorkerState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantInstructions := "# Task Semantics (v1)\n\n## Acceptance Criteria\n\n- audit trail remains\n\n# Fix sonar\n\nKeep the audit trail.\n"
+	wantInstructions := "# Task Semantics (v2)\n\n## Acceptance Criteria\n\n- audit trail remains\n\n# Fix sonar\n\nKeep the audit trail.\n"
 	if task.ID != "sonar-001" || task.Instructions != wantInstructions ||
 		task.ContentSnapshot != original || task.AttemptCount != 0 ||
 		task.Status != workerdomain.TaskStatusAssigned {

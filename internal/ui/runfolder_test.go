@@ -34,7 +34,7 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	r.Close()
 
 	got := out.String()
-	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "Status: promptgrinder sequence seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "failed in 1m 6s", "worker: worker-1", "log: /tmp/worker.log", "Reason: STATUS is BLOCKED, not PASS", "Completion: STATUS=BLOCKED NEXT_PROMPT_SAFE=no", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
+	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "Status: promptgrinder sequence seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "✗ [2/6] 10-implement.md|unscoped|unknown-engine/default|1m 6s", "Reason: STATUS is BLOCKED, not PASS", "Completion: STATUS=BLOCKED NEXT_PROMPT_SAFE=no", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
@@ -80,7 +80,7 @@ func TestRunFolderRendererResumeInventoryAndDurations(t *testing.T) {
 	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: "40-verify.md", PromptType: runfolder.TypeVerify, Status: "succeeded", Duration: 2*time.Hour + 4*time.Minute + 3*time.Second})
 	r.Finish(true)
 	got := out.String()
-	for _, want := range []string{"10-implement.md [implement] - succeeded", "skipped in <1s", "succeeded in 2h 4m 3s"} {
+	for _, want := range []string{"10-implement.md [implement] - succeeded", "skipped in <1s", "✓ [5/6] 40-verify.md|unscoped|unknown-engine/default|2h 4m 3s"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
@@ -118,7 +118,7 @@ func TestRunFolderRendererUsesSharedStatusColors(t *testing.T) {
 	}
 }
 
-func TestRunFolderRendererUsesCompactInteractiveLogLink(t *testing.T) {
+func TestRunFolderRendererKeepsSuccessRowCompact(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeDefault})
@@ -129,12 +129,8 @@ func TestRunFolderRendererUsesCompactInteractiveLogLink(t *testing.T) {
 	})
 	r.Close()
 	got := out.String()
-	want := "\033]8;;file:///tmp/worker%20logs/wrk_1/worker.log\033\\worker.log\033]8;;\033\\"
-	if !strings.Contains(got, want) {
-		t.Fatalf("interactive log hyperlink missing: %q", got)
-	}
-	if strings.Contains(got, "(log: /tmp/worker logs/") {
-		t.Fatalf("interactive output exposed long log path: %q", got)
+	if !strings.Contains(got, "10-ok.md|unscoped|unknown-engine/default|<1s") || strings.Contains(got, "/tmp/worker logs/") {
+		t.Fatalf("success row is not compact: %q", got)
 	}
 }
 
@@ -150,9 +146,8 @@ func TestRunFolderRendererRedrawSurvivesWrappedRows(t *testing.T) {
 	if strings.Count(got, "\033[s") != 1 || !strings.Contains(got, "\033[u\033[J") {
 		t.Fatalf("dashboard did not use save/restore redraw: %q", got)
 	}
-	wantLink := "\033]8;;file:///tmp/worker%20logs/wrk_1/worker.log\033\\worker.log\033]8;;\033\\"
-	if !strings.Contains(got, wantLink) {
-		t.Fatalf("wrapped dashboard corrupted log hyperlink: %q", got)
+	if !strings.Contains(got, longName+"|unscoped|unknown-engine/default|<1s") {
+		t.Fatalf("wrapped dashboard corrupted compact row: %q", got)
 	}
 }
 
