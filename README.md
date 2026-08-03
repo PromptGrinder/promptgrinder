@@ -672,7 +672,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.2.1` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.2.3` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -720,6 +720,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
+- [RC.2.3 qualification](docs/release/v1.0.0-rc.2.3-qualification.md)
+- [RC.2.3 final gate](docs/release/v1.0.0-rc.2.3-final-gate.md)
+- [RC.2.3 candidate notes](docs/release/v1.0.0-rc.2.3-release-notes.md)
 - [RC.2.1 qualification](docs/release/v1.0.0-rc.2.1-qualification.md)
 - [RC.2.1 final gate](docs/release/v1.0.0-rc.2.1-final-gate.md)
 - [RC.2.1 candidate notes](docs/release/v1.0.0-rc.2.1-release-notes.md)

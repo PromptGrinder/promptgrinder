@@ -63,7 +63,7 @@ func WritePlan(root string, plan Plan) error {
 				return fmt.Errorf("inspect target %q: %w", f.Path, readErr)
 			}
 			if !bytes.Equal(existing, f.Content) {
-				return fmt.Errorf("refusing to overwrite conflicting target %q", f.Path)
+				return fmt.Errorf("existing discovery target %q differs from the current repository analysis; no files were changed. Reconcile the file manually, or move the existing .promptgrinder directory aside before running promptgrinder discover again", f.Path)
 			}
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return fmt.Errorf("inspect target %q: %w", f.Path, statErr)

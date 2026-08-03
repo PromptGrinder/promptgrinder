@@ -189,7 +189,10 @@ Run `promptgrinder discover` at a repository root to detect supported
 languages, frameworks, build tools, CI, documentation, infrastructure, and
 project structure without an AI call. It creates a new `.promptgrinder/`
 project manifest, role YAML files, and context directory without overwriting
-existing files.
+existing files. If an existing generated target differs from current analysis,
+discovery reports the exact conflict, confirms that nothing was written, and
+explains how to preserve and reconcile the existing configuration before
+trying again.
 
 ### UC-23: Discover roles for a monorepo
 
