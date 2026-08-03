@@ -186,6 +186,7 @@ type RunState struct {
 type SequenceState struct {
 	SequenceID       string         `json:"sequence_id"`
 	Folder           string         `json:"folder"`
+	RepositoryPath   string         `json:"repository_path,omitempty"`
 	Status           string         `json:"status"`
 	Template         string         `json:"template"`
 	Engine           string         `json:"engine,omitempty"`
@@ -437,11 +438,9 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 }
 
 func Run(folder string, options Options, launcher Launcher) (summary Summary, runErr error) {
-	if options.Resume && options.Fresh {
-		return Summary{}, fmt.Errorf("--resume and --fresh are mutually exclusive")
-	}
-	if options.Restart && options.NoResume {
-		return Summary{}, fmt.Errorf("--restart and --no-resume are mutually exclusive")
+	preflight, err := Preflight(folder, options)
+	if err != nil {
+		return Summary{}, err
 	}
 	if options.Restart || options.NoResume {
 		options.Fresh = true
@@ -455,44 +454,17 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	if launcher == nil {
 		return Summary{}, fmt.Errorf("run-folder requires an execution backend")
 	}
-	absFolder, err := filepath.Abs(folder)
-	if err != nil {
-		return Summary{}, err
-	}
-	repoPath := options.RepoPath
-	if repoPath == "" {
-		repoPath = "."
-	}
-	absRepoPath, err := filepath.Abs(repoPath)
-	if err != nil {
-		return Summary{}, err
-	}
-	repoRoot, err := repository.DetectRoot(absRepoPath)
-	if err != nil {
-		return Summary{}, err
-	}
+	absFolder, repoRoot := preflight.Folder, preflight.Repository
 	options.RepoPath = repoRoot
-	inspection, err := Inspect(absFolder)
-	if err != nil {
-		return Summary{}, err
-	}
-	if len(inspection.Invalid) > 0 {
-		return Summary{}, invalidPromptNamesError(inspection)
-	}
+	inspection := preflight.Inspection
 	prompts := inspection.Prompts
-	if len(prompts) == 0 {
-		return Summary{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
-	}
-	if err := validatePrompts(prompts); err != nil {
-		return Summary{}, fmt.Errorf("run-folder preflight: %w", err)
-	}
 
 	sequenceStore := newSequenceStore(options.HomeDir)
 	sequence, sequenceResumed, err := sequenceStore.loadOrCreate(absFolder, repoRoot, prompts, options)
 	if err != nil {
 		return Summary{}, err
 	}
-	store := folderStore{Root: filepath.Join(absFolder, ".promptgrinder")}
+	store := folderStore{Root: folderStateRoot(options.HomeDir, sequence.SequenceID), LegacyRoot: filepath.Join(absFolder, ".promptgrinder")}
 	runState, resumed, err := store.loadOrCreate(absFolder, options)
 	if err != nil {
 		return Summary{}, err
@@ -504,6 +476,11 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	stopSupervisor := startSupervisorHeartbeat(options, &sequence)
 	if stopSupervisor != nil {
 		defer func() {
+			if persisted, err := sequenceStore.load(sequence.SequenceID); err == nil && persisted.Status == "cancelled" {
+				sequence = persisted
+				stopSupervisor("cancelled")
+				return
+			}
 			status := "completed"
 			if runErr != nil {
 				status = "interrupted"
@@ -1026,7 +1003,14 @@ func readSpecificationContext(prompts []Prompt) (string, error) {
 }
 
 type folderStore struct {
-	Root string
+	Root       string
+	LegacyRoot string
+}
+
+func folderStateRoot(homeDir, sequenceID string) string {
+	sequenceRoot := newSequenceStore(homeDir).Root
+	resolvedHome := filepath.Dir(filepath.Dir(sequenceRoot))
+	return filepath.Join(resolvedHome, "state", "run-folders", sequenceID)
 }
 
 func (s folderStore) ensure() error {
@@ -1063,6 +1047,9 @@ func (s folderStore) loadOrCreate(folder string, options Options) (RunState, boo
 
 func (s folderStore) loadRun() (RunState, error) {
 	data, err := os.ReadFile(filepath.Join(s.Root, "run.json"))
+	if errors.Is(err, os.ErrNotExist) && s.LegacyRoot != "" {
+		data, err = os.ReadFile(filepath.Join(s.LegacyRoot, "run.json"))
+	}
 	if err != nil {
 		return RunState{}, err
 	}
@@ -1157,6 +1144,7 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 func sequenceStatus(items []SequenceItem) string {
 	hasFailed := false
 	hasInterrupted := false
+	hasCancelled := false
 	hasPending := false
 	for _, item := range items {
 		switch item.Status {
@@ -1164,6 +1152,8 @@ func sequenceStatus(items []SequenceItem) string {
 			hasFailed = true
 		case "interrupted":
 			hasInterrupted = true
+		case "cancelled":
+			hasCancelled = true
 		case "pending", "running":
 			hasPending = true
 		}
@@ -1173,6 +1163,9 @@ func sequenceStatus(items []SequenceItem) string {
 	}
 	if hasInterrupted {
 		return "interrupted"
+	}
+	if hasCancelled {
+		return "cancelled"
 	}
 	if hasPending {
 		return "running"
@@ -1188,6 +1181,7 @@ type SequenceProgress struct {
 	Succeeded    int        `json:"succeeded"`
 	Failed       int        `json:"failed"`
 	Interrupted  int        `json:"interrupted"`
+	Cancelled    int        `json:"cancelled"`
 	Pending      int        `json:"pending"`
 	Current      string     `json:"current"`
 	Next         string     `json:"next"`
@@ -1214,6 +1208,8 @@ func (s SequenceState) Progress() SequenceProgress {
 			if progress.Current == "" {
 				progress.Current = item.PromptName
 			}
+		case "cancelled":
+			progress.Cancelled++
 		case "running":
 			progress.Pending++
 			if progress.Current == "" {
@@ -1365,6 +1361,75 @@ func ListSequences(homeDir string) ([]SequenceProgress, error) {
 func LoadSequence(homeDir, sequenceID string) (SequenceState, error) {
 	store := newSequenceStore(homeDir)
 	return store.load(sequenceID)
+}
+
+// CancelSequence marks unfinished work as cancelled while preserving completed
+// checkpoints. The sequence remains resumable because a later run treats
+// cancelled items as unfinished work.
+func CancelSequence(homeDir, sequenceID string) (SequenceState, error) {
+	store := newSequenceStore(homeDir)
+	sequence, err := store.load(sequenceID)
+	if err != nil {
+		return SequenceState{}, err
+	}
+	if sequence.Status == "completed" || sequence.Status == "failed" {
+		return sequence, fmt.Errorf("sequence %s is already %s", sequenceID, sequence.Status)
+	}
+	now := time.Now().UTC()
+	for i := range sequence.Items {
+		switch sequence.Items[i].Status {
+		case "succeeded", "skipped", "failed":
+			continue
+		default:
+			sequence.Items[i].Status = "cancelled"
+			sequence.Items[i].FinishedAt = &now
+			sequence.Items[i].Error = "cancelled by user"
+		}
+	}
+	sequence.Status = "cancelled"
+	sequence.FinishedAt = &now
+	sequence.UpdatedAt = &now
+	sequence.refreshSummary()
+	if err := store.save(sequence); err != nil {
+		return SequenceState{}, err
+	}
+	return sequence, nil
+}
+
+// StopSequenceSupervisor signals only a process whose persisted supervisor
+// record still matches the sequence state. This prevents stale sequence data
+// from terminating an unrelated process after PID reuse.
+func StopSequenceSupervisor(homeDir string, supervisor *Supervisor) error {
+	if supervisor == nil || supervisor.ID == "" || supervisor.PID <= 0 || supervisor.PID == os.Getpid() {
+		return nil
+	}
+	path := filepath.Join(homeDir, "state", "supervisors", safeName(supervisor.ID)+".json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var record Supervisor
+	if err := json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	if record.ID != supervisor.ID || record.PID != supervisor.PID || record.Status != "running" {
+		return nil
+	}
+	if err := syscall.Kill(record.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	now := time.Now().UTC()
+	record.Status = "cancelled"
+	record.HeartbeatAt = &now
+	record.FinishedAt = &now
+	encoded, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(encoded, '\n'), 0o644)
 }
 
 func CurrentSequence(homeDir string) (SequenceState, error) {
@@ -1574,7 +1639,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 	}
 	sum := sha256.Sum256([]byte(strings.Join(hashInput, "\n")))
 	id := "seq_" + hex.EncodeToString(sum[:])[:16]
-	return SequenceState{SequenceID: id, Folder: folder, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
+	return SequenceState{SequenceID: id, Folder: folder, RepositoryPath: repoRoot, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
 }
 
 func sequenceConfig(repoRoot string, options Options) (config.Config, error) {
@@ -1862,5 +1927,5 @@ func equalStrings(a, b []string) bool {
 
 func isPromptGrinderStatePath(name string) bool {
 	name = filepath.ToSlash(strings.TrimSpace(name))
-	return name == ".promptgrinder" || strings.HasPrefix(name, ".promptgrinder/") || strings.Contains(name, "/.promptgrinder/")
+	return legacyRunStatePath(name)
 }
