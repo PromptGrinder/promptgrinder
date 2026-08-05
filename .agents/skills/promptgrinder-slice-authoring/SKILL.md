@@ -8,7 +8,7 @@ description: Break engineering work into ordered Markdown prompts for PromptGrin
 ## Design the sequence
 
 1. Inspect the repository and define independently verifiable vertical outcomes.
-2. Prefer typed numbered files such as `10-implement-*.md`, `20-test-*.md`, and `30-verify-*.md`. Existing descriptive `NN-*.md` filenames are runnable when frontmatter declares a stable `id` and explicit `type`. Use `00-specification-*.md` only for shared non-runnable context.
+2. Prefer typed numbered files such as `10-implement-*.md`, `20-test-*.md`, and `30-verify-*.md`. An ordering number can have an uppercase suffix, such as `08A-implement-*.md`. Existing descriptive `NN[A-Z]*-*.md` filenames are runnable when frontmatter declares a stable `id` and explicit `type`. Use `00[A-Z]*-specification*.md` only for shared non-runnable context.
 3. Keep the folder free of stale Markdown files; `run-folder` treats numbered task files as the execution sequence.
 4. Make each slice build on committed output from the previous slice. State prerequisites and boundaries explicitly.
 

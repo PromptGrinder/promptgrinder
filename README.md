@@ -148,12 +148,15 @@ git add .promptgrinder tasks/project-archive
 git commit -m "Add PromptGrinder roles and project archive slices"
 ```
 
-Runnable slice names use `NN-implement-*.md`, `NN-test-*.md`,
-`NN-verify-*.md`, or `NN-review-*.md`. An optional
+Runnable slice names use `NN[A-Z]*-implement-*.md`, `NN[A-Z]*-test-*.md`,
+`NN[A-Z]*-verify-*.md`, or `NN[A-Z]*-review-*.md`; the letter suffix is
+optional, so both `10-implement-domain.md` and
+`08A-implement-ranking-history.md` are valid. An optional
 `00-specification*.md` supplies shared context. Existing descriptive filenames
-such as `01-snapshot-reliability.md` are also safe when frontmatter declares a
-stable `id` and explicit `type`; `role` identifies the worker responsibility
-and `depends_on` names earlier task IDs. For a large SonarQube cleanup,
+such as `01-snapshot-reliability.md` or `08A-ranking-history-semantics.md` are
+also safe when frontmatter declares a stable `id` and explicit `type`; `role`
+identifies the worker responsibility and `depends_on` names earlier task IDs.
+For a large SonarQube cleanup,
 use the same pattern but group related findings into bounded files such as
 `10-implement-sonar-service-errors.md`, `20-implement-sonar-cli-errors.md`, and
 `30-verify-sonar-cleanup.md`; put rule IDs, affected paths, and the relevant
@@ -168,6 +171,9 @@ enforce a slice's file boundary, while project roles add reusable
 responsibility, runtime, and path restrictions for named workers. These
 controls reduce risk, but they do not replace reviewing the generated changes
 and test evidence.
+
+See [Slice DSL Reference](docs/slice-dsl.md) for the complete filename,
+frontmatter, path-policy, ordering, and completion-report contract.
 
 ### 5. Run the slices
 
@@ -395,9 +401,11 @@ output.
 ### Ordered folder completion contract
 
 `run-folder` discovers recognized typed Markdown names:
-`00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
-`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. It also accepts
-generic `NN-*.md` names when they declare valid `id` and `type` frontmatter.
+`00[A-Z]*-specification*.md`, `NN[A-Z]*-implement-*.md`,
+`NN[A-Z]*-test-*.md`, `NN[A-Z]*-verify-*.md`,
+`NN[A-Z]*-final-verify*.md`, and `NN[A-Z]*-review-*.md`. The letter suffix is
+optional. It also accepts generic `NN[A-Z]*-*.md` names when they declare valid
+`id` and `type` frontmatter.
 README files, notes, completion reports, and untyped numbered files are never runnable.
 Before detaching or creating sequence state, PromptGrinder classifies every visible Markdown
 file, validates every included prompt and dependency, resolves roles, and checks
@@ -672,7 +680,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.2.3` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.2.4` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -720,6 +728,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
+- [RC.2.4 qualification](docs/release/v1.0.0-rc.2.4-qualification.md)
+- [RC.2.4 final gate](docs/release/v1.0.0-rc.2.4-final-gate.md)
+- [RC.2.4 candidate notes](docs/release/v1.0.0-rc.2.4-release-notes.md)
 - [RC.2.3 qualification](docs/release/v1.0.0-rc.2.3-qualification.md)
 - [RC.2.3 final gate](docs/release/v1.0.0-rc.2.3-final-gate.md)
 - [RC.2.3 candidate notes](docs/release/v1.0.0-rc.2.3-release-notes.md)

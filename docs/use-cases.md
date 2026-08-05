@@ -109,17 +109,21 @@ the configured defaults.
 Use `promptgrinder run-folder <folder>` to execute recognized numbered
 Markdown tasks in order. A `00-specification*.md` file supplies shared context
 without running unless `--include-specification` is selected.
-Typed filenames remain supported. A generic numbered filename is runnable when
-frontmatter supplies a stable `id` and explicit `type`; optional `role` becomes
-the displayed execution identity, and `depends_on` references must resolve to
-earlier task IDs before the sequence can start. Slice path metadata—not the
-role label—is the enforced ordinary run-folder file policy.
+Typed filenames remain supported. A numeric order token may include an optional
+uppercase letter suffix, so `08A-ranking-history.md` and
+`08A-implement-ranking-history.md` are valid. A generic ordered filename is
+runnable when frontmatter supplies a stable `id` and explicit `type`; optional
+`role` becomes the displayed execution identity, and `depends_on` references
+must resolve to earlier task IDs before the sequence can start. Slice path
+metadata—not the role label—is the enforced ordinary run-folder file policy.
 Before sequence creation, PromptGrinder reports how many Markdown files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
 The invoking process also resolves roles and dependencies and checks Git
 cleanliness before a detached supervisor is started. Preflight failures print
 the actionable reason synchronously and create no sequence state.
+See the [Slice DSL Reference](slice-dsl.md) for the full runnable filename,
+frontmatter, path-policy, and completion-report contract.
 
 ### UC-16: Stop unsafe sequence continuation
 

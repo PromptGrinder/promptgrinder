@@ -255,15 +255,15 @@ type PromptState struct {
 func Classify(filename string) PromptType {
 	name := filepath.Base(filename)
 	switch {
-	case matches(name, `^00-specification.*\.md$`):
+	case matches(name, `^00(?:[A-Z]+)?-specification.*\.md$`):
 		return TypeSpecification
-	case matches(name, `^\d\d-implement-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-implement-.+\.md$`):
 		return TypeImplement
-	case matches(name, `^\d\d-test-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-test-.+\.md$`):
 		return TypeTest
-	case matches(name, `^\d\d-verify-.+\.md$`), matches(name, `^\d\d-final-verify.*\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-verify-.+\.md$`), matches(name, `^\d\d(?:[A-Z]+)?-final-verify.*\.md$`):
 		return TypeVerify
-	case matches(name, `^\d\d-review-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-review-.+\.md$`):
 		return TypeReview
 	default:
 		return TypeUnknown
@@ -297,7 +297,7 @@ func Inspect(folder string) (FolderInspection, error) {
 			continue
 		}
 		inspection.MarkdownTotal++
-		if !matches(name, `^\d\d-.+\.md$`) {
+		if !matches(name, `^\d\d(?:[A-Z]+)?-.+\.md$`) {
 			inspection.Ignored = append(inspection.Ignored, name)
 			continue
 		}

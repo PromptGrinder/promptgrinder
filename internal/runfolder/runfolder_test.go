@@ -233,7 +233,9 @@ func TestDiscoverSortsMarkdownAlphabetically(t *testing.T) {
 func TestClassifyPromptTypes(t *testing.T) {
 	cases := map[string]PromptType{
 		"00-specification.md":          TypeSpecification,
+		"00A-specification.md":         TypeSpecification,
 		"10-implement-v1-cleanup.md":   TypeImplement,
+		"08A-implement-ranking.md":     TypeImplement,
 		"30-test-benchmark.md":         TypeTest,
 		"40-verify-geography.md":       TypeVerify,
 		"50-review-v1-removal.md":      TypeReview,
@@ -280,6 +282,23 @@ func TestDiscoverUsesExplicitMetadataForGenericNumberedPrompts(t *testing.T) {
 	}
 	if len(prompts) != 2 || prompts[0].ID != "snapshot-reliability" || prompts[0].Type != TypeImplement || prompts[0].Role != "backend-feature" || prompts[1].Type != TypeReview || strings.Join(prompts[1].DependsOn, ",") != "snapshot-reliability" {
 		t.Fatalf("prompts = %#v", prompts)
+	}
+}
+
+func TestDiscoverSupportsLetterSuffixedOrderingTokens(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "08C-score-contribution.md", "---\nid: score-contribution\ntype: implement\ndepends_on: [round-snapshots]\n---\nthird")
+	writePromptFile(t, dir, "08A-ranking-history.md", "---\nid: ranking-history\ntype: implement\ndepends_on: []\n---\nfirst")
+	writePromptFile(t, dir, "08B-round-snapshots.md", "---\nid: round-snapshots\ntype: implement\ndepends_on: [ranking-history]\n---\nsecond")
+
+	prompts, err := Discover(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := names(prompts)
+	want := []string{"08A-ranking-history.md", "08B-round-snapshots.md", "08C-score-contribution.md"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("prompts = %v, want %v", got, want)
 	}
 }
 
