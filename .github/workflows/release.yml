@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-15
     steps:
       # Reviewed 2026-07-26; tag refs are intentionally centrally reviewed.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v6
