@@ -1646,8 +1646,59 @@ func (s sequenceStore) loadOrCreate(folder, repoRoot string, prompts []Prompt, o
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return SequenceState{}, false, err
 		}
+		if options.Resume {
+			compatible, found, err := s.findCompatibleResume(folder, repoRoot, prompts)
+			if err != nil {
+				return SequenceState{}, false, err
+			}
+			if found {
+				return compatible, true, nil
+			}
+		}
 	}
 	return base, false, nil
+}
+
+// findCompatibleResume adopts only an unfinished sequence whose completed
+// prefix still matches the current prompt files. It lets users repair a later
+// slice or role policy without rerunning successful earlier slices.
+func (s sequenceStore) findCompatibleResume(folder, repoRoot string, prompts []Prompt) (SequenceState, bool, error) {
+	sequences, err := s.list()
+	if err != nil {
+		return SequenceState{}, false, err
+	}
+	for _, sequence := range sequences {
+		if sequence.Folder != folder || (sequence.RepositoryPath != "" && sequence.RepositoryPath != repoRoot) || sequence.Status == "completed" || sequence.Status == "cancelled" || len(sequence.Items) != len(prompts) {
+			continue
+		}
+		compatible := true
+		seenIncomplete := false
+		for index, item := range sequence.Items {
+			if item.PromptName != prompts[index].Name {
+				compatible = false
+				break
+			}
+			complete := item.Status == "succeeded" || item.Status == "skipped"
+			if !complete {
+				seenIncomplete = true
+				continue
+			}
+			if seenIncomplete {
+				compatible = false
+				break
+			}
+			effectiveHash, hashErr := promptContentHash(prompts[index].Path, prompts[index].RolePolicy)
+			rawHash, rawErr := fileHash(prompts[index].Path)
+			if hashErr != nil || rawErr != nil || (item.ContentHash != effectiveHash && item.ContentHash != rawHash) {
+				compatible = false
+				break
+			}
+		}
+		if compatible {
+			return sequence, true, nil
+		}
+	}
+	return SequenceState{}, false, nil
 }
 
 func (s sequenceStore) load(sequenceID string) (SequenceState, error) {

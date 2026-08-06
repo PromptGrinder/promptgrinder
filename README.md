@@ -446,6 +446,10 @@ Run-folder state is stored below `PROMPTGRINDER_HOME/state/run-folders/<sequence
 it is not written into the repository. With `--commit-each` or
 `--require-clean-git`, preflight reports modified, added, deleted, conflicted,
 and untracked paths and asks the user to commit, stash, or isolate them before retrying.
+With explicit `--resume`, PromptGrinder can adopt the latest unfinished sequence
+for the same folder and repository when its completed prefix still matches the
+current slice files. It reruns the first failed or changed slice onward; a
+changed completed slice is never silently adopted.
 
 For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys

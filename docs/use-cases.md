@@ -156,8 +156,12 @@ completion and failure are retained as local events.
 
 ### UC-19: Resume or restart ordered work
 
-Use `--resume` to continue an unfinished sequence, `--restart` to rerun the
-same sequence from the beginning, `--fresh` to create a new sequence, or
+Use `--resume` to continue an unfinished sequence. When a later pending slice
+or role policy was repaired, explicit `--resume` can adopt the latest
+unfinished sequence for the same folder and repository after proving its
+completed prefix is unchanged; it reruns from the first failed or changed
+slice. A changed completed slice is never adopted. Use `--restart` to rerun
+the same sequence from the beginning, `--fresh` to create a new sequence, or
 `--no-resume` to avoid existing resume state.
 
 ### UC-20: Keep reviewable Git checkpoints

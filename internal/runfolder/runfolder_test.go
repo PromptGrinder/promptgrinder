@@ -644,6 +644,46 @@ func TestSequenceWithSucceededPrefixResumesAtFirstFailedPrompt(t *testing.T) {
 	}
 }
 
+func TestExplicitResumeAdoptsCompatiblePrefixAfterLaterPromptChanges(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "20-implement-b.md", "b")
+	writePromptFile(t, dir, "30-implement-c.md", "c")
+	first := &fakeLauncher{failName: "20-implement-b.md"}
+	firstSummary, err := Run(dir, Options{HomeDir: home}, first)
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	writePromptFile(t, dir, "30-implement-c.md", "changed")
+	resume := &fakeLauncher{}
+	summary, err := Run(dir, Options{HomeDir: home, Resume: true}, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.Resumed || summary.Sequence.SequenceID != firstSummary.Sequence.SequenceID {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if got, want := strings.Join(namesFromCalls(resume.calls), ","), "20-implement-b.md,30-implement-c.md"; got != want {
+		t.Fatalf("resume calls = %s, want %s", got, want)
+	}
+}
+
+func TestExplicitResumeRejectsChangedCompletedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "20-implement-b.md", "b")
+	if _, err := Run(dir, Options{HomeDir: home}, &fakeLauncher{failName: "20-implement-b.md"}); err == nil {
+		t.Fatal("expected failure")
+	}
+	writePromptFile(t, dir, "10-implement-a.md", "changed")
+	_, err := Run(dir, Options{HomeDir: home, Resume: true}, &fakeLauncher{})
+	if err == nil || !strings.Contains(err.Error(), "no run state found") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestChangingPromptContentCreatesDifferentSequence(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
