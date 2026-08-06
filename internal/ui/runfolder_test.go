@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -155,6 +156,30 @@ func TestTerminalFileLinkRejectsControlCharacters(t *testing.T) {
 	got := terminalFileLink("/tmp/worker\x1b]8;;https://example.invalid/worker.log")
 	if got != "worker log" || strings.Contains(got, "\x1b") {
 		t.Fatalf("unsafe terminal link = %q", got)
+	}
+}
+
+func TestTerminalFileLinkShowsCopyableAbsolutePath(t *testing.T) {
+	const relative = "worker logs/wrk_1/worker.log"
+	absolute, err := filepath.Abs(relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := terminalFileLink(relative)
+	if !strings.Contains(got, absolute) || !strings.Contains(got, "file://") {
+		t.Fatalf("terminal link does not expose absolute path and file target: %q", got)
+	}
+}
+
+func TestRunFolderRendererUsesSharedSpinnerFrames(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeDefault})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement.md", Type: runfolder.TypeImplement, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement})
+	r.Close()
+	if got := out.String(); !strings.Contains(got, "|\033[0m [1/1] 10-implement.md") || strings.Contains(got, "⠋") {
+		t.Fatalf("run-folder did not use shared spinner frame: %q", got)
 	}
 }
 

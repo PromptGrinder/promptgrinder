@@ -14,6 +14,8 @@ import (
 
 const Version = "dev"
 
+var spinnerFrames = []string{"|", "/", "-", "\\"}
+
 type Theme string
 
 const (
@@ -158,9 +160,8 @@ func (r *SharedProgressRenderer) spin(stop <-chan struct{}, done chan<- struct{}
 }
 
 func (r *SharedProgressRenderer) renderSpinnerLocked() {
-	frames := []string{"|", "/", "-", "\\"}
 	p := r.current
-	fmt.Fprintf(r.w, "\r\033[2K%s [%d/%d] %s - In progress", frames[r.frame%len(frames)], p.Index, p.Total, filepath.Base(p.TaskPath))
+	fmt.Fprintf(r.w, "\r\033[2K%s [%d/%d] %s - In progress", spinnerFrames[r.frame%len(spinnerFrames)], p.Index, p.Total, filepath.Base(p.TaskPath))
 }
 
 func (r *SharedProgressRenderer) stopSpinner() {

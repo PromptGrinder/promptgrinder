@@ -284,7 +284,7 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		icon := colorizeStatusIcon(stateIcon(item.Status), item.Status, themeColor(r.opts.Theme))
 		duration, detail := "", r.details[item.Name]
 		if item.Name == r.active {
-			icon = colorizeStatusIcon([]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[r.frame%10], "active", themeColor(r.opts.Theme))
+			icon = colorizeStatusIcon(spinnerFrames[r.frame%len(spinnerFrames)], "active", themeColor(r.opts.Theme))
 			duration = " " + formatDuration(r.now().Sub(r.activeSince))
 		} else if item.Status == "succeeded" || item.Status == "failed" || item.Status == "skipped" {
 			duration = " " + formatDuration(detail.Duration)
@@ -324,19 +324,15 @@ func terminalFileLink(path string) string {
 	if path == "" {
 		return ""
 	}
-	label := filepath.Base(filepath.Clean(path))
-	if label == "." || label == string(filepath.Separator) || label == "" {
-		label = "worker log"
-	}
-	if hasTerminalControl(path) || hasTerminalControl(label) {
+	if hasTerminalControl(path) {
 		return "worker log"
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return label
+		return path
 	}
 	target := (&url.URL{Scheme: "file", Path: absolute}).String()
-	return "\033]8;;" + target + "\033\\" + label + "\033]8;;\033\\"
+	return "\033]8;;" + target + "\033\\" + absolute + "\033]8;;\033\\"
 }
 
 func hasTerminalControl(value string) bool {

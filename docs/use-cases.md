@@ -145,7 +145,9 @@ example `task.md|slice-policy|codex/gpt-5.6-sol|4m 39s`. An unrestricted task
 is labeled `unscoped`. PromptGrinder uses the model reported by the runtime;
 when no trustworthy model evidence is available it displays `default` rather
 than guessing. Exact worker IDs, paths, policy, and logs remain in worker and
-JSON detail.
+JSON detail. The active prompt uses the same `|`, `/`, `-`, and `\\` spinner as
+foreground shared `run` work. Failed rows show a copyable absolute worker-log
+path and use a local file hyperlink where the terminal supports it.
 
 ### UC-18: Run a sequence in the background
 
@@ -375,8 +377,8 @@ records separately from project-owned named-worker definitions.
 
 Use `promptgrinder status <worker-id>` and `promptgrinder logs <worker-id>` to
 inspect execution state and retained output. Interactive run-folder output uses
-a compact clickable `worker.log` label while plain output preserves the full
-path.
+an absolute, copyable worker-log path with a local file hyperlink where the
+terminal supports it; plain output also preserves the full path.
 
 ### UC-48: Follow structured events
 

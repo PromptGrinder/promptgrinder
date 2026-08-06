@@ -439,7 +439,9 @@ Detached completion and failure notifications are deterministic
 local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
 Foreground execution stays in the invoking terminal, prints the full prompt
 inventory before launch, and shows live status, elapsed time, worker IDs, logs,
-and immediate failure reasons. `--plain` keeps the same information without
+and immediate failure reasons. It uses the same `|`, `/`, `-`, and `\\` spinner
+as foreground shared `run` work. Failed rows display a copyable absolute worker
+log path, with a local file hyperlink in terminals that support it. `--plain` keeps the same information without
 colors, animation, or terminal control sequences.
 
 Run-folder state is stored below `PROMPTGRINDER_HOME/state/run-folders/<sequence-id>`;
