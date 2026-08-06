@@ -119,6 +119,85 @@ func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestRunFolderInjectsEffectiveRolePolicyWithoutRequiringRoleGates(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend/**"}, []string{"./mvnw verify"})
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\nvalidation: ./mvnw -pl backend test\n---\ntask")
+	launcher := &fakeLauncher{}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher); err != nil {
+		t.Fatal(err)
+	}
+	content := launcher.calls[0].Content
+	for _, want := range []string{"# Effective Role Policy", "Implement backend features.", "`backend/**`", "Run only validation declared by this slice", "./mvnw verify", "Do not run these gates unless"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("assembled prompt missing %q: %s", want, content)
+		}
+	}
+}
+
+func TestRolePolicyRejectsExpectedPathsOutsideRoleBoundary(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\nallowed_paths: [\"**\"]\nexpected_paths: [mobile-android/app/Main.kt]\n---\ntask")
+	_, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "outside role allowed paths") || !strings.Contains(err.Error(), "mobile-android/app/Main.kt") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRolePolicyRejectsChangesOutsideRoleBoundary(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\n---\ntask")
+	launcher := &fakeLauncher{onLaunch: func(string) {
+		if err := os.MkdirAll(filepath.Join(dir, "mobile-android", "app"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "mobile-android", "app", "Main.kt"), []byte("bad scope"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "outside role allowed paths") || !strings.Contains(err.Error(), "mobile-android/app/Main.kt") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRolePolicyNormalizesLegacyDirectoryScope(t *testing.T) {
+	dir := initGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\n---\ntask")
+	launcher := &fakeLauncher{onLaunch: func(string) {
+		if err := os.WriteFile(filepath.Join(dir, "backend", "Service.java"), []byte("in scope"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRolePolicyChangesSequenceIdentity(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Initial guidance.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\n---\ntask")
+	first, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, dir, "backend-feature", "Changed guidance.", []string{"backend/**"}, nil)
+	second, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SequenceID == second.SequenceID {
+		t.Fatalf("sequence ID did not change: %s", first.SequenceID)
+	}
+}
+
 func TestCommitEachTellsWorkerNotToCommit(t *testing.T) {
 	dir := initGitRepo(t)
 	writePromptFile(t, dir, "10-implement-a.md", "task")
@@ -1225,6 +1304,31 @@ func TestRunFolderPathPolicyRejectsWorkerCreatedUnallowedPath(t *testing.T) {
 func writePromptFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeRolePolicy(t *testing.T, dir, id, description string, allowedPaths, qualityGates []string) {
+	t.Helper()
+	roleDir := filepath.Join(dir, ".promptgrinder", "roles")
+	if err := os.MkdirAll(roleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var body strings.Builder
+	fmt.Fprintf(&body, "id: %s\ndescription: %s\n", id, description)
+	if len(allowedPaths) > 0 {
+		body.WriteString("allowed_paths:\n")
+		for _, pattern := range allowedPaths {
+			fmt.Fprintf(&body, "  - %s\n", pattern)
+		}
+	}
+	if len(qualityGates) > 0 {
+		body.WriteString("quality_gates:\n")
+		for _, gate := range qualityGates {
+			fmt.Fprintf(&body, "  - %s\n", gate)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(roleDir, id+".yaml"), []byte(body.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

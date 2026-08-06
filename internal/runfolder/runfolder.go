@@ -158,12 +158,13 @@ type persistedProgressEvent struct {
 }
 
 type Prompt struct {
-	Path      string
-	Name      string
-	ID        string
-	Type      PromptType
-	Role      string
-	DependsOn []string
+	Path       string
+	Name       string
+	ID         string
+	Type       PromptType
+	Role       string
+	RolePolicy *RolePolicy
+	DependsOn  []string
 }
 
 type FolderInspection struct {
@@ -427,6 +428,9 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 	if len(prompts) == 0 {
 		return "", fmt.Errorf("no recognized numbered Markdown prompts found in %s", absFolder)
 	}
+	if err := applyRolePolicies(repoRoot, prompts); err != nil {
+		return "", fmt.Errorf("run-folder preflight: %w", err)
+	}
 	if options.Template == "" {
 		options.Template = "codex"
 	}
@@ -656,7 +660,7 @@ func validatePrompts(prompts []Prompt) error {
 			return fmt.Errorf("task frontmatter %s: %w", prompt.Name, err)
 		}
 		if len(expected) > 0 {
-			violations, err := workerpathpolicy.Violations(policy, expected)
+			violations, err := promptPolicyViolations(prompt, policy, expected)
 			if err != nil {
 				return fmt.Errorf("task frontmatter %s: validate expected_paths: %w", prompt.Name, err)
 			}
@@ -778,7 +782,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	if err != nil {
 		return promptState, err
 	}
-	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0
+	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0 || roleHasPathPolicy(prompt.RolePolicy)
 	var baseline workerpathpolicy.Snapshot
 	if needsGitTracking {
 		baseline, err = workerpathpolicy.Capture(repoRoot)
@@ -796,7 +800,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHABefore, _ = gitSHA(repoRoot)
 	}
-	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach)
+	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach, prompt.RolePolicy)
 	if err != nil {
 		return promptState, err
 	}
@@ -878,7 +882,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	if err != nil {
 		return promptState, fmt.Errorf("attribute worker changes: %w", err)
 	}
-	violations, err := workerpathpolicy.Violations(policy, changed)
+	violations, err := promptPolicyViolations(prompt, policy, changed)
 	if err != nil {
 		return promptState, fmt.Errorf("evaluate task path policy: %w", err)
 	}
@@ -953,7 +957,27 @@ func formatViolations(violations []workerpathpolicy.Violation) string {
 	return strings.Join(parts, ", ")
 }
 
-func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
+func roleHasPathPolicy(role *RolePolicy) bool {
+	return role != nil && len(role.AllowedPaths) > 0
+}
+
+func promptPolicyViolations(prompt Prompt, slicePolicy workerdomain.WorkerPolicy, paths []string) ([]workerpathpolicy.Violation, error) {
+	violations, err := workerpathpolicy.Violations(slicePolicy, paths)
+	if err != nil || prompt.RolePolicy == nil || len(prompt.RolePolicy.AllowedPaths) == 0 {
+		return violations, err
+	}
+	rolePolicy := workerdomain.WorkerPolicy{AllowedPaths: prompt.RolePolicy.AllowedPaths}
+	roleViolations, err := workerpathpolicy.Violations(rolePolicy, paths)
+	if err != nil {
+		return nil, err
+	}
+	for index := range roleViolations {
+		roleViolations[index].Reason = "outside role allowed paths"
+	}
+	return append(violations, roleViolations...), nil
+}
+
+func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RolePolicy) (string, error) {
 	active, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -964,6 +988,7 @@ func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
 	if strings.TrimSpace(specContext) != "" {
 		assembledBody = "# Shared Context\n\n" + specContext + "\n\n# Active Prompt\n\n"
 	}
+	assembledBody += rolePolicyPrompt(rolePolicy)
 	assembledBody += body
 	if commitEach {
 		assembledBody += promptGrinderCommitOwnershipContract
@@ -973,6 +998,34 @@ func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
 		return frontmatter + assembledBody, nil
 	}
 	return assembledBody, nil
+}
+
+func rolePolicyPrompt(role *RolePolicy) string {
+	if role == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# Effective Role Policy\n\n")
+	fmt.Fprintf(&b, "Role: `%s`\n\n", role.ID)
+	if role.Description != "" {
+		b.WriteString(role.Description + "\n\n")
+	}
+	if len(role.AllowedPaths) > 0 {
+		b.WriteString("## Role Scope\n\nThe role boundary is enforced in addition to this slice's path policy. Do not modify files outside:\n\n")
+		for _, pattern := range role.AllowedPaths {
+			fmt.Fprintf(&b, "- `%s`\n", pattern)
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString("## Validation Boundary\n\nRun only validation declared by this slice. Role quality gates are readiness guidance, not required commands for this intermediate slice.\n\n")
+	if len(role.QualityGates) > 0 {
+		b.WriteString("## Role Readiness Guidance\n\n")
+		for _, gate := range role.QualityGates {
+			fmt.Fprintf(&b, "- %s\n", gate)
+		}
+		b.WriteString("\nDo not run these gates unless the slice's validation or task body explicitly requires them.\n\n")
+	}
+	return b.String()
 }
 
 const promptGrinderCommitOwnershipContract = `
@@ -1649,7 +1702,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 	}
 	engines := []string{}
 	for _, prompt := range prompts {
-		hash, err := fileHash(prompt.Path)
+		hash, err := promptContentHash(prompt.Path, prompt.RolePolicy)
 		if err != nil {
 			return SequenceState{}, err
 		}
@@ -1770,6 +1823,15 @@ func fileHash(path string) (string, error) {
 		return "", err
 	}
 	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func promptContentHash(path string, role *RolePolicy) (string, error) {
+	hash, err := fileHash(path)
+	if err != nil || role == nil {
+		return hash, err
+	}
+	sum := sha256.Sum256([]byte(hash + "\n" + role.identity()))
 	return hex.EncodeToString(sum[:]), nil
 }
 

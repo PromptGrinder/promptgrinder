@@ -172,6 +172,12 @@ responsibility, runtime, and path restrictions for named workers. These
 controls reduce risk, but they do not replace reviewing the generated changes
 and test evidence.
 
+When a slice declares `role`, PromptGrinder loads that role's description and
+path boundary into the worker prompt. Role paths are an outer boundary: a slice
+can narrow them with its own path policy but cannot escape them. Role quality
+gates remain readiness guidance; only the slice's declared `validation` is
+required for that slice.
+
 See [Slice DSL Reference](docs/slice-dsl.md) for the complete filename,
 frontmatter, path-policy, ordering, and completion-report contract.
 

@@ -115,7 +115,12 @@ uppercase letter suffix, so `08A-ranking-history.md` and
 runnable when frontmatter supplies a stable `id` and explicit `type`; optional
 `role` becomes the displayed execution identity, and `depends_on` references
 must resolve to earlier task IDs before the sequence can start. Slice path
-metadata—not the role label—is the enforced ordinary run-folder file policy.
+metadata and declared role boundaries are the enforced ordinary run-folder file
+policy.
+When a slice declares a role, the role description and allowed paths are also
+injected as an outer boundary: changed and expected paths must satisfy both the
+role and slice policies. Role quality gates are visible readiness guidance, not
+additional validation commands for an intermediate slice.
 Before sequence creation, PromptGrinder reports how many Markdown files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.

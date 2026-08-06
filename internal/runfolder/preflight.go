@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"promptgrinder/internal/repository"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerpathpolicy"
 
 	"gopkg.in/yaml.v3"
 )
@@ -59,10 +62,10 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	if len(inspection.Prompts) == 0 {
 		return PreflightResult{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
 	}
-	if err := validatePrompts(inspection.Prompts); err != nil {
+	if err := applyRolePolicies(repoRoot, inspection.Prompts); err != nil {
 		return PreflightResult{}, fmt.Errorf("run-folder preflight: %w", err)
 	}
-	if err := validateRoles(repoRoot, inspection.Prompts); err != nil {
+	if err := validatePrompts(inspection.Prompts); err != nil {
 		return PreflightResult{}, fmt.Errorf("run-folder preflight: %w", err)
 	}
 	sequence, err := buildSequence(absFolder, repoRoot, inspection.Prompts, options)
@@ -77,13 +80,28 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	return PreflightResult{Folder: absFolder, Repository: repoRoot, Inspection: inspection, SequenceID: sequence.SequenceID}, nil
 }
 
-func validateRoles(repoRoot string, prompts []Prompt) error {
-	seen := map[string]bool{}
-	for _, prompt := range prompts {
-		if prompt.Role == "" || seen[prompt.Role] {
+type RolePolicy struct {
+	ID           string   `yaml:"id"`
+	Description  string   `yaml:"description"`
+	AllowedPaths []string `yaml:"allowed_paths"`
+	QualityGates []string `yaml:"quality_gates"`
+}
+
+func (r RolePolicy) identity() string {
+	return strings.Join([]string{r.ID, r.Description, strings.Join(r.AllowedPaths, "\x00"), strings.Join(r.QualityGates, "\x00")}, "\x00")
+}
+
+func applyRolePolicies(repoRoot string, prompts []Prompt) error {
+	loaded := map[string]RolePolicy{}
+	for index := range prompts {
+		prompt := &prompts[index]
+		if prompt.Role == "" {
 			continue
 		}
-		seen[prompt.Role] = true
+		if role, ok := loaded[prompt.Role]; ok {
+			prompt.RolePolicy = &role
+			continue
+		}
 		path := filepath.Join(repoRoot, ".promptgrinder", "roles", prompt.Role+".yaml")
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -92,9 +110,7 @@ func validateRoles(repoRoot string, prompts []Prompt) error {
 			}
 			return fmt.Errorf("read role %q: %w", prompt.Role, err)
 		}
-		var role struct {
-			ID string `yaml:"id"`
-		}
+		var role RolePolicy
 		decoder := yaml.NewDecoder(bytes.NewReader(data))
 		if err := decoder.Decode(&role); err != nil {
 			return fmt.Errorf("parse role %q: %w", prompt.Role, err)
@@ -102,8 +118,41 @@ func validateRoles(repoRoot string, prompts []Prompt) error {
 		if role.ID != prompt.Role {
 			return fmt.Errorf("role file %s declares id %q, expected %q", path, role.ID, prompt.Role)
 		}
+		if err := validateRoleAllowedPaths(role.AllowedPaths); err != nil {
+			return fmt.Errorf("role file %s: %w", path, err)
+		}
+		role.AllowedPaths = normalizeRoleAllowedPaths(repoRoot, role.AllowedPaths)
+		if err := workerpathpolicy.ValidatePatterns(workerdomain.WorkerPolicy{AllowedPaths: role.AllowedPaths}); err != nil {
+			return fmt.Errorf("role file %s: %w", path, err)
+		}
+		loaded[prompt.Role] = role
+		prompt.RolePolicy = &role
 	}
 	return nil
+}
+
+func validateRoleAllowedPaths(patterns []string) error {
+	for _, pattern := range patterns {
+		clean := path.Clean(pattern)
+		if strings.Contains(pattern, "\\") || path.IsAbs(pattern) || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("allowed_paths pattern %q must be repository-relative and must not escape the repository", pattern)
+		}
+	}
+	return nil
+}
+
+func normalizeRoleAllowedPaths(repoRoot string, patterns []string) []string {
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		normalized := pattern
+		if !strings.ContainsAny(pattern, "*?[") {
+			if info, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(pattern))); err == nil && info.IsDir() {
+				normalized = strings.TrimSuffix(pattern, "/") + "/**"
+			}
+		}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 type dirtyBaseline struct {

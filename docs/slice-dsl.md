@@ -87,7 +87,7 @@ available DSL; it is not a requirement to set every optional field.
 | --- | --- | --- |
 | `id` | Stable task identity | Lowercase, hyphen-separated slug. Required for generic `NN[A-Z]*-*.md` names and recommended for every dependency-aware sequence. |
 | `type` | Slice kind | One of `implement`, `test`, `verify`, or `review`. Required for generic names; must agree with a typed filename. |
-| `role` | Declared execution responsibility | Lowercase, hyphen-separated slug. It labels the worker; slice path policy remains the enforced file boundary. |
+| `role` | Declared execution responsibility | Lowercase, hyphen-separated slug. PromptGrinder loads its description and allowed paths as an outer boundary; the slice policy can only narrow that scope. |
 | `depends_on` | Earlier prerequisite task IDs | List of `id` values. Every referenced ID must exist and occur earlier in filename order. |
 | `engine` | Runtime selection | A string engine name, or a mapping with `name`, `model`, `profile`, `sandbox`, `approval`, `web_search`, and `images`. |
 | `working_directory` | Worker directory relative to the repository | Optional. |
@@ -120,6 +120,23 @@ forbidden_paths:
 is invalid; use `backend/src/**` for a directory tree. Absolute paths,
 repository-escaping paths, and the same pattern in both path lists are
 rejected.
+
+## Role inheritance
+
+For a slice with `role`, PromptGrinder loads the matching
+`.promptgrinder/roles/<role>.yaml` before sequence creation. It adds the role
+description, scope, and advisory readiness gates to an `# Effective Role
+Policy` section in the worker prompt.
+
+Role `allowed_paths` are an outer boundary. Every expected path and completed
+change must satisfy both the role and slice path policies, so a slice may
+narrow its role but cannot broaden it. Legacy role paths that name an existing
+directory, such as `backend`, are treated as `backend/**` when used as a role
+boundary. New role paths should use explicit `/**` directory patterns.
+
+Role `quality_gates` are not appended to `validation` and are not required for
+an intermediate slice. Run only the slice's declared validation unless its task
+body explicitly requests additional checks.
 
 ## Required completion report
 
