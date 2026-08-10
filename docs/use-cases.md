@@ -59,7 +59,8 @@ Use `promptgrinder validate-folder <folder> --repo <repository>` to run the
 same filename, dependency, role, slice-path, clean-baseline, and live-model
 preflight as `run-folder`, without creating a sequence or worker. Use it to
 review role boundaries and catch external prompt-folder configuration errors
-before an execution is authorized.
+before an execution is authorized. Human output starts and ends with an
+unambiguous `Preflight: PASSED` / `FAILED` result.
 
 ### UC-06: Inspect the exact engine prompt
 

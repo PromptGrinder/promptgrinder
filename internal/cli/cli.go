@@ -2908,6 +2908,11 @@ func shellQuote(value string) string {
 }
 
 func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan) {
+	result := "FAILED"
+	if plan.Valid {
+		result = "PASSED"
+	}
+	fmt.Fprintf(stdout, "Preflight: %s\n", result)
 	fmt.Fprintf(stdout, "Valid: %t\n", plan.Valid)
 	fmt.Fprintf(stdout, "Validation scope: %s\n", plan.ValidationMode)
 	if plan.Preflight.Repository != "" {
@@ -2935,6 +2940,9 @@ func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan) {
 		fmt.Fprintf(stdout, "Error: %s\n", plan.Error)
 	}
 	fmt.Fprintf(stdout, "Worker launch: %t\n", plan.WorkerWouldStart)
+	if plan.Valid {
+		fmt.Fprintln(stdout, "Result: PASSED — no workers launched.")
+	}
 }
 
 func printDefaults(stdout io.Writer, report config.DefaultsReport) {

@@ -1432,7 +1432,7 @@ func TestCLIValidateFolderRunsPreflightWithoutLaunchingWorkers(t *testing.T) {
 	if service.runFolderOptions.RepoPath != "/repo" || !service.runFolderOptions.CommitEach || service.runFolderOptions.RecoveryAttempts != 1 {
 		t.Fatalf("preflight options = %#v", service.runFolderOptions)
 	}
-	for _, want := range []string{"Valid: true", "Validation scope: full run-folder preflight; no workers will launch", "Sequence ID: seq_preflight", "Worker launch: false"} {
+	for _, want := range []string{"Preflight: PASSED", "Valid: true", "Validation scope: full run-folder preflight; no workers will launch", "Sequence ID: seq_preflight", "Worker launch: false", "Result: PASSED — no workers launched."} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("validate-folder output missing %q: %q", want, out.String())
 		}
