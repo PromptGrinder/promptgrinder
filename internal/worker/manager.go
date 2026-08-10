@@ -167,7 +167,11 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 	if err := markdown.Validate(task, absTask); err != nil {
 		return invalidValidationPlan("", err), err
 	}
-	repoRoot, err := repository.DetectRoot(absTask)
+	repoRootPath := absTask
+	if m.RepositoryOverride != "" {
+		repoRootPath = m.RepositoryOverride
+	}
+	repoRoot, err := repository.DetectRoot(repoRootPath)
 	if err != nil {
 		return invalidValidationPlan("", err), err
 	}
@@ -209,10 +213,14 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 	if preview, ok := request.CommandData["command_preview"].(string); ok && preview != "" {
 		executionPlan["command_preview"] = preview
 	}
+	warnings := markdown.Warnings(task)
+	if m.RepositoryOverride == "" && !repository.IsGitRoot(repoRoot) {
+		warnings = append(warnings, "task is outside a Git repository; validation inferred the task directory and cannot provide repository-backed role policy")
+	}
 	return ValidationPlan{
 		Valid:          true,
 		Engine:         selected,
-		Warnings:       markdown.Warnings(task),
+		Warnings:       warnings,
 		Errors:         []string{},
 		ExecutionPlan:  redactValue(executionPlan).(map[string]any),
 		RenderedPrompt: string(request.Prompt),

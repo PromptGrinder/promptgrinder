@@ -119,6 +119,47 @@ func TestPreflightRunFolderStopsUnavailableModelBeforeSequenceState(t *testing.T
 	}
 }
 
+func TestValidateUsesExplicitRepositoryForRoleAndSlicePolicy(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rolePath := filepath.Join(repo, ".promptgrinder", "roles", "backend-feature.yaml")
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Dir(rolePath), "backend-feature.yaml", "id: backend-feature\nallowed_paths: [backend]\n")
+	taskDir := t.TempDir()
+	taskPath := filepath.Join(taskDir, "10-implement-api.md")
+	writeFile(t, taskDir, "10-implement-api.md", "---\nrole: backend-feature\nallowed_paths: [backend/src/main/**, backend/src/test/**]\nexpected_paths: [backend/src/test/com/example/ApiTest.java]\n---\n# Task\n")
+	home := t.TempDir()
+	store := state.NewStore(filepath.Join(home, "state"))
+	service := Service{Store: store, Worker: worker.Manager{
+		Store:      store,
+		Engine:     codex.Engine{},
+		EngineName: "codex",
+		BaseConfig: config.Config{Engine: "codex", HomeDir: home, CodexExecutable: testsupport.FakeCodex(t)},
+	}}
+
+	plan, err := service.Validate(taskPath, "", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := plan.ExecutionPlan["repository_path"].(string); got != repo {
+		t.Fatalf("repository path = %q, want %q", got, repo)
+	}
+	if got, _ := plan.ExecutionPlan["repository_source"].(string); got != "explicit" {
+		t.Fatalf("repository source = %q", got)
+	}
+	policy, ok := plan.ExecutionPlan["task_policy"].(runfolder.TaskPolicyPreview)
+	if !ok || policy.RoleID != "backend-feature" || strings.Join(policy.RoleAllowedPaths, ",") != "backend/**" {
+		t.Fatalf("task policy = %#v", plan.ExecutionPlan["task_policy"])
+	}
+}
+
 func TestReportSharedRunProgressIncludesRuntimeIdentity(t *testing.T) {
 	var got SharedRunProgress
 	options := RunOptions{OnProgress: func(progress SharedRunProgress) { got = progress }}

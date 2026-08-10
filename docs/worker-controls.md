@@ -18,3 +18,21 @@ Retry always appends a new attempt; cancel retains every earlier attempt,
 session, run identifier, log, summary, and changed-file record. Control
 requests and their outcomes are appended to the task record. Repeating an
 operation whose target state is already satisfied is a no-op.
+
+## Ordered slice automatic recovery
+
+`run-folder` can make a bounded retry of the current failed slice with
+`run_folder.recovery_attempts` or `--recovery-attempts` (0 through 3; default
+0). It does not rerun the completed prefix. The retry receives the prior
+failure and completion reason, keeps the same role, path, model, and safety
+boundaries, and is stored with its recovery count and `prompt.recovering`
+event.
+
+Only failures that may be corrected within the same slice are eligible. A
+`BLOCKED`, partial, or malformed completion can retry the same slice, but no
+later slice starts until a retry reports `PASS` and `NEXT_PROMPT_SAFE: yes`.
+PromptGrinder never auto-retries model selection or other preflight failures,
+path-policy violations, cancellation, or a dirty baseline required by the run.
+It never substitutes a different model. After the configured bound or a
+non-recoverable failure, the sequence remains failed with its evidence intact
+and can be repaired and resumed explicitly.

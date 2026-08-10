@@ -63,7 +63,7 @@ func NewRunFolderRenderer(w io.Writer, interactive bool, opts Options) *RunFolde
 func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
-	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "run.completed" {
+	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "run.completed" {
 		r.stopTicker()
 	}
 	r.mu.Lock()
@@ -85,6 +85,15 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 			r.renderPlainStartLocked()
 		}
 	case "prompt.started":
+		r.setStatusLocked(event.PromptName, "active", event.PromptType)
+		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
+		if r.interactive {
+			r.renderDashboardLocked()
+			r.startTickerLocked()
+		} else {
+			r.writePlainEventLocked(event)
+		}
+	case "prompt.recovering":
 		r.setStatusLocked(event.PromptName, "active", event.PromptType)
 		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
 		if r.interactive {
@@ -351,7 +360,7 @@ func writeFailureDetails(w io.Writer, event runfolder.ProgressEvent) {
 }
 
 func failureDetailLines(event runfolder.ProgressEvent) []string {
-	if event.Status != "failed" && event.Type != "prompt.failed" {
+	if event.Status != "failed" && event.Type != "prompt.failed" && event.Type != "prompt.recovering" {
 		return nil
 	}
 	lines := make([]string, 0, 2)
@@ -377,7 +386,7 @@ func failureDetailLines(event runfolder.ProgressEvent) []string {
 
 func stateIcon(status string) string {
 	switch status {
-	case "active", "running":
+	case "active", "running", "recovering":
 		return "▶"
 	case "skipped":
 		return "○"
@@ -391,7 +400,7 @@ func stateIcon(status string) string {
 }
 func stateLabel(status string) string {
 	switch status {
-	case "active", "running":
+	case "active", "running", "recovering":
 		return "active"
 	case "succeeded", "completed":
 		return "succeeded"

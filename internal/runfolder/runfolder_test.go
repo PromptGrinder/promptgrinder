@@ -17,14 +17,18 @@ import (
 )
 
 type fakeLauncher struct {
-	calls             []launchCall
-	failName          string
-	running           bool
-	logDir            string
-	logText           string
-	onLaunch          func(path string)
-	reportedSessionID string
-	result            *state.EngineResult
+	calls              []launchCall
+	failName           string
+	failOnceName       string
+	failedOnce         bool
+	running            bool
+	logDir             string
+	logText            string
+	onLaunch           func(path string)
+	reportedSessionID  string
+	result             *state.EngineResult
+	resultOnce         *state.EngineResult
+	returnedResultOnce bool
 }
 
 type launchCall struct {
@@ -48,13 +52,21 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 	if filepath.Base(path) == f.failName {
 		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
 	}
+	if filepath.Base(path) == f.failOnceName && !f.failedOnce {
+		f.failedOnce = true
+		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
+	}
 	if f.running {
 		return state.Worker{ID: "wrk_running", Status: state.StatusRunning}, nil
 	}
 	zero := 0
 	nextSafe := true
 	worker := state.Worker{ID: "wrk_" + strings.TrimSuffix(filepath.Base(path), ".md"), Status: state.StatusSucceeded, ExitCode: &zero, EngineResult: &state.EngineResult{Summary: "done\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: &nextSafe}}
-	if f.result != nil {
+	if f.resultOnce != nil && !f.returnedResultOnce {
+		copy := *f.resultOnce
+		worker.EngineResult = &copy
+		f.returnedResultOnce = true
+	} else if f.result != nil {
 		copy := *f.result
 		worker.EngineResult = &copy
 	}
@@ -102,6 +114,73 @@ func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
 				t.Fatalf("persisted item = %#v", item)
 			}
 		})
+	}
+}
+
+func TestRunFolderRecoversOnlyTheFailedSlice(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	writePromptFile(t, dir, "20-implement-recover.md", "recover")
+	writePromptFile(t, dir, "30-test-last.md", "last")
+	events := []ProgressEvent{}
+	launcher := &fakeLauncher{failOnceName: "20-implement-recover.md"}
+
+	summary, err := Run(dir, Options{HomeDir: home, RecoveryAttempts: 1, Progress: func(event ProgressEvent) {
+		events = append(events, event)
+	}}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 4 {
+		t.Fatalf("calls = %#v", launcher.calls)
+	}
+	if got := []string{filepath.Base(launcher.calls[0].Path), filepath.Base(launcher.calls[1].Path), filepath.Base(launcher.calls[2].Path), filepath.Base(launcher.calls[3].Path)}; strings.Join(got, ",") != "10-implement-first.md,20-implement-recover.md,20-implement-recover.md,30-test-last.md" {
+		t.Fatalf("launch order = %v", got)
+	}
+	if !strings.Contains(launcher.calls[2].Content, "# Recovery Attempt") || !strings.Contains(launcher.calls[2].Content, "Previous failure: launch failed") {
+		t.Fatalf("recovery prompt = %q", launcher.calls[2].Content)
+	}
+	if summary.Sequence.Status != "completed" || summary.Sequence.Items[1].RecoveryAttempts != 1 {
+		t.Fatalf("summary = %#v", summary.Sequence)
+	}
+	foundRecovery := false
+	for _, event := range events {
+		if event.Type == "prompt.recovering" && event.PromptName == "20-implement-recover.md" && event.RecoveryAttempt == 1 {
+			foundRecovery = true
+		}
+	}
+	if !foundRecovery {
+		t.Fatalf("progress events = %#v", events)
+	}
+}
+
+func TestRunFolderRecoversBlockedCompletionInTheSameSlice(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	launcher := &fakeLauncher{resultOnce: completionResult("BLOCKED", false)}
+
+	summary, err := Run(dir, Options{HomeDir: home, RecoveryAttempts: 1}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 2 || summary.Sequence.Items[0].RecoveryAttempts != 1 {
+		t.Fatalf("calls = %#v", launcher.calls)
+	}
+	if !strings.Contains(launcher.calls[1].Content, "Previous completion reason: STATUS is BLOCKED, not PASS") {
+		t.Fatalf("recovery prompt = %q", launcher.calls[1].Content)
+	}
+}
+
+func TestRecoveryNeverBypassesSafetyFailures(t *testing.T) {
+	for _, message := range []string{
+		"path policy violation at completion: outside.txt (outside allowed paths)",
+		"run-folder model preflight task: model is not selectable by this Codex runtime",
+		"working tree is dirty; automatic commits require a clean baseline",
+		"cancelled by user",
+	} {
+		if recoverableFailure(PromptState{}, errors.New(message)) {
+			t.Fatalf("recoverable failure for %q", message)
+		}
 	}
 }
 
@@ -324,6 +403,26 @@ func TestClassifyPromptTypes(t *testing.T) {
 	for name, want := range cases {
 		if got := Classify(name); got != want {
 			t.Fatalf("Classify(%q) = %s, want %s", name, got, want)
+		}
+	}
+}
+
+func TestInspectExplainsTypedFilenameAndFrontmatterMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "40-test-and-final-verify-ranking-rivals.md", "---\ntype: verify\n---\nverify")
+
+	_, err := Inspect(dir)
+	if err == nil {
+		t.Fatal("expected type mismatch error")
+	}
+	for _, want := range []string{
+		"starts with the \"test\" slice naming convention",
+		"frontmatter says type: \"verify\"",
+		"rename it to NN-verify-...md",
+		"change frontmatter type to \"test\"",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
 		}
 	}
 }

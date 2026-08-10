@@ -16,6 +16,15 @@ All notable changes are recorded here. This project uses semantic versioning.
 - Extended the slice DSL and role guidance to pair model selection with the
   existing enforced role path boundary, including safe examples that keep
   documentation and CI roles out of production code.
+- Added opt-in, bounded same-slice automatic recovery for ordered folders.
+  Recoverable execution and completion-report failures can retry with their
+  prior failure context while preserving the completed prefix; non-passing
+  completions retry only the same slice, while model, preflight, path-policy,
+  cancellation, and required-clean-baseline failures remain fail-closed.
+- Added repository-aware standalone validation with explicit role/slice scope,
+  model cost/capability, and sandbox reporting. Added `validate-folder` for
+  complete no-launch ordered-folder preflight, including roles, dependencies,
+  Git baseline checks, and live Codex model validation.
 
 ### v1.0.0-rc.2.3 candidate
 

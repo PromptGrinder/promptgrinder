@@ -180,7 +180,7 @@ func TestV1PublicRootCommandContract(t *testing.T) {
 	want := []string{
 		"cancel", "complete", "defaults", "discover", "doctor", "engines", "events", "fail", "list",
 		"logs", "prune", "reconcile", "review", "roles", "run", "run-folder", "scheduler", "sequence",
-		"sequences", "setup", "status", "task", "terminals", "validate", "worker", "workers",
+		"sequences", "setup", "status", "task", "terminals", "validate", "validate-folder", "worker", "workers",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("public root commands changed\n got: %q\nwant: %q", got, want)
@@ -974,12 +974,13 @@ func TestCLIDefaults(t *testing.T) {
 
 func TestCLIRunFolderUsesConfiguredDefaults(t *testing.T) {
 	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{
-		RunFolderTemplate:        "codex",
-		RunFolderRepo:            "/repo",
-		RunFolderEngine:          "codex",
-		RunFolderCheckpoint:      true,
-		RunFolderCommitEach:      true,
-		RunFolderRequireCleanGit: true,
+		RunFolderTemplate:         "codex",
+		RunFolderRepo:             "/repo",
+		RunFolderEngine:           "codex",
+		RunFolderCheckpoint:       true,
+		RunFolderCommitEach:       true,
+		RunFolderRequireCleanGit:  true,
+		RunFolderRecoveryAttempts: 2,
 	}}}
 	out := &bytes.Buffer{}
 	cmd := NewRootCommand(service, out, &bytes.Buffer{})
@@ -988,7 +989,7 @@ func TestCLIRunFolderUsesConfiguredDefaults(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !service.runFolderOptions.Checkpoint || !service.runFolderOptions.CommitEach || !service.runFolderOptions.RequireCleanGit {
+	if !service.runFolderOptions.Checkpoint || !service.runFolderOptions.CommitEach || !service.runFolderOptions.RequireCleanGit || service.runFolderOptions.RecoveryAttempts != 2 {
 		t.Fatalf("run folder options = %#v", service.runFolderOptions)
 	}
 	if service.runFolderOptions.Template != "codex" || service.runFolderOptions.EngineOverride != "codex" || service.runFolderOptions.RepoPath != "/repo" {
@@ -1347,6 +1348,94 @@ func TestCLIValidateRedactedHumanOutput(t *testing.T) {
 	}
 	if strings.Contains(output, "sk-") {
 		t.Fatalf("validate output leaked secret: %q", output)
+	}
+}
+
+func TestCLIValidateExternalTaskFailureShowsStructuredRepositoryHint(t *testing.T) {
+	service := &fakeService{
+		validatePlan: worker.ValidationPlan{
+			Valid:    false,
+			Engine:   "codex",
+			Warnings: []string{"task is outside a Git repository"},
+			Errors:   []string{"validate role and path policy: role file is missing"},
+			ExecutionPlan: map[string]any{
+				"validation_mode":    "standalone task",
+				"repository_path":    "/tmp/tasks",
+				"repository_source":  "inferred",
+				"task_path":          "/tmp/tasks/25-api.md",
+				"working_directory":  "/tmp/tasks",
+				"metadata":           map[string]any{"role": "backend-feature"},
+				"worker_would_start": false,
+			},
+		},
+		validateErr: errTest("role file is missing"),
+	}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", "/tmp/tasks/25-api.md"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected validation error")
+	}
+	for _, want := range []string{"Validation\n", "Target\n", "Policy\n", "Runtime\n", "Result\n", "Next: validate the external task against its target repository", "promptgrinder validate --repo <repository> /tmp/tasks/25-api.md", "promptgrinder validate-folder /tmp/tasks --repo <repository>"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("validate output missing %q: %q", want, out.String())
+		}
+	}
+}
+
+func TestCLIValidateUsesExplicitRepositoryAndPrintsPolicy(t *testing.T) {
+	service := &fakeService{validatePlan: worker.ValidationPlan{
+		Valid:  true,
+		Engine: "codex",
+		ExecutionPlan: map[string]any{
+			"validation_mode":   "standalone task; run-folder ordering, dependency, and completion checks are not evaluated",
+			"repository_path":   "/repo",
+			"repository_source": "explicit",
+			"working_directory": "/repo",
+			"task_policy": runfolder.TaskPolicyPreview{
+				RoleID:            "backend-feature",
+				RolePath:          "/repo/.promptgrinder/roles/backend-feature.yaml",
+				RoleAllowedPaths:  []string{"backend/**"},
+				SliceAllowedPaths: []string{"backend/src/main/**", "backend/src/test/**"},
+				EffectiveRule:     "all declared role and slice path rules apply; the slice cannot widen the role boundary",
+			},
+			"metadata": map[string]any{
+				"model_selection": map[string]any{"model": "gpt-5.6-sol", "cost": "high", "capabilities": []any{"text", "code"}},
+				"engine":          map[string]any{"sandbox": "danger-full-access"},
+			},
+		},
+	}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", "task.md", "--repo", "/repo"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if service.validateRepo != "/repo" {
+		t.Fatalf("validate repo = %q", service.validateRepo)
+	}
+	for _, want := range []string{"Repository: /repo (explicit)", "Role: backend-feature", "Role boundary: backend/**", "Slice allowed paths: backend/src/main/**, backend/src/test/**", "Model selection: gpt-5.6-sol (cost: high); capabilities: text, code", "Sandbox: danger-full-access — high-risk local execution requested"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("validate output missing %q: %q", want, out.String())
+		}
+	}
+}
+
+func TestCLIValidateFolderRunsPreflightWithoutLaunchingWorkers(t *testing.T) {
+	service := &fakeService{sequence: pgruntime.SequenceState{SequenceID: "seq_preflight"}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate-folder", "specs", "--repo", "/repo", "--commit-each", "--recovery-attempts", "1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if service.runFolderOptions.RepoPath != "/repo" || !service.runFolderOptions.CommitEach || service.runFolderOptions.RecoveryAttempts != 1 {
+		t.Fatalf("preflight options = %#v", service.runFolderOptions)
+	}
+	for _, want := range []string{"Valid: true", "Validation scope: full run-folder preflight; no workers will launch", "Sequence ID: seq_preflight", "Worker launch: false"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("validate-folder output missing %q: %q", want, out.String())
+		}
 	}
 }
 
@@ -2637,6 +2726,7 @@ type fakeService struct {
 	engines           []engine.Descriptor
 	validatePlan      worker.ValidationPlan
 	validateErr       error
+	validateRepo      string
 	sequences         []pgruntime.SequenceProgress
 	sequence          pgruntime.SequenceState
 	sequenceID        string
@@ -2692,6 +2782,7 @@ func (f *fakeService) RunPromptFolder(path string, options pgruntime.RunFolderOp
 }
 
 func (f *fakeService) PreflightRunFolder(path string, options pgruntime.RunFolderOptions) (pgruntime.RunFolderPreflight, error) {
+	f.runFolderOptions = options
 	if f.runFolderErr != nil {
 		return pgruntime.RunFolderPreflight{}, f.runFolderErr
 	}
@@ -2725,7 +2816,8 @@ func (f *fakeService) Defaults() config.DefaultsReport {
 	return f.defaultsReport
 }
 
-func (f *fakeService) Validate(path, engineOverride string) (worker.ValidationPlan, error) {
+func (f *fakeService) Validate(path, engineOverride, repoPath string) (worker.ValidationPlan, error) {
+	f.validateRepo = repoPath
 	if f.validatePlan.Engine == "" {
 		f.validatePlan = worker.ValidationPlan{Valid: true, Engine: "codex", ExecutionPlan: map[string]any{}}
 	}

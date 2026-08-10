@@ -782,10 +782,33 @@ func (s Service) Defaults() config.DefaultsReport {
 	return config.Defaults(repoRoot, cfg)
 }
 
-func (s Service) Validate(path, engineOverride string) (worker.ValidationPlan, error) {
+func (s Service) Validate(path, engineOverride, repoPath string) (worker.ValidationPlan, error) {
 	manager := s.Worker
 	manager.EngineOverride = engineOverride
-	return manager.Validate(path)
+	manager.RepositoryOverride = repoPath
+	plan, err := manager.Validate(path)
+	if plan.ExecutionPlan == nil {
+		plan.ExecutionPlan = map[string]any{}
+	}
+	if repoPath != "" {
+		plan.ExecutionPlan["repository_source"] = "explicit"
+	} else {
+		plan.ExecutionPlan["repository_source"] = "inferred"
+	}
+	plan.ExecutionPlan["validation_mode"] = "standalone task; run-folder ordering, dependency, and completion checks are not evaluated"
+	if err != nil {
+		return plan, err
+	}
+	repoRoot, _ := plan.ExecutionPlan["repository_path"].(string)
+	policy, policyErr := runfolder.InspectTaskPolicy(repoRoot, path)
+	if policyErr != nil {
+		err = fmt.Errorf("validate role and path policy: %w", policyErr)
+		plan.Valid = false
+		plan.Errors = append(plan.Errors, err.Error())
+		return plan, err
+	}
+	plan.ExecutionPlan["task_policy"] = policy
+	return plan, nil
 }
 
 func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFolderSummary, error) {

@@ -51,6 +51,7 @@ type Options struct {
 	Template                string
 	EngineOverride          string
 	IncludeSpecification    bool
+	RecoveryAttempts        int
 	HomeDir                 string
 	BaseConfig              config.Config
 	UseRepoConfig           bool
@@ -139,6 +140,7 @@ type ProgressEvent struct {
 	CompletionStatus string           `json:"completion_status,omitempty"`
 	NextPromptSafe   *bool            `json:"next_prompt_safe,omitempty"`
 	Reason           string           `json:"reason,omitempty"`
+	RecoveryAttempt  int              `json:"recovery_attempt,omitempty"`
 	Inventory        []ProgressPrompt `json:"inventory,omitempty"`
 	MarkdownTotal    int              `json:"markdown_total,omitempty"`
 	Ignored          []string         `json:"ignored,omitempty"`
@@ -227,6 +229,7 @@ type SequenceItem struct {
 	CompletionStatus string     `json:"completion_status,omitempty"`
 	NextPromptSafe   *bool      `json:"next_prompt_safe,omitempty"`
 	CompletionReason string     `json:"completion_reason,omitempty"`
+	RecoveryAttempts int        `json:"recovery_attempts,omitempty"`
 }
 
 type TokenUsage struct {
@@ -250,6 +253,7 @@ type PromptState struct {
 	CompletionStatus string       `json:"completion_status,omitempty"`
 	NextPromptSafe   *bool        `json:"next_prompt_safe,omitempty"`
 	CompletionReason string       `json:"completion_reason,omitempty"`
+	RecoveryAttempts int          `json:"recovery_attempts,omitempty"`
 	Worker           state.Worker `json:"-"`
 }
 
@@ -338,7 +342,7 @@ func inspectPrompt(promptPath, name string) (Prompt, error) {
 	filenameType := Classify(name)
 	declaredType := promptTypeValue(task.Metadata["type"])
 	if filenameType != TypeUnknown && filenameType != TypeSpecification && declaredType != TypeUnknown && filenameType != declaredType {
-		return Prompt{}, fmt.Errorf("run-folder preflight: %s declares type %q but filename declares %q", name, declaredType, filenameType)
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s starts with the %q slice naming convention (type %q), but its frontmatter says type: %q; rename it to NN-%s-...md or change frontmatter type to %q", name, filenameType, filenameType, declaredType, declaredType, filenameType)
 	}
 	promptType := filenameType
 	if promptType == TypeUnknown {
@@ -570,7 +574,34 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		if err := sequenceStore.save(sequence); err != nil {
 			return summary, err
 		}
-		promptState, err := runPrompt(repoRoot, prompt, specContext, sequence.SessionID, options, launcher)
+		recoveryAttempt := 0
+		recoveryContext := ""
+		var promptState PromptState
+		var err error
+		for {
+			promptState, err = runPrompt(repoRoot, prompt, specContext, sequence.SessionID, recoveryContext, options, launcher)
+			promptState.RecoveryAttempts = recoveryAttempt
+			if err == nil || recoveryAttempt >= options.RecoveryAttempts || !recoverableFailure(promptState, err) {
+				break
+			}
+			recoveryAttempt++
+			promptState.Status = "recovering"
+			promptState.Error = err.Error()
+			if promptState.Worker.ID == "" {
+				promptState.Worker = state.Worker{ID: promptState.WorkerID, ExitCode: promptState.ExitCode}
+			}
+			if err := store.savePrompt(promptState); err != nil {
+				return summary, err
+			}
+			sequence.mark(prompt.Name, "running", promptState.Worker, nil, recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err))
+			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.refreshSummary()
+			_ = sequenceStore.save(sequence)
+			_ = store.saveSummary(sequence)
+			identity := workeridentity.FromWorker(promptState.Worker)
+			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, Completed: len(runState.Completed), Total: len(prompts)})
+			recoveryContext = recoveryPromptContext(recoveryAttempt, options.RecoveryAttempts, err, promptState)
+		}
 		if err != nil {
 			promptState.Status = "failed"
 			promptState.Error = err.Error()
@@ -578,6 +609,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 				promptState.Worker = state.Worker{ID: promptState.WorkerID, ExitCode: promptState.ExitCode}
 			}
 			sequence.mark(prompt.Name, "failed", promptState.Worker, promptState.FinishedAt, err.Error())
+			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
 			finished := time.Now().UTC()
 			sequence.FinishedAt = &finished
 			sequence.refreshSummary()
@@ -601,6 +633,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			sequence.SessionID = promptState.Worker.EngineResult.SessionID
 		}
 		sequence.mark(prompt.Name, "succeeded", promptState.Worker, promptState.FinishedAt, "")
+		sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
 		sequence.refreshSummary()
 		_ = sequenceStore.save(sequence)
 		_ = store.saveSummary(sequence)
@@ -775,7 +808,7 @@ func startSupervisorHeartbeat(options Options, sequence *SequenceState) func(str
 	}
 }
 
-func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, options Options, launcher Launcher) (PromptState, error) {
+func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryContext string, options Options, launcher Launcher) (PromptState, error) {
 	started := time.Now().UTC()
 	promptState := PromptState{Prompt: prompt.Name, PromptType: prompt.Type, Status: "running", StartedAt: &started}
 	policy, err := taskPathPolicy(prompt.Path)
@@ -803,6 +836,9 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach, prompt.RolePolicy)
 	if err != nil {
 		return promptState, err
+	}
+	if recoveryContext != "" {
+		content += recoveryContext
 	}
 	worker, err := launcher.LaunchPrompt(prompt.Path, content, sessionID)
 	promptState.Worker = worker
@@ -1057,7 +1093,7 @@ End your final answer with exactly one occurrence of each field:
 STATUS: PASS
 NEXT_PROMPT_SAFE: yes
 
-Use STATUS: BLOCKED or STATUS: PARTIAL and NEXT_PROMPT_SAFE: no when the task is not fully and safely complete. PromptGrinder will stop this ordered sequence unless the final report is unambiguous PASS/yes.
+Use STATUS: BLOCKED or STATUS: PARTIAL and NEXT_PROMPT_SAFE: no when the task is not fully and safely complete. PromptGrinder will not advance to a later slice unless the final report is unambiguous PASS/yes.
 `
 
 func splitFrontmatter(text string) (string, string, bool) {
@@ -1235,6 +1271,48 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 	}
 	s.Status = sequenceStatus(s.Items)
 	s.touch()
+}
+
+func (s *SequenceState) setRecoveryAttempts(promptName string, attempts int) {
+	for i := range s.Items {
+		if s.Items[i].PromptName == promptName {
+			s.Items[i].RecoveryAttempts = attempts
+			return
+		}
+	}
+}
+
+func recoverableFailure(prompt PromptState, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error() + " " + prompt.CompletionReason)
+	for _, unsafe := range []string{
+		"path policy violation", "outside allowed paths", "forbidden paths",
+		"model preflight", "not selectable by this codex runtime",
+		"working tree is dirty", "cancelled", "preflight",
+	} {
+		if strings.Contains(text, unsafe) {
+			return false
+		}
+	}
+	return true
+}
+
+func recoveryMessage(attempt, maximum int, err error) string {
+	return fmt.Sprintf("automatic recovery attempt %d of %d after: %s", attempt, maximum, err)
+}
+
+func recoveryPromptContext(attempt, maximum int, err error, previous PromptState) string {
+	var b strings.Builder
+	b.WriteString("\n# Recovery Attempt\n\n")
+	fmt.Fprintf(&b, "PromptGrinder is retrying this same slice (attempt %d of %d). Earlier successful slices remain complete; do not broaden this slice's scope.\n\n", attempt, maximum)
+	b.WriteString("The previous attempt failed. Diagnose and correct a recoverable execution, reasoning, or completion-report problem before continuing. Preserve permitted existing changes, do not bypass path policy, do not change model or safety configuration, and emit the required completion report exactly once.\n\n")
+	fmt.Fprintf(&b, "Previous failure: %s\n", err)
+	if previous.CompletionReason != "" {
+		fmt.Fprintf(&b, "Previous completion reason: %s\n", previous.CompletionReason)
+	}
+	return b.String()
 }
 
 func sequenceStatus(items []SequenceItem) string {

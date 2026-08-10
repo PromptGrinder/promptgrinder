@@ -48,6 +48,17 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererShowsAutomaticRecovery(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement.md", Type: runfolder.TypeImplement, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.recovering", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "recovering", RecoveryAttempt: 1, Reason: "automatic recovery attempt 1 of 1 after: launch failed"})
+	r.Close()
+	if got := out.String(); !strings.Contains(got, "10-implement.md [implement] - active") || !strings.Contains(got, "Reason: automatic recovery attempt 1 of 1 after: launch failed") {
+		t.Fatalf("recovery output = %q", got)
+	}
+}
+
 func TestRunFolderRendererReportsIncludedAndIgnoredMarkdown(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true})

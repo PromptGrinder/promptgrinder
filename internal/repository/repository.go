@@ -31,3 +31,11 @@ func DetectRoot(path string) (string, error) {
 		current = parent
 	}
 }
+
+// IsGitRoot reports whether path is a Git worktree root (or has Git metadata
+// supplied by a worktree .git file). It is intentionally small so callers can
+// distinguish an inferred task directory from a repository-backed execution.
+func IsGitRoot(path string) bool {
+	_, err := os.Stat(filepath.Join(path, ".git"))
+	return err == nil
+}

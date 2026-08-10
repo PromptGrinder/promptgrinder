@@ -44,7 +44,22 @@ see registered execution engines and their capabilities before assigning work.
 
 Use `promptgrinder validate <task.md>` to check paths, strict frontmatter,
 engine configuration, task semantics, and warnings without launching a worker
-or creating execution state.
+or creating execution state. When a task file lives outside its target checkout,
+use `--repo <repository>` so validation resolves the repository role policy,
+working directory, model policy, and effective role/slice boundary correctly.
+The output distinguishes explicit and inferred repositories and prominently
+warns when an inferred task directory is not a Git repository.
+Human output groups the result, target repository, policy, runtime, and any
+next-step hint so an external-task failure is actionable without decoding the
+engine command preview.
+
+### UC-05a: Fully preflight a folder without running it
+
+Use `promptgrinder validate-folder <folder> --repo <repository>` to run the
+same filename, dependency, role, slice-path, clean-baseline, and live-model
+preflight as `run-folder`, without creating a sequence or worker. Use it to
+review role boundaries and catch external prompt-folder configuration errors
+before an execution is authorized.
 
 ### UC-06: Inspect the exact engine prompt
 
@@ -199,6 +214,18 @@ With `--commit-each`, the rendered worker prompt explicitly forbids worker-owned
 commits and leaves PromptGrinder responsible for the checkpoint. If a worker
 commits anyway, the existing exact-commit diagnostic identifies the commit
 without amending, resetting, or accepting it.
+
+### UC-20a: Automatically recover one stuck slice
+
+Set `run_folder.recovery_attempts` or pass `--recovery-attempts 1` when a
+slice can plausibly repair an obvious execution, reasoning, or completion
+report problem after receiving its own failure. PromptGrinder retries only that
+slice and preserves the successful prefix, with at most three configured
+retries. Model selection, preflight, path-policy, cancellation, and
+required-clean-baseline failures remain fail-closed; a non-passing completion
+is retried only within the same slice and still blocks later slices until it
+reaches `PASS`/safe. Inspect retained evidence and repair the hard-stop
+failures before using `--resume`.
 
 ### UC-21: Inspect sequence history
 

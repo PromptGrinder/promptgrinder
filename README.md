@@ -140,9 +140,7 @@ Exercise the public behavior, fix only regressions caused by this feature, and
 run the declared validation. Report any residual risk.
 EOF
 
-promptgrinder validate tasks/project-archive/10-implement-domain.md
-promptgrinder validate tasks/project-archive/20-implement-cli.md
-promptgrinder validate tasks/project-archive/30-verify-project-archive.md
+promptgrinder validate-folder tasks/project-archive --repo .
 
 git add .promptgrinder tasks/project-archive
 git commit -m "Add PromptGrinder roles and project archive slices"
@@ -231,6 +229,32 @@ against Codex's live catalog. An unavailable, disallowed, over-budget, or
 incapable model fails preflight and starts no worker. If Codex rejects a model
 after preflight because availability changed, the worker stops and retains the
 runtime error; PromptGrinder does not retry with another model.
+
+### Recover an obviously stuck slice without rerunning the completed prefix
+
+Automatic recovery is opt-in and bounded. Set one to three attempts when an
+agent can often correct its own execution, reasoning, or completion-report
+mistake after seeing the exact first failure:
+
+```yaml
+# ~/.promptgrinder/config.yaml, .ai/config.yaml, or the default template
+run_folder:
+  recovery_attempts: 1
+```
+
+The command-line equivalent is `--recovery-attempts 1`. The default is `0`:
+existing fail-fast behavior remains unchanged. A retry applies only to the
+current failed slice; earlier successful slices are not rerun, and the retry
+receives the preceding failure as additional context. PromptGrinder persists
+the recovery count and emits a `prompt.recovering` event.
+
+Recovery never overrides safeguards. Invalid model selection, preflight or
+path-policy failures, cancellation, and a dirty required baseline stop
+immediately. A `BLOCKED` or otherwise non-passing completion can retry the
+same slice, but no later slice starts until it produces `PASS` and
+`NEXT_PROMPT_SAFE: yes`. PromptGrinder also never selects a fallback model;
+inspect the retained worker log and use `--resume` after a human repair when a
+failure is not recoverable.
 
 See [Slice DSL Reference](docs/slice-dsl.md) for the complete filename,
 frontmatter, path-policy, ordering, and completion-report contract.
@@ -441,7 +465,8 @@ commits are intended.
 | `roles refine <id\|latest>` | Re-run deterministic refinement without AI |
 | `roles apply <id\|latest>` | Apply safe additions or explicitly selected stored items without AI |
 | `roles reject <id\|latest>` | Reject a stored review without writing role YAML |
-| `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
+| `validate <task.md>` | Validate one work order without creating a worker; use `--repo` for an external task folder and `--render` to print the exact engine prompt |
+| `validate-folder <folder>` | Run the complete role, path, dependency, model, and Git preflight without launching workers |
 | `doctor` | Inventory supported runtimes and terminals, then check platform, Git, configuration, state, and readiness |
 | `setup` | Run the read-only machine scan, then preview or create PromptGrinder-owned first-use files |
 | `list` | List workers |
@@ -609,6 +634,16 @@ rules, empty required values, wrong types, and secret-looking semantic values
 are rejected. A deterministic warning is emitted when frontmatter is at least
 2048 bytes, rendered task instructions are at most 256 bytes, and frontmatter
 is at least eight times larger; warnings appear in human and JSON validation.
+
+Use `promptgrinder validate --repo <repository> <task.md>` when a task file
+lives outside the checkout it will modify. Validation prints the explicit or
+inferred repository, resolved role and outer role boundary, slice paths,
+effective-scope rule, selected model cost/capabilities, and sandbox level. An
+inferred non-Git task directory is prominently warned: it cannot provide a
+repository-backed role policy. `promptgrinder validate-folder <folder> --repo
+<repository>` runs the complete ordered-folder preflight—including filenames,
+dependencies, role/slice paths, configured clean-baseline checks, and live
+model checks—without creating sequence or worker state.
 
 Use `promptgrinder validate --render <task.md>` to inspect the exact prompt
 bytes without launching Codex or creating worker state. `--render` and `--json`

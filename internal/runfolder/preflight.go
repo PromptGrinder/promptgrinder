@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerpathpolicy"
@@ -28,6 +29,9 @@ type PreflightResult struct {
 // Preflight validates everything that can fail without launching a worker or
 // creating sequence state. Detached callers run this synchronously.
 func Preflight(folder string, options Options) (PreflightResult, error) {
+	if options.RecoveryAttempts < 0 || options.RecoveryAttempts > 3 {
+		return PreflightResult{}, fmt.Errorf("recovery attempts must be between 0 and 3")
+	}
 	if options.Resume && options.Fresh {
 		return PreflightResult{}, fmt.Errorf("--resume and --fresh are mutually exclusive")
 	}
@@ -90,6 +94,67 @@ type RolePolicy struct {
 		MaxCost      string   `yaml:"max_cost"`
 		Capabilities []string `yaml:"capabilities"`
 	} `yaml:"runtime"`
+}
+
+// TaskPolicyPreview describes the role and task boundaries that apply to one
+// Markdown task. Both boundaries apply: role scope is an outer limit and task
+// scope can only narrow it.
+type TaskPolicyPreview struct {
+	RoleID              string   `json:"role_id,omitempty"`
+	RolePath            string   `json:"role_path,omitempty"`
+	RoleAllowedPaths    []string `json:"role_allowed_paths,omitempty"`
+	SliceAllowedPaths   []string `json:"slice_allowed_paths,omitempty"`
+	SliceForbiddenPaths []string `json:"slice_forbidden_paths,omitempty"`
+	ExpectedPaths       []string `json:"expected_paths,omitempty"`
+	EffectiveRule       string   `json:"effective_rule"`
+}
+
+// InspectTaskPolicy validates and describes the same role/slice path boundary
+// that run-folder enforces before workers launch.
+func InspectTaskPolicy(repoRoot, taskPath string) (TaskPolicyPreview, error) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	task, err := markdown.Parse(string(data))
+	if err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	if err := markdown.Validate(task, taskPath); err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	preview := TaskPolicyPreview{
+		SliceAllowedPaths:   metadataStrings(task.Metadata, "allowed_paths"),
+		SliceForbiddenPaths: metadataStrings(task.Metadata, "forbidden_paths"),
+		ExpectedPaths:       metadataStrings(task.Metadata, "expected_paths"),
+		EffectiveRule:       "all declared role and slice path rules apply; the slice cannot widen the role boundary",
+	}
+	roleID, _ := task.Metadata["role"].(string)
+	if roleID == "" {
+		return preview, nil
+	}
+	prompts := []Prompt{{Path: taskPath, Name: filepath.Base(taskPath), Role: roleID}}
+	if err := applyRolePolicies(repoRoot, prompts); err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	prompt := prompts[0]
+	preview.RoleID = roleID
+	preview.RolePath = filepath.Join(repoRoot, ".promptgrinder", "roles", roleID+".yaml")
+	preview.RoleAllowedPaths = append([]string(nil), prompt.RolePolicy.AllowedPaths...)
+	policy := workerdomain.WorkerPolicy{AllowedPaths: preview.SliceAllowedPaths, ForbiddenPaths: preview.SliceForbiddenPaths}
+	if err := workerpathpolicy.ValidatePatterns(policy); err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	if len(preview.ExpectedPaths) > 0 {
+		violations, err := promptPolicyViolations(prompt, policy, preview.ExpectedPaths)
+		if err != nil {
+			return TaskPolicyPreview{}, err
+		}
+		if len(violations) > 0 {
+			return TaskPolicyPreview{}, fmt.Errorf("expected_paths are not permitted by the effective role/slice path policy: %s", formatViolations(violations))
+		}
+	}
+	return preview, nil
 }
 
 func (r RolePolicy) identity() string {
