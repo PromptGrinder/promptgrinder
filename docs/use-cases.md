@@ -149,6 +149,23 @@ JSON detail. The active prompt uses the same `|`, `/`, `-`, and `\\` spinner as
 foreground shared `run` work. Failed rows show a copyable absolute worker-log
 path and use a local file hyperlink where the terminal supports it.
 
+### UC-17a: Select a model within cost and capability policy
+
+Declare repository-approved models in `.promptgrinder/models.yaml` with a
+`low`, `medium`, or `high` cost tier and supported capabilities. A role can
+provide model defaults, and a slice may choose a specific model or request the
+lowest-cost approved model satisfying `engine.max_cost` and
+`engine.capabilities`. Role `allowed_paths` remain an outer enforced boundary,
+so a low-cost documentation or CI slice cannot modify production code merely
+because its task asks it to.
+
+Before a worker or detached sequence starts, PromptGrinder asks the installed
+Codex runtime for the active account's selectable catalog. An unknown,
+disallowed, unavailable, over-budget, or image-incompatible model fails
+preflight without creating a worker or sequence. PromptGrinder never falls back
+to another model; a runtime availability change stops the worker with Codex's
+retained error.
+
 ### UC-18: Run a sequence in the background
 
 Use detached mode to return control to the shell while a local supervisor runs

@@ -99,6 +99,26 @@ func TestRunFolderCreatesMultipleWorkers(t *testing.T) {
 	}
 }
 
+func TestPreflightRunFolderStopsUnavailableModelBeforeSequenceState(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "10-task.md", "---\nid: unavailable-model\ntype: implement\nengine:\n  name: codex\n  model: not-selectable\n---\n# Task\n")
+	home := t.TempDir()
+	store := state.NewStore(filepath.Join(home, "state"))
+	service := Service{Store: store, Worker: worker.Manager{
+		Store:      store,
+		Engine:     codex.Engine{},
+		EngineName: "codex",
+		BaseConfig: config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), HomeDir: home},
+	}}
+	_, err := service.PreflightRunFolder(root, RunFolderOptions{HomeDir: home, RepoPath: root})
+	if err == nil || !strings.Contains(err.Error(), `model "not-selectable" is not selectable`) {
+		t.Fatalf("err = %v", err)
+	}
+	if entries, readErr := os.ReadDir(filepath.Join(home, "state", "sequences")); readErr == nil && len(entries) != 0 {
+		t.Fatalf("model preflight created sequence state: %#v", entries)
+	}
+}
+
 func TestReportSharedRunProgressIncludesRuntimeIdentity(t *testing.T) {
 	var got SharedRunProgress
 	options := RunOptions{OnProgress: func(progress SharedRunProgress) { got = progress }}

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -44,6 +45,19 @@ type MetadataResolver interface {
 
 type ResultParser interface {
 	ParseResult(ctx execution.Context, log []byte) state.EngineResult
+}
+
+// Model describes a model selectable by an engine for the active account and
+// provider. It is intentionally runtime-reported rather than hard-coded.
+type Model struct {
+	ID              string   `json:"id"`
+	InputModalities []string `json:"input_modalities,omitempty"`
+}
+
+// ModelCatalogProvider enables fail-closed validation of an explicitly
+// resolved model before PromptGrinder starts a worker.
+type ModelCatalogProvider interface {
+	ListModels(context.Context) ([]Model, error)
 }
 
 type Registry struct {

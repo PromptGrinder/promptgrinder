@@ -85,10 +85,15 @@ type RolePolicy struct {
 	Description  string   `yaml:"description"`
 	AllowedPaths []string `yaml:"allowed_paths"`
 	QualityGates []string `yaml:"quality_gates"`
+	Runtime      struct {
+		Model        string   `yaml:"model"`
+		MaxCost      string   `yaml:"max_cost"`
+		Capabilities []string `yaml:"capabilities"`
+	} `yaml:"runtime"`
 }
 
 func (r RolePolicy) identity() string {
-	return strings.Join([]string{r.ID, r.Description, strings.Join(r.AllowedPaths, "\x00"), strings.Join(r.QualityGates, "\x00")}, "\x00")
+	return strings.Join([]string{r.ID, r.Description, strings.Join(r.AllowedPaths, "\x00"), strings.Join(r.QualityGates, "\x00"), r.Runtime.Model, r.Runtime.MaxCost, strings.Join(r.Runtime.Capabilities, "\x00")}, "\x00")
 }
 
 func applyRolePolicies(repoRoot string, prompts []Prompt) error {

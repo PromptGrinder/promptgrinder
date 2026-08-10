@@ -1018,6 +1018,19 @@ func rolePolicyPrompt(role *RolePolicy) string {
 		b.WriteByte('\n')
 	}
 	b.WriteString("## Validation Boundary\n\nRun only validation declared by this slice. Role quality gates are readiness guidance, not required commands for this intermediate slice.\n\n")
+	if role.Runtime.Model != "" || role.Runtime.MaxCost != "" || len(role.Runtime.Capabilities) > 0 {
+		b.WriteString("## Model Selection\n\nThis role supplies model defaults. A slice may explicitly override them in `engine`.\n\n")
+		if role.Runtime.Model != "" {
+			fmt.Fprintf(&b, "- Model: `%s`\n", role.Runtime.Model)
+		}
+		if role.Runtime.MaxCost != "" {
+			fmt.Fprintf(&b, "- Maximum cost tier: `%s`\n", role.Runtime.MaxCost)
+		}
+		if len(role.Runtime.Capabilities) > 0 {
+			fmt.Fprintf(&b, "- Required capabilities: `%s`\n", strings.Join(role.Runtime.Capabilities, "`, `"))
+		}
+		b.WriteByte('\n')
+	}
 	if len(role.QualityGates) > 0 {
 		b.WriteString("## Role Readiness Guidance\n\n")
 		for _, gate := range role.QualityGates {

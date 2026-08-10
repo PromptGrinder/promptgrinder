@@ -795,14 +795,11 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 	if options.RepoPath == "" {
 		options.RepoPath = "."
 	}
-	absRepoPath, err := filepath.Abs(options.RepoPath)
+	preflight, err := s.PreflightRunFolder(path, options)
 	if err != nil {
 		return RunFolderSummary{}, err
 	}
-	repoRoot, err := repository.DetectRoot(absRepoPath)
-	if err != nil {
-		return RunFolderSummary{}, err
-	}
+	repoRoot := preflight.Repository
 	options.RepoPath = repoRoot
 	lease, err := worktree.Acquire(options.HomeDir, repoRoot, "run-folder "+path, options.AllowConcurrentWorktree)
 	if err != nil {
@@ -834,7 +831,27 @@ func (s Service) PreflightRunFolder(path string, options RunFolderOptions) (RunF
 	}
 	options.BaseConfig = s.Worker.BaseConfig
 	options.UseRepoConfig = s.Worker.UseRepoConfig
-	return runfolder.Preflight(path, options)
+	preflight, err := runfolder.Preflight(path, options)
+	if err != nil {
+		return RunFolderPreflight{}, err
+	}
+	manager := s.Worker
+	manager.EngineOverride = options.EngineOverride
+	manager.RepositoryOverride = preflight.Repository
+	manager.SkipExecutorValidation = true
+	for _, prompt := range preflight.Inspection.Prompts {
+		if prompt.Type == runfolder.TypeSpecification {
+			continue
+		}
+		content, err := os.ReadFile(prompt.Path)
+		if err != nil {
+			return RunFolderPreflight{}, err
+		}
+		if err := manager.ValidateContentWithMetadata(prompt.Path, string(content), nil); err != nil {
+			return RunFolderPreflight{}, fmt.Errorf("run-folder model preflight %s: %w", prompt.Name, err)
+		}
+	}
+	return preflight, nil
 }
 
 func (s Service) Sequences() ([]SequenceProgress, error) {

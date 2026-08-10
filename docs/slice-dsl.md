@@ -54,6 +54,8 @@ depends_on:
 engine:
   name: codex
   model: gpt-5.6-sol
+  max_cost: high
+  capabilities: [code, image]
 working_directory: .
 timeout: 45m
 labels:
@@ -89,7 +91,7 @@ available DSL; it is not a requirement to set every optional field.
 | `type` | Slice kind | One of `implement`, `test`, `verify`, or `review`. Required for generic names; must agree with a typed filename. |
 | `role` | Declared execution responsibility | Lowercase, hyphen-separated slug. PromptGrinder loads its description and allowed paths as an outer boundary; the slice policy can only narrow that scope. |
 | `depends_on` | Earlier prerequisite task IDs | List of `id` values. Every referenced ID must exist and occur earlier in filename order. |
-| `engine` | Runtime selection | A string engine name, or a mapping with `name`, `model`, `profile`, `sandbox`, `approval`, `web_search`, and `images`. |
+| `engine` | Runtime and model selection | A string engine name, or a mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`, `approval`, `web_search`, and `images`. `max_cost` is `low`, `medium`, or `high`; `capabilities` uses `text`, `image`, `code`, or `web-search`. |
 | `working_directory` | Worker directory relative to the repository | Optional. |
 | `timeout` | Worker timeout | Optional duration such as `45m`. |
 | `labels` | Run labels | Optional list of strings. |
@@ -137,6 +139,19 @@ boundary. New role paths should use explicit `/**` directory patterns.
 Role `quality_gates` are not appended to `validation` and are not required for
 an intermediate slice. Run only the slice's declared validation unless its task
 body explicitly requests additional checks.
+
+## Model policy and role defaults
+
+Optional `.promptgrinder/models.yaml` declares the models a repository permits,
+their relative `low`, `medium`, or `high` cost tiers, and capabilities. With a
+policy, an explicit `engine.model` must be declared. Without an explicit model,
+PromptGrinder uses the role `runtime` defaults and then the policy default; a
+cost/capability request selects the lowest-cost configured matching model.
+
+Prompt settings override the same role runtime setting. The resolved model is
+checked against the live Codex catalog before launch. This detects account,
+provider, and CLI-version availability instead of relying on a stale bundled
+list. No fallback model is selected after a validation or runtime failure.
 
 ## Required completion report
 

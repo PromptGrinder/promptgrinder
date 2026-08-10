@@ -4,6 +4,19 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.2.4 candidate
+
+- Added repository-owned model policy with explicit low, medium, and high cost
+  tiers plus declared capabilities; role defaults and per-slice overrides now
+  resolve deterministically without silently escalating to another model.
+- Added Codex live-catalog preflight for every resolved model. Unavailable,
+  unapproved, over-budget, or incompatible model selections fail before a
+  worker starts, while runtime changes retain Codex's failure rather than
+  falling back.
+- Extended the slice DSL and role guidance to pair model selection with the
+  existing enforced role path boundary, including safe examples that keep
+  documentation and CI roles out of production code.
+
 ### v1.0.0-rc.2.3 candidate
 
 - Added first-run machine capability guidance through `setup` and expanded

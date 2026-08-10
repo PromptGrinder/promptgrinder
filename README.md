@@ -178,6 +178,60 @@ can narrow them with its own path policy but cannot escape them. Role quality
 gates remain readiness guidance; only the slice's declared `validation` is
 required for that slice.
 
+### Choose models deliberately
+
+Use repository-owned model policy to make cost and capability choices
+reviewable. PromptGrinder never silently falls back to a more expensive model.
+The installed, signed-in Codex runtime remains the authority on which configured
+models are currently selectable.
+
+```yaml
+# .promptgrinder/models.yaml
+version: 1
+default: gpt-5.6-terra
+models:
+  - id: gpt-5.6-luna
+    cost: low
+    capabilities: [text, code]
+  - id: gpt-5.6-terra
+    cost: medium
+    capabilities: [text, code, image]
+  - id: gpt-5.6-sol
+    cost: high
+    capabilities: [text, code, image, web-search]
+```
+
+Roles can select a bounded default without widening their file scope. Keep
+production code out of a documentation or CI role's `allowed_paths`; the role
+path policy remains an enforced outer boundary for every slice using that role.
+
+```yaml
+# .promptgrinder/roles/documentation.yaml
+id: documentation
+allowed_paths: [README.md, docs/**]
+runtime:
+  model: gpt-5.6-luna
+  max_cost: low
+  capabilities: [text, code]
+```
+
+A task may explicitly override a role, or request the lowest-cost configured
+model that satisfies its needs:
+
+```yaml
+engine:
+  name: codex
+  max_cost: medium
+  capabilities: [code, image]
+```
+
+Precedence is task `engine` settings, then role runtime defaults, then the
+project policy default. Before launch, PromptGrinder checks the resolved model
+against Codex's live catalog. An unavailable, disallowed, over-budget, or
+incapable model fails preflight and starts no worker. If Codex rejects a model
+after preflight because availability changed, the worker stops and retains the
+runtime error; PromptGrinder does not retry with another model.
+
 See [Slice DSL Reference](docs/slice-dsl.md) for the complete filename,
 frontmatter, path-policy, ordering, and completion-report contract.
 
@@ -525,7 +579,7 @@ task instructions:
   or `review`, `role` identifies the declared execution responsibility, and
   `depends_on` lists stable IDs that must appear earlier in a serialized folder;
 
-- `engine` (a name or mapping with `name`, `model`, `profile`, `sandbox`,
+- `engine` (a name or mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`,
   `approval`, `web_search`, and `images`), plus the compatible top-level engine
   keys `sandbox`, `approval`, `web_search`, and `images`;
 - `working_directory`, `timeout`, `labels`, and `env` configure execution or
