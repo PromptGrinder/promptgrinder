@@ -1439,6 +1439,20 @@ func TestCLIValidateFolderRunsPreflightWithoutLaunchingWorkers(t *testing.T) {
 	}
 }
 
+func TestPrintFolderValidationPlanLabelsUnscopedPrompts(t *testing.T) {
+	var out bytes.Buffer
+	printFolderValidationPlan(&out, folderValidationPlan{
+		Valid:          true,
+		ValidationMode: "full run-folder preflight; no workers will launch",
+		Preflight: pgruntime.RunFolderPreflight{Inspection: runfolder.FolderInspection{
+			Prompts: []runfolder.Prompt{{Name: "99-final-verify.md", Type: runfolder.TypeVerify}},
+		}},
+	})
+	if got := out.String(); !strings.Contains(got, "Role: unscoped (99-final-verify.md) — no role boundary or role model policy applies") {
+		t.Fatalf("unscoped role label missing: %q", got)
+	}
+}
+
 func TestCLIPrune(t *testing.T) {
 	service := &fakeService{pruneCount: 2}
 	out := &bytes.Buffer{}

@@ -144,6 +144,7 @@ type ProgressEvent struct {
 	Inventory        []ProgressPrompt `json:"inventory,omitempty"`
 	MarkdownTotal    int              `json:"markdown_total,omitempty"`
 	Ignored          []string         `json:"ignored,omitempty"`
+	ResumePlan       string           `json:"resume_plan,omitempty"`
 }
 
 // ProgressPrompt is the prompt metadata needed to render an ordered run
@@ -478,6 +479,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		return Summary{}, err
 	}
 	summary = Summary{Run: runState, Sequence: &sequence, Prompts: prompts, Started: true, Resumed: resumed || sequenceResumed}
+	resumePlan := compatibleResumePlan(sequence, preflight.SequenceID, sequenceResumed)
 	if options.HomeDir != "" {
 		sequence.EventPath = filepath.Join(options.HomeDir, "events", "sequences", sequence.SequenceID+".jsonl")
 	}
@@ -523,7 +525,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		}
 		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, Type: prompt.Type, Status: status})
 	}
-	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
+	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, ResumePlan: resumePlan, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
 	if err := store.ensure(); err != nil {
 		return summary, err
 	}
@@ -1737,14 +1739,12 @@ func (s sequenceStore) loadOrCreate(folder, repoRoot string, prompts []Prompt, o
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return SequenceState{}, false, err
 		}
-		if options.Resume {
-			compatible, found, err := s.findCompatibleResume(folder, repoRoot, prompts)
-			if err != nil {
-				return SequenceState{}, false, err
-			}
-			if found {
-				return compatible, true, nil
-			}
+		compatible, found, err := s.findCompatibleResume(folder, repoRoot, prompts)
+		if err != nil {
+			return SequenceState{}, false, err
+		}
+		if found {
+			return compatible, true, nil
 		}
 	}
 	return base, false, nil
@@ -1752,7 +1752,9 @@ func (s sequenceStore) loadOrCreate(folder, repoRoot string, prompts []Prompt, o
 
 // findCompatibleResume adopts only an unfinished sequence whose completed
 // prefix still matches the current prompt files. It lets users repair a later
-// slice or role policy without rerunning successful earlier slices.
+// slice or role policy without rerunning successful earlier slices. This is
+// the default when an exact sequence identity no longer exists; --fresh,
+// --restart, and --no-resume remain the explicit ways to discard that prefix.
 func (s sequenceStore) findCompatibleResume(folder, repoRoot string, prompts []Prompt) (SequenceState, bool, error) {
 	sequences, err := s.list()
 	if err != nil {
@@ -1790,6 +1792,25 @@ func (s sequenceStore) findCompatibleResume(folder, repoRoot string, prompts []P
 		}
 	}
 	return SequenceState{}, false, nil
+}
+
+func compatibleResumePlan(sequence SequenceState, requestedSequenceID string, adopted bool) string {
+	if !adopted || sequence.SequenceID == requestedSequenceID {
+		return ""
+	}
+	retained := 0
+	restartAt := "the first unfinished slice"
+	for _, item := range sequence.Items {
+		if item.Status == "succeeded" {
+			retained++
+		}
+		if item.Status == "succeeded" || item.Status == "skipped" {
+			continue
+		}
+		restartAt = item.PromptName
+		break
+	}
+	return fmt.Sprintf("Compatible sequence %s adopted automatically: retaining %d successful slice(s); restarting at %s. Use --fresh to rerun all slices.", sequence.SequenceID, retained, restartAt)
 }
 
 func (s sequenceStore) load(sequenceID string) (SequenceState, error) {

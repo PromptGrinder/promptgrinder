@@ -99,6 +99,21 @@ func TestRunFolderRendererResumeInventoryAndDurations(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererShowsAutomaticCompatibleResumePlan(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
+	r.Update(runfolder.ProgressEvent{
+		Type:       "run.started",
+		SequenceID: "seq_prior",
+		ResumePlan: "Compatible sequence seq_prior adopted automatically: retaining 4 successful slice(s); restarting at 30-implement.md. Use --fresh to rerun all slices.",
+		Inventory:  inventory(),
+	})
+	r.Close()
+	if got := out.String(); !strings.Contains(got, "Resume plan: Compatible sequence seq_prior adopted automatically") {
+		t.Fatalf("resume plan missing from output: %q", got)
+	}
+}
+
 func TestRunFolderRendererNoColorForcesPlain(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	var out bytes.Buffer

@@ -66,22 +66,40 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	if len(inspection.Prompts) == 0 {
 		return PreflightResult{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
 	}
+	result := PreflightResult{Folder: absFolder, Repository: repoRoot, Inspection: inspection}
+	issues := []error{}
 	if err := applyRolePolicies(repoRoot, inspection.Prompts); err != nil {
-		return PreflightResult{}, fmt.Errorf("run-folder preflight: %w", err)
+		issues = append(issues, err)
 	}
 	if err := validatePrompts(inspection.Prompts); err != nil {
-		return PreflightResult{}, fmt.Errorf("run-folder preflight: %w", err)
+		issues = append(issues, err)
+	}
+	if options.CommitEach || options.RequireCleanGit {
+		if err := requireCleanBaseline(repoRoot); err != nil {
+			issues = append(issues, err)
+		}
+	}
+	if len(issues) > 0 {
+		return result, preflightIssues(issues)
 	}
 	sequence, err := buildSequence(absFolder, repoRoot, inspection.Prompts, options)
 	if err != nil {
 		return PreflightResult{}, err
 	}
-	if options.CommitEach || options.RequireCleanGit {
-		if err := requireCleanBaseline(repoRoot); err != nil {
-			return PreflightResult{}, err
-		}
+	result.SequenceID = sequence.SequenceID
+	return result, nil
+}
+
+func preflightIssues(issues []error) error {
+	if len(issues) == 1 {
+		return fmt.Errorf("run-folder preflight: %w", issues[0])
 	}
-	return PreflightResult{Folder: absFolder, Repository: repoRoot, Inspection: inspection, SequenceID: sequence.SequenceID}, nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "run-folder preflight found %d independent issues:", len(issues))
+	for _, issue := range issues {
+		fmt.Fprintf(&b, "\n\n%s", issue)
+	}
+	return errors.New(b.String())
 }
 
 type RolePolicy struct {
@@ -163,10 +181,21 @@ func (r RolePolicy) identity() string {
 
 func applyRolePolicies(repoRoot string, prompts []Prompt) error {
 	loaded := map[string]RolePolicy{}
+	registered, registryPresent, err := projectRoleRegistry(repoRoot)
+	if err != nil {
+		return err
+	}
+	issues := []error{}
 	for index := range prompts {
 		prompt := &prompts[index]
 		if prompt.Role == "" {
 			continue
+		}
+		if registryPresent {
+			if _, ok := registered[prompt.Role]; !ok {
+				issues = append(issues, fmt.Errorf("%s declares role %q, but it is not registered in %s; add it under roles or select a registered role", prompt.Name, prompt.Role, filepath.Join(repoRoot, ".promptgrinder", "project.yaml")))
+				continue
+			}
 		}
 		if role, ok := loaded[prompt.Role]; ok {
 			prompt.RolePolicy = &role
@@ -176,29 +205,76 @@ func applyRolePolicies(repoRoot string, prompts []Prompt) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("%s declares role %q, but %s does not exist", prompt.Name, prompt.Role, path)
+				issues = append(issues, fmt.Errorf("%s declares role %q, but %s does not exist", prompt.Name, prompt.Role, path))
+				continue
 			}
-			return fmt.Errorf("read role %q: %w", prompt.Role, err)
+			issues = append(issues, fmt.Errorf("read role %q: %w", prompt.Role, err))
+			continue
 		}
 		var role RolePolicy
 		decoder := yaml.NewDecoder(bytes.NewReader(data))
 		if err := decoder.Decode(&role); err != nil {
-			return fmt.Errorf("parse role %q: %w", prompt.Role, err)
+			issues = append(issues, fmt.Errorf("parse role %q: %w", prompt.Role, err))
+			continue
 		}
 		if role.ID != prompt.Role {
-			return fmt.Errorf("role file %s declares id %q, expected %q", path, role.ID, prompt.Role)
+			issues = append(issues, fmt.Errorf("role file %s declares id %q, expected %q", path, role.ID, prompt.Role))
+			continue
 		}
 		if err := validateRoleAllowedPaths(role.AllowedPaths); err != nil {
-			return fmt.Errorf("role file %s: %w", path, err)
+			issues = append(issues, fmt.Errorf("role file %s: %w", path, err))
+			continue
 		}
 		role.AllowedPaths = normalizeRoleAllowedPaths(repoRoot, role.AllowedPaths)
 		if err := workerpathpolicy.ValidatePatterns(workerdomain.WorkerPolicy{AllowedPaths: role.AllowedPaths}); err != nil {
-			return fmt.Errorf("role file %s: %w", path, err)
+			issues = append(issues, fmt.Errorf("role file %s: %w", path, err))
+			continue
 		}
 		loaded[prompt.Role] = role
 		prompt.RolePolicy = &role
 	}
-	return nil
+	return joinIssues(issues)
+}
+
+type projectRoleManifest struct {
+	Roles []string `yaml:"roles"`
+}
+
+func projectRoleRegistry(repoRoot string) (map[string]struct{}, bool, error) {
+	path := filepath.Join(repoRoot, ".promptgrinder", "project.yaml")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read project role registry %s: %w", path, err)
+	}
+	var manifest projectRoleManifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, false, fmt.Errorf("parse project role registry %s: %w", path, err)
+	}
+	registered := make(map[string]struct{}, len(manifest.Roles))
+	for _, role := range manifest.Roles {
+		if role = strings.TrimSpace(role); role != "" {
+			registered[role] = struct{}{}
+		}
+	}
+	return registered, true, nil
+}
+
+func joinIssues(issues []error) error {
+	if len(issues) == 0 {
+		return nil
+	}
+	if len(issues) == 1 {
+		return issues[0]
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d role configuration issues:", len(issues))
+	for _, issue := range issues {
+		fmt.Fprintf(&b, "\n- %s", issue)
+	}
+	return errors.New(b.String())
 }
 
 func validateRoleAllowedPaths(patterns []string) error {

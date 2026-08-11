@@ -277,6 +277,48 @@ func TestRolePolicyChangesSequenceIdentity(t *testing.T) {
 	}
 }
 
+func TestPreflightRejectsRoleMissingFromProjectRegistryBeforeWorkerLaunch(t *testing.T) {
+	dir := initGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, ".promptgrinder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".promptgrinder", "project.yaml"), []byte("name: example\nroles: [backend-feature]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, dir, "release-evidence", "Cross-stack verification.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-verify-release.md", "---\nrole: release-evidence\n---\nverify")
+	_, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "not registered") || !strings.Contains(err.Error(), "project.yaml") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreflightReportsRoleAndDirtyBaselineIssuesTogether(t *testing.T) {
+	dir := initGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, ".promptgrinder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".promptgrinder", "project.yaml"), []byte("name: example\nroles: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "10-verify-release.md", "---\nrole: release-evidence\n---\nverify")
+	if err := os.WriteFile(filepath.Join(dir, "retained-report.md"), []byte("pending review"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir(), RequireCleanGit: true})
+	if err == nil {
+		t.Fatal("expected preflight failure")
+	}
+	for _, want := range []string{"independent issues", "not registered", "Cannot use --commit-each or --require-clean-git", "retained-report.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%s", want, err)
+		}
+	}
+	if got := result.Inspection.Prompts; len(got) != 1 || got[0].Name != "10-verify-release.md" {
+		t.Fatalf("preflight inspection = %#v", got)
+	}
+}
+
 func TestCommitEachTellsWorkerNotToCommit(t *testing.T) {
 	dir := initGitRepo(t)
 	writePromptFile(t, dir, "10-implement-a.md", "task")
@@ -764,6 +806,32 @@ func TestExplicitResumeAdoptsCompatiblePrefixAfterLaterPromptChanges(t *testing.
 		t.Fatalf("summary = %#v", summary)
 	}
 	if got, want := strings.Join(namesFromCalls(resume.calls), ","), "20-implement-b.md,30-implement-c.md"; got != want {
+		t.Fatalf("resume calls = %s, want %s", got, want)
+	}
+}
+
+func TestDefaultRunAdoptsCompatiblePrefixAfterFailedSliceChanges(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "20-implement-b.md", "b")
+	writePromptFile(t, dir, "30-implement-c.md", "c")
+	first := &fakeLauncher{failName: "30-implement-c.md"}
+	firstSummary, err := Run(dir, Options{HomeDir: home}, first)
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	writePromptFile(t, dir, "30-implement-c.md", "repaired prompt")
+
+	resume := &fakeLauncher{}
+	summary, err := Run(dir, Options{HomeDir: home}, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.Resumed || summary.Sequence.SequenceID != firstSummary.Sequence.SequenceID {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if got, want := strings.Join(namesFromCalls(resume.calls), ","), "30-implement-c.md"; got != want {
 		t.Fatalf("resume calls = %s, want %s", got, want)
 	}
 }

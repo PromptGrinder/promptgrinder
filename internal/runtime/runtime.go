@@ -856,7 +856,7 @@ func (s Service) PreflightRunFolder(path string, options RunFolderOptions) (RunF
 	options.UseRepoConfig = s.Worker.UseRepoConfig
 	preflight, err := runfolder.Preflight(path, options)
 	if err != nil {
-		return RunFolderPreflight{}, err
+		return preflight, err
 	}
 	manager := s.Worker
 	manager.EngineOverride = options.EngineOverride

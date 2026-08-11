@@ -2929,6 +2929,9 @@ func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan) {
 	}
 	for _, prompt := range plan.Preflight.Inspection.Prompts {
 		if prompt.Role == "" {
+			if prompt.Type != runfolder.TypeSpecification {
+				fmt.Fprintf(stdout, "Role: unscoped (%s) — no role boundary or role model policy applies\n", prompt.Name)
+			}
 			continue
 		}
 		fmt.Fprintf(stdout, "Role: %s (%s)\n", prompt.Role, prompt.Name)

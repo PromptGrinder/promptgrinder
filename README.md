@@ -497,6 +497,12 @@ file, validates every included prompt and dependency, resolves roles, and checks
 the Git baseline. Numbered task-like files with an
 unsupported name fail preflight with included/total counts instead of being
 silently skipped; ordinary notes are reported as ignored.
+When a prompt declares a role, it must be registered in
+`.promptgrinder/project.yaml` and have a matching role YAML file. Prompts
+without a role remain supported but are explicitly reported as `unscoped` by
+folder validation, meaning no role boundary or role-specific model policy
+applies. Independent role, prompt, and dirty-baseline problems are reported
+together before a worker can launch.
 Specifications are shared context unless `--include-specification` is set.
 
 PromptGrinder appends one visible completion-report instruction to every
@@ -527,10 +533,13 @@ Run-folder state is stored below `PROMPTGRINDER_HOME/state/run-folders/<sequence
 it is not written into the repository. With `--commit-each` or
 `--require-clean-git`, preflight reports modified, added, deleted, conflicted,
 and untracked paths and asks the user to commit, stash, or isolate them before retrying.
-With explicit `--resume`, PromptGrinder can adopt the latest unfinished sequence
-for the same folder and repository when its completed prefix still matches the
-current slice files. It reruns the first failed or changed slice onward; a
-changed completed slice is never silently adopted.
+PromptGrinder automatically adopts the latest unfinished sequence for the same
+folder and repository when its completed prefix still matches the current slice
+files. It prints the retained prefix and restart point, then reruns only the
+first failed or changed slice onward. A changed completed slice is never
+silently adopted. Use `--fresh`, `--restart`, or `--no-resume` to intentionally
+discard previous sequence state; `--resume` remains available as an explicit
+request to reuse it.
 
 For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys

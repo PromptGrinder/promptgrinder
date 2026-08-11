@@ -60,7 +60,12 @@ same filename, dependency, role, slice-path, clean-baseline, and live-model
 preflight as `run-folder`, without creating a sequence or worker. Use it to
 review role boundaries and catch external prompt-folder configuration errors
 before an execution is authorized. Human output starts and ends with an
-unambiguous `Preflight: PASSED` / `FAILED` result.
+unambiguous `Preflight: PASSED` / `FAILED` result. It labels prompts without a
+`role` as `unscoped`, so authors can deliberately add a registered role when a
+slice needs a role boundary or role model policy. Declared roles must appear in
+`.promptgrinder/project.yaml` and have a matching role file. Independent role,
+prompt, and dirty-baseline failures are reported together before any worker can
+launch.
 
 ### UC-06: Inspect the exact engine prompt
 
@@ -191,12 +196,13 @@ completion and failure are retained as local events.
 
 ### UC-19: Resume or restart ordered work
 
-Use `--resume` to continue an unfinished sequence. When a later pending slice
-or role policy was repaired, explicit `--resume` can adopt the latest
-unfinished sequence for the same folder and repository after proving its
-completed prefix is unchanged; it reruns from the first failed or changed
-slice. A changed completed slice is never adopted. Use `--restart` to rerun
-the same sequence from the beginning, `--fresh` to create a new sequence, or
+PromptGrinder automatically continues an unfinished sequence when the same
+folder and repository have an unchanged completed prefix. If a later failed
+slice or its role policy was repaired, it prints the compatible sequence,
+retained completed slices, and restart point, then reruns only from the first
+failed or changed slice. A changed completed slice is never adopted. Use
+`--resume` to request this behavior explicitly, `--restart` to rerun the same
+sequence from the beginning, `--fresh` to create a new sequence, or
 `--no-resume` to avoid existing resume state.
 
 ### UC-20: Keep reviewable Git checkpoints

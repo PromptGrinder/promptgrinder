@@ -37,6 +37,7 @@ type RunFolderRenderer struct {
 	details        map[string]runfolder.ProgressEvent
 	sequenceID     string
 	folder         string
+	resumePlan     string
 	active         string
 	activeSince    time.Time
 	frame          int
@@ -75,6 +76,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	switch event.Type {
 	case "run.started":
 		r.sequenceID, r.folder = event.SequenceID, event.Folder
+		r.resumePlan = event.ResumePlan
 		r.items = append([]runfolder.ProgressPrompt(nil), event.Inventory...)
 		r.markdownTotal = event.MarkdownTotal
 		r.ignored = append([]string(nil), event.Ignored...)
@@ -213,6 +215,9 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 		fmt.Fprintln(r.w, "Sequence: "+r.sequenceID)
 		fmt.Fprintln(r.w, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
 	}
+	if r.resumePlan != "" {
+		fmt.Fprintln(r.w, "Resume plan: "+r.resumePlan)
+	}
 	fmt.Fprintln(r.w, "Prompts:")
 	if r.markdownTotal > 0 {
 		fmt.Fprintf(r.w, "Preflight: %d of %d Markdown files included\n", len(r.items), r.markdownTotal)
@@ -281,6 +286,9 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	if r.sequenceID != "" {
 		lines = append(lines, "Sequence: "+r.sequenceID)
 		lines = append(lines, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
+	}
+	if r.resumePlan != "" {
+		lines = append(lines, "Resume plan: "+r.resumePlan)
 	}
 	lines = append(lines, "Prompts:")
 	if r.markdownTotal > 0 {
