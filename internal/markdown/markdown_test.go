@@ -154,6 +154,18 @@ func TestParseRejectsYAMLAliases(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidModelMetadata(t *testing.T) {
+	for _, source := range []string{"engine: {model: 42}", "engine: {model: ''}", "engine: {max_cost: 12}", "engine: {capabilities: text}"} {
+		task, err := Parse("---\n" + source + "\n---\nbody")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Validate(task, "task.md"); err == nil {
+			t.Fatalf("Validate(%q) succeeded", source)
+		}
+	}
+}
+
 func TestLargeFrontmatterWarningBoundaries(t *testing.T) {
 	base := Task{Body: strings.Repeat("b", 256), RawFrontmatter: strings.Repeat("x", 2048)}
 	if got := Warnings(base); len(got) != 1 {

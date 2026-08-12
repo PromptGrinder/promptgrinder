@@ -11,6 +11,13 @@ import (
 func FakeCodex(t testing.TB) string {
 	t.Helper()
 	return FakeExecutable(t, "codex", `#!/bin/sh
+if [ "$1" = "app-server" ]; then
+  IFS= read -r initialize
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"codexHome":"/tmp","platformFamily":"unix","platformOs":"macos","userAgent":"fake"}}'
+  IFS= read -r models
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"gpt-5","model":"gpt-5","inputModalities":["text","image"]},{"id":"gpt-5.5","model":"gpt-5.5","inputModalities":["text","image"]},{"id":"gpt-5.6-sol","model":"gpt-5.6-sol","inputModalities":["text","image"]}]}}'
+  exit 0
+fi
 echo "error: fake Codex must not be executed by this test" >&2
 exit 99
 `)

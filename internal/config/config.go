@@ -42,6 +42,7 @@ type Config struct {
 	RunFolderRequireCleanGit      bool                      `json:"run_folder_require_clean_git"`
 	RunFolderIncludeSpecification bool                      `json:"run_folder_include_specification"`
 	RunFolderDetach               bool                      `json:"run_folder_detach"`
+	RunFolderRecoveryAttempts     int                       `json:"run_folder_recovery_attempts"`
 	WorkerRuntime                 string                    `json:"worker_runtime,omitempty"`
 	RuntimeOptions                map[string]map[string]any `json:"runtime_options,omitempty"`
 	SchedulerProjectConcurrency   int                       `json:"scheduler_project_concurrency,omitempty"`
@@ -164,6 +165,7 @@ func LoadWithHome(repoRoot, homeOverride string) (Config, error) {
 		RunFolderRequireCleanGit:      v.GetBool("run_folder.require_clean_git"),
 		RunFolderIncludeSpecification: v.GetBool("run_folder.include_specification"),
 		RunFolderDetach:               v.GetBool("run_folder.detach"),
+		RunFolderRecoveryAttempts:     v.GetInt("run_folder.recovery_attempts"),
 		WorkerRuntime:                 v.GetString("runtime.default"),
 		SchedulerProjectConcurrency:   v.GetInt("scheduler.project_concurrency"),
 		SchedulerRuntimeConcurrency:   intMap(v.GetStringMap("scheduler.runtime_concurrency")),
@@ -267,6 +269,7 @@ run_folder:
   commit_each: true
   require_clean_git: false
   include_specification: false
+  recovery_attempts: 0
   detach: true
 `) + "\n"
 }
@@ -366,6 +369,7 @@ var configSchema = map[string]any{
 		"repo": nil, "template": nil, "engine": nil, "resume": nil, "fresh": nil,
 		"restart": nil, "no_resume": nil, "checkpoint": nil, "commit_each": nil,
 		"require_clean_git": nil, "include_specification": nil, "detach": nil,
+		"recovery_attempts": nil,
 	},
 }
 
@@ -528,6 +532,11 @@ func validateSourceValues(source string, values map[string]any) error {
 	if selected > 1 {
 		return fmt.Errorf("configuration %s: run_folder.resume, fresh, restart, and no_resume are mutually exclusive", source)
 	}
+	if value, ok := nestedValue(values, "run_folder", "recovery_attempts"); ok {
+		if _, valid := value.(int); !valid {
+			return fmt.Errorf("configuration %s: run_folder.recovery_attempts must be an integer", source)
+		}
+	}
 	return nil
 }
 
@@ -599,6 +608,9 @@ func Validate(cfg Config) error {
 	}
 	if selected > 1 {
 		return fmt.Errorf("run_folder.resume, fresh, restart, and no_resume are mutually exclusive")
+	}
+	if cfg.RunFolderRecoveryAttempts < 0 || cfg.RunFolderRecoveryAttempts > 3 {
+		return fmt.Errorf("run_folder.recovery_attempts must be between 0 and 3")
 	}
 	if cfg.CodexExecutable != "" && strings.ContainsAny(cfg.CodexExecutable, "\r\n") {
 		return fmt.Errorf("engine.codex.executable must not contain newlines")

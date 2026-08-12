@@ -37,6 +37,7 @@ type RunFolderRenderer struct {
 	details        map[string]runfolder.ProgressEvent
 	sequenceID     string
 	folder         string
+	resumePlan     string
 	active         string
 	activeSince    time.Time
 	frame          int
@@ -63,7 +64,7 @@ func NewRunFolderRenderer(w io.Writer, interactive bool, opts Options) *RunFolde
 func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
-	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "run.completed" {
+	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "run.completed" {
 		r.stopTicker()
 	}
 	r.mu.Lock()
@@ -75,6 +76,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	switch event.Type {
 	case "run.started":
 		r.sequenceID, r.folder = event.SequenceID, event.Folder
+		r.resumePlan = event.ResumePlan
 		r.items = append([]runfolder.ProgressPrompt(nil), event.Inventory...)
 		r.markdownTotal = event.MarkdownTotal
 		r.ignored = append([]string(nil), event.Ignored...)
@@ -85,6 +87,15 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 			r.renderPlainStartLocked()
 		}
 	case "prompt.started":
+		r.setStatusLocked(event.PromptName, "active", event.PromptType)
+		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
+		if r.interactive {
+			r.renderDashboardLocked()
+			r.startTickerLocked()
+		} else {
+			r.writePlainEventLocked(event)
+		}
+	case "prompt.recovering":
 		r.setStatusLocked(event.PromptName, "active", event.PromptType)
 		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
 		if r.interactive {
@@ -204,6 +215,9 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 		fmt.Fprintln(r.w, "Sequence: "+r.sequenceID)
 		fmt.Fprintln(r.w, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
 	}
+	if r.resumePlan != "" {
+		fmt.Fprintln(r.w, "Resume plan: "+r.resumePlan)
+	}
 	fmt.Fprintln(r.w, "Prompts:")
 	if r.markdownTotal > 0 {
 		fmt.Fprintf(r.w, "Preflight: %d of %d Markdown files included\n", len(r.items), r.markdownTotal)
@@ -273,6 +287,9 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		lines = append(lines, "Sequence: "+r.sequenceID)
 		lines = append(lines, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
 	}
+	if r.resumePlan != "" {
+		lines = append(lines, "Resume plan: "+r.resumePlan)
+	}
 	lines = append(lines, "Prompts:")
 	if r.markdownTotal > 0 {
 		lines = append(lines, fmt.Sprintf("Preflight: %d of %d Markdown files included", len(r.items), r.markdownTotal))
@@ -284,7 +301,7 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		icon := colorizeStatusIcon(stateIcon(item.Status), item.Status, themeColor(r.opts.Theme))
 		duration, detail := "", r.details[item.Name]
 		if item.Name == r.active {
-			icon = colorizeStatusIcon([]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[r.frame%10], "active", themeColor(r.opts.Theme))
+			icon = colorizeStatusIcon(spinnerFrames[r.frame%len(spinnerFrames)], "active", themeColor(r.opts.Theme))
 			duration = " " + formatDuration(r.now().Sub(r.activeSince))
 		} else if item.Status == "succeeded" || item.Status == "failed" || item.Status == "skipped" {
 			duration = " " + formatDuration(detail.Duration)
@@ -324,19 +341,15 @@ func terminalFileLink(path string) string {
 	if path == "" {
 		return ""
 	}
-	label := filepath.Base(filepath.Clean(path))
-	if label == "." || label == string(filepath.Separator) || label == "" {
-		label = "worker log"
-	}
-	if hasTerminalControl(path) || hasTerminalControl(label) {
+	if hasTerminalControl(path) {
 		return "worker log"
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return label
+		return path
 	}
 	target := (&url.URL{Scheme: "file", Path: absolute}).String()
-	return "\033]8;;" + target + "\033\\" + label + "\033]8;;\033\\"
+	return "\033]8;;" + target + "\033\\" + absolute + "\033]8;;\033\\"
 }
 
 func hasTerminalControl(value string) bool {
@@ -355,7 +368,7 @@ func writeFailureDetails(w io.Writer, event runfolder.ProgressEvent) {
 }
 
 func failureDetailLines(event runfolder.ProgressEvent) []string {
-	if event.Status != "failed" && event.Type != "prompt.failed" {
+	if event.Status != "failed" && event.Type != "prompt.failed" && event.Type != "prompt.recovering" {
 		return nil
 	}
 	lines := make([]string, 0, 2)
@@ -381,7 +394,7 @@ func failureDetailLines(event runfolder.ProgressEvent) []string {
 
 func stateIcon(status string) string {
 	switch status {
-	case "active", "running":
+	case "active", "running", "recovering":
 		return "▶"
 	case "skipped":
 		return "○"
@@ -395,7 +408,7 @@ func stateIcon(status string) string {
 }
 func stateLabel(status string) string {
 	switch status {
-	case "active", "running":
+	case "active", "running", "recovering":
 		return "active"
 	case "succeeded", "completed":
 		return "succeeded"

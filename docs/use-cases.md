@@ -44,7 +44,28 @@ see registered execution engines and their capabilities before assigning work.
 
 Use `promptgrinder validate <task.md>` to check paths, strict frontmatter,
 engine configuration, task semantics, and warnings without launching a worker
-or creating execution state.
+or creating execution state. When a task file lives outside its target checkout,
+use `--repo <repository>` so validation resolves the repository role policy,
+working directory, model policy, and effective role/slice boundary correctly.
+The output distinguishes explicit and inferred repositories and prominently
+warns when an inferred task directory is not a Git repository.
+Human output groups the result, target repository, policy, runtime, and any
+next-step hint so an external-task failure is actionable without decoding the
+engine command preview.
+
+### UC-05a: Fully preflight a folder without running it
+
+Use `promptgrinder validate-folder <folder> --repo <repository>` to run the
+same filename, dependency, role, slice-path, clean-baseline, and live-model
+preflight as `run-folder`, without creating a sequence or worker. Use it to
+review role boundaries and catch external prompt-folder configuration errors
+before an execution is authorized. Human output starts and ends with an
+unambiguous `Preflight: PASSED` / `FAILED` result. It labels prompts without a
+`role` as `unscoped`, so authors can deliberately add a registered role when a
+slice needs a role boundary or role model policy. Declared roles must appear in
+`.promptgrinder/project.yaml` and have a matching role file. Independent role,
+prompt, and dirty-baseline failures are reported together before any worker can
+launch.
 
 ### UC-06: Inspect the exact engine prompt
 
@@ -109,17 +130,26 @@ the configured defaults.
 Use `promptgrinder run-folder <folder>` to execute recognized numbered
 Markdown tasks in order. A `00-specification*.md` file supplies shared context
 without running unless `--include-specification` is selected.
-Typed filenames remain supported. A generic numbered filename is runnable when
-frontmatter supplies a stable `id` and explicit `type`; optional `role` becomes
-the displayed execution identity, and `depends_on` references must resolve to
-earlier task IDs before the sequence can start. Slice path metadata—not the
-role label—is the enforced ordinary run-folder file policy.
+Typed filenames remain supported. A numeric order token may include an optional
+uppercase letter suffix, so `08A-ranking-history.md` and
+`08A-implement-ranking-history.md` are valid. A generic ordered filename is
+runnable when frontmatter supplies a stable `id` and explicit `type`; optional
+`role` becomes the displayed execution identity, and `depends_on` references
+must resolve to earlier task IDs before the sequence can start. Slice path
+metadata and declared role boundaries are the enforced ordinary run-folder file
+policy.
+When a slice declares a role, the role description and allowed paths are also
+injected as an outer boundary: changed and expected paths must satisfy both the
+role and slice policies. Role quality gates are visible readiness guidance, not
+additional validation commands for an intermediate slice.
 Before sequence creation, PromptGrinder reports how many Markdown files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
 The invoking process also resolves roles and dependencies and checks Git
 cleanliness before a detached supervisor is started. Preflight failures print
 the actionable reason synchronously and create no sequence state.
+See the [Slice DSL Reference](slice-dsl.md) for the full runnable filename,
+frontmatter, path-policy, and completion-report contract.
 
 ### UC-16: Stop unsafe sequence continuation
 
@@ -136,7 +166,26 @@ example `task.md|slice-policy|codex/gpt-5.6-sol|4m 39s`. An unrestricted task
 is labeled `unscoped`. PromptGrinder uses the model reported by the runtime;
 when no trustworthy model evidence is available it displays `default` rather
 than guessing. Exact worker IDs, paths, policy, and logs remain in worker and
-JSON detail.
+JSON detail. The active prompt uses the same `|`, `/`, `-`, and `\\` spinner as
+foreground shared `run` work. Failed rows show a copyable absolute worker-log
+path and use a local file hyperlink where the terminal supports it.
+
+### UC-17a: Select a model within cost and capability policy
+
+Declare repository-approved models in `.promptgrinder/models.yaml` with a
+`low`, `medium`, or `high` cost tier and supported capabilities. A role can
+provide model defaults, and a slice may choose a specific model or request the
+lowest-cost approved model satisfying `engine.max_cost` and
+`engine.capabilities`. Role `allowed_paths` remain an outer enforced boundary,
+so a low-cost documentation or CI slice cannot modify production code merely
+because its task asks it to.
+
+Before a worker or detached sequence starts, PromptGrinder asks the installed
+Codex runtime for the active account's selectable catalog. An unknown,
+disallowed, unavailable, over-budget, or image-incompatible model fails
+preflight without creating a worker or sequence. PromptGrinder never falls back
+to another model; a runtime availability change stops the worker with Codex's
+retained error.
 
 ### UC-18: Run a sequence in the background
 
@@ -147,8 +196,13 @@ completion and failure are retained as local events.
 
 ### UC-19: Resume or restart ordered work
 
-Use `--resume` to continue an unfinished sequence, `--restart` to rerun the
-same sequence from the beginning, `--fresh` to create a new sequence, or
+PromptGrinder automatically continues an unfinished sequence when the same
+folder and repository have an unchanged completed prefix. If a later failed
+slice or its role policy was repaired, it prints the compatible sequence,
+retained completed slices, and restart point, then reruns only from the first
+failed or changed slice. A changed completed slice is never adopted. Use
+`--resume` to request this behavior explicitly, `--restart` to rerun the same
+sequence from the beginning, `--fresh` to create a new sequence, or
 `--no-resume` to avoid existing resume state.
 
 ### UC-20: Keep reviewable Git checkpoints
@@ -167,6 +221,18 @@ With `--commit-each`, the rendered worker prompt explicitly forbids worker-owned
 commits and leaves PromptGrinder responsible for the checkpoint. If a worker
 commits anyway, the existing exact-commit diagnostic identifies the commit
 without amending, resetting, or accepting it.
+
+### UC-20a: Automatically recover one stuck slice
+
+Set `run_folder.recovery_attempts` or pass `--recovery-attempts 1` when a
+slice can plausibly repair an obvious execution, reasoning, or completion
+report problem after receiving its own failure. PromptGrinder retries only that
+slice and preserves the successful prefix, with at most three configured
+retries. Model selection, preflight, path-policy, cancellation, and
+required-clean-baseline failures remain fail-closed; a non-passing completion
+is retried only within the same slice and still blocks later slices until it
+reaches `PASS`/safe. Inspect retained evidence and repair the hard-stop
+failures before using `--resume`.
 
 ### UC-21: Inspect sequence history
 
@@ -362,8 +428,8 @@ records separately from project-owned named-worker definitions.
 
 Use `promptgrinder status <worker-id>` and `promptgrinder logs <worker-id>` to
 inspect execution state and retained output. Interactive run-folder output uses
-a compact clickable `worker.log` label while plain output preserves the full
-path.
+an absolute, copyable worker-log path with a local file hyperlink where the
+terminal supports it; plain output also preserves the full path.
 
 ### UC-48: Follow structured events
 

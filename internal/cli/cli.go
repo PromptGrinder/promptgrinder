@@ -49,7 +49,7 @@ type Service interface {
 	Engines() []engine.Descriptor
 	DescribeEngine(name string) (engine.Descriptor, error)
 	Defaults() config.DefaultsReport
-	Validate(path, engineOverride string) (worker.ValidationPlan, error)
+	Validate(path, engineOverride, repoPath string) (worker.ValidationPlan, error)
 	Sequences() ([]pgruntime.SequenceProgress, error)
 	SequenceID(path string, options pgruntime.RunFolderOptions) (string, error)
 	Sequence(sequenceID string) (pgruntime.SequenceState, error)
@@ -193,6 +193,14 @@ type engineJSONOutput struct {
 
 type defaultsJSONOutput struct {
 	Defaults config.DefaultsReport `json:"defaults"`
+}
+
+type folderValidationPlan struct {
+	Valid            bool                         `json:"valid"`
+	ValidationMode   string                       `json:"validation_mode"`
+	Preflight        pgruntime.RunFolderPreflight `json:"preflight"`
+	WorkerWouldStart bool                         `json:"worker_would_start"`
+	Error            string                       `json:"error,omitempty"`
 }
 
 type runWorkerJSON struct {
@@ -880,6 +888,7 @@ Examples:
 	var validateJSON bool
 	var validateEngine string
 	var validateRender bool
+	var validateRepo string
 	validateCmd := &cobra.Command{
 		Use:   "validate <task.md>",
 		Short: "Validate a Markdown task without launching a worker.",
@@ -888,7 +897,7 @@ Examples:
 			if validateRender && validateJSON {
 				return StructuredError{Err: fmt.Errorf("--render cannot be combined with --json"), Code: ExitInvalidInput}
 			}
-			plan, err := service.Validate(args[0], validateEngine)
+			plan, err := service.Validate(args[0], validateEngine, validateRepo)
 			if validateJSON {
 				if writeErr := writeJSON(stdout, plan, compactJSON); writeErr != nil {
 					return writeErr
@@ -913,6 +922,7 @@ Examples:
 	validateCmd.Flags().BoolVar(&validateJSON, "json", false, "print machine-readable JSON")
 	validateCmd.Flags().BoolVar(&validateRender, "render", false, "print the exact prompt bytes the engine would receive")
 	validateCmd.Flags().StringVar(&validateEngine, "engine", "", "override the task engine for validation")
+	validateCmd.Flags().StringVar(&validateRepo, "repo", "", "repository path used to resolve roles, model policy, and the working directory")
 	root.AddCommand(validateCmd)
 
 	var runFolderResume bool
@@ -927,6 +937,7 @@ Examples:
 	var runFolderRestart bool
 	var runFolderNoResume bool
 	var runFolderDetach bool
+	var runFolderRecoveryAttempts int
 	var runFolderAllowConcurrentWorktree bool
 	var runFolderSupervisorID string
 	var runFolderSupervisorLog string
@@ -968,6 +979,9 @@ Examples:
 		if !cmd.Flags().Changed("include-specification") {
 			runFolderIncludeSpecification = defaults.RunFolderIncludeSpecification
 		}
+		if !cmd.Flags().Changed("recovery-attempts") {
+			runFolderRecoveryAttempts = defaults.RunFolderRecoveryAttempts
+		}
 		return pgruntime.RunFolderOptions{
 			Resume:                  runFolderResume,
 			Fresh:                   runFolderFresh,
@@ -981,6 +995,7 @@ Examples:
 			Template:                runFolderTemplate,
 			EngineOverride:          runFolderEngine,
 			IncludeSpecification:    runFolderIncludeSpecification,
+			RecoveryAttempts:        runFolderRecoveryAttempts,
 			SupervisorID:            runFolderSupervisorID,
 			SupervisorLogPath:       runFolderSupervisorLog,
 		}
@@ -997,6 +1012,7 @@ Examples:
 		cmd.Flags().StringVar(&runFolderTemplate, "template", "codex", "execution template")
 		cmd.Flags().StringVar(&runFolderEngine, "engine", "", "override every prompt engine for this run")
 		cmd.Flags().BoolVar(&runFolderIncludeSpecification, "include-specification", false, "execute specification prompts instead of using them only as context")
+		cmd.Flags().IntVar(&runFolderRecoveryAttempts, "recovery-attempts", 0, "retry a recoverable failed slice this many times (0-3)")
 		cmd.Flags().BoolVar(&runFolderAllowConcurrentWorktree, "allow-concurrent-worktree", false, "allow another PromptGrinder batch to use the same git worktree")
 		if includeDetach {
 			detachDefault := service.Defaults().Config.RunFolderDetach
@@ -1051,6 +1067,78 @@ Examples:
 	}
 	bindRunFolderFlags(runFolder, true)
 	root.AddCommand(runFolder)
+
+	var validateFolderJSON bool
+	var validateFolderRepo string
+	var validateFolderEngine string
+	var validateFolderTemplate string
+	var validateFolderCheckpoint bool
+	var validateFolderCommitEach bool
+	var validateFolderRequireCleanGit bool
+	var validateFolderRecoveryAttempts int
+	validateFolder := &cobra.Command{
+		Use:   "validate-folder <folder>",
+		Short: "Run full run-folder preflight without launching workers.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			defaults := service.Defaults().Config
+			if !cmd.Flags().Changed("repo") {
+				validateFolderRepo = defaults.RunFolderRepo
+			}
+			if !cmd.Flags().Changed("engine") {
+				validateFolderEngine = defaults.RunFolderEngine
+			}
+			if !cmd.Flags().Changed("template") {
+				validateFolderTemplate = defaults.RunFolderTemplate
+			}
+			if !cmd.Flags().Changed("checkpoint") {
+				validateFolderCheckpoint = defaults.RunFolderCheckpoint
+			}
+			if !cmd.Flags().Changed("commit-each") {
+				validateFolderCommitEach = defaults.RunFolderCommitEach
+			}
+			if !cmd.Flags().Changed("require-clean-git") {
+				validateFolderRequireCleanGit = defaults.RunFolderRequireCleanGit
+			}
+			if !cmd.Flags().Changed("recovery-attempts") {
+				validateFolderRecoveryAttempts = defaults.RunFolderRecoveryAttempts
+			}
+			options := pgruntime.RunFolderOptions{
+				RepoPath:         validateFolderRepo,
+				Template:         validateFolderTemplate,
+				EngineOverride:   validateFolderEngine,
+				Checkpoint:       validateFolderCheckpoint,
+				CommitEach:       validateFolderCommitEach,
+				RequireCleanGit:  validateFolderRequireCleanGit,
+				RecoveryAttempts: validateFolderRecoveryAttempts,
+			}
+			preflight, err := service.PreflightRunFolder(args[0], options)
+			plan := folderValidationPlan{Valid: err == nil, ValidationMode: "full run-folder preflight; no workers will launch", Preflight: preflight, WorkerWouldStart: false}
+			if err != nil {
+				plan.Error = err.Error()
+			}
+			if validateFolderJSON {
+				if writeErr := writeJSON(stdout, plan, compactJSON); writeErr != nil {
+					return writeErr
+				}
+			} else {
+				printFolderValidationPlan(stdout, plan)
+			}
+			if err != nil {
+				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			return nil
+		},
+	}
+	validateFolder.Flags().BoolVar(&validateFolderJSON, "json", false, "print machine-readable JSON")
+	validateFolder.Flags().StringVar(&validateFolderRepo, "repo", ".", "repository path used for full role, path, and model preflight")
+	validateFolder.Flags().StringVar(&validateFolderEngine, "engine", "", "override every slice engine for preflight")
+	validateFolder.Flags().StringVar(&validateFolderTemplate, "template", "codex", "execution template")
+	validateFolder.Flags().BoolVar(&validateFolderCheckpoint, "checkpoint", false, "validate checkpoint configuration")
+	validateFolder.Flags().BoolVar(&validateFolderCommitEach, "commit-each", false, "require a clean baseline for focused commits")
+	validateFolder.Flags().BoolVar(&validateFolderRequireCleanGit, "require-clean-git", false, "require a clean repository baseline")
+	validateFolder.Flags().IntVar(&validateFolderRecoveryAttempts, "recovery-attempts", 0, "validate bounded same-slice recovery attempts (0-3)")
+	root.AddCommand(validateFolder)
 
 	runFolderSupervisor := &cobra.Command{
 		Use:    "__run-folder-supervisor <folder>",
@@ -2664,27 +2752,199 @@ func activeCapabilityNames(caps engine.Capabilities) []string {
 }
 
 func printValidationPlan(stdout io.Writer, plan worker.ValidationPlan) {
-	fmt.Fprintf(stdout, "Valid: %t\n", plan.Valid)
+	fmt.Fprintln(stdout, "Validation")
+	fmt.Fprintf(stdout, "  Valid: %t\n", plan.Valid)
 	if plan.Engine != "" {
-		fmt.Fprintf(stdout, "Engine: %s\n", plan.Engine)
+		fmt.Fprintf(stdout, "  Engine: %s\n", plan.Engine)
+	}
+	if mode, ok := plan.ExecutionPlan["validation_mode"].(string); ok && mode != "" {
+		fmt.Fprintf(stdout, "  Scope: %s\n", mode)
 	}
 	for _, warning := range plan.Warnings {
-		fmt.Fprintf(stdout, "Warning: %s\n", warning)
+		fmt.Fprintf(stdout, "  Warning: %s\n", warning)
 	}
-	for _, validationError := range plan.Errors {
-		fmt.Fprintf(stdout, "Error: %s\n", validationError)
+	fmt.Fprintln(stdout, "\nTarget")
+	if repositoryPath, ok := plan.ExecutionPlan["repository_path"].(string); ok && repositoryPath != "" {
+		source, _ := plan.ExecutionPlan["repository_source"].(string)
+		if source != "" {
+			fmt.Fprintf(stdout, "  Repository: %s (%s)\n", repositoryPath, source)
+		} else {
+			fmt.Fprintf(stdout, "  Repository: %s\n", repositoryPath)
+		}
 	}
 	if wd, ok := plan.ExecutionPlan["working_directory"].(string); ok && wd != "" {
-		fmt.Fprintf(stdout, "Working directory: %s\n", wd)
+		fmt.Fprintf(stdout, "  Working directory: %s\n", wd)
+	}
+	policy, hasPolicy := plan.ExecutionPlan["task_policy"].(runfolder.TaskPolicyPreview)
+	metadata, hasMetadata := plan.ExecutionPlan["metadata"].(map[string]any)
+	if hasPolicy || validationRoleID(metadata) != "" {
+		fmt.Fprintln(stdout, "\nPolicy")
+	}
+	if hasPolicy {
+		printTaskPolicyPreview(stdout, policy)
+	} else if roleID := validationRoleID(metadata); roleID != "" {
+		fmt.Fprintf(stdout, "  Role: %s (unresolved)\n", roleID)
+	}
+	fmt.Fprintln(stdout, "\nRuntime")
+	if hasMetadata {
+		printValidationRuntimeSelection(stdout, metadata, plan.ExecutionPlan)
 	}
 	if timeout, ok := plan.ExecutionPlan["timeout"].(string); ok && timeout != "" {
-		fmt.Fprintf(stdout, "Timeout: %s\n", timeout)
+		fmt.Fprintf(stdout, "  Timeout: %s\n", timeout)
 	}
 	if commandPreview, ok := plan.ExecutionPlan["command_preview"].(string); ok && commandPreview != "" {
-		fmt.Fprintf(stdout, "Command: %s\n", commandPreview)
+		fmt.Fprintf(stdout, "  Command: %s\n", commandPreview)
 	}
 	if starts, ok := plan.ExecutionPlan["worker_would_start"].(bool); ok {
-		fmt.Fprintf(stdout, "Worker launch: %t\n", starts)
+		fmt.Fprintf(stdout, "  Worker launch: %t\n", starts)
+	}
+	if len(plan.Errors) > 0 {
+		fmt.Fprintln(stdout, "\nResult")
+		for _, validationError := range plan.Errors {
+			fmt.Fprintf(stdout, "  Error: %s\n", validationError)
+		}
+		printValidationRecoveryHint(stdout, plan.ExecutionPlan)
+	}
+}
+
+func validationRoleID(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+	roleID, _ := metadata["role"].(string)
+	return roleID
+}
+
+func printValidationRecoveryHint(stdout io.Writer, executionPlan map[string]any) {
+	source, _ := executionPlan["repository_source"].(string)
+	taskPath, _ := executionPlan["task_path"].(string)
+	if source != "inferred" || taskPath == "" {
+		return
+	}
+	fmt.Fprintln(stdout, "  Next: validate the external task against its target repository:")
+	fmt.Fprintf(stdout, "    promptgrinder validate --repo <repository> %s\n", shellQuote(taskPath))
+	fmt.Fprintf(stdout, "    promptgrinder validate-folder %s --repo <repository>\n", shellQuote(filepath.Dir(taskPath)))
+}
+
+func printTaskPolicyPreview(stdout io.Writer, policy runfolder.TaskPolicyPreview) {
+	if policy.RoleID != "" {
+		fmt.Fprintf(stdout, "  Role: %s\n", policy.RoleID)
+		if policy.RolePath != "" {
+			fmt.Fprintf(stdout, "  Role policy: %s\n", policy.RolePath)
+		}
+		printValidationPaths(stdout, "Role boundary", policy.RoleAllowedPaths)
+	}
+	printValidationPaths(stdout, "Slice allowed paths", policy.SliceAllowedPaths)
+	printValidationPaths(stdout, "Slice forbidden paths", policy.SliceForbiddenPaths)
+	printValidationPaths(stdout, "Expected paths", policy.ExpectedPaths)
+	if policy.EffectiveRule != "" {
+		fmt.Fprintf(stdout, "  Effective scope: %s\n", policy.EffectiveRule)
+	}
+}
+
+func printValidationPaths(stdout io.Writer, label string, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	fmt.Fprintf(stdout, "  %s: %s\n", label, strings.Join(paths, ", "))
+}
+
+func printValidationRuntimeSelection(stdout io.Writer, metadata, executionPlan map[string]any) {
+	if selection, ok := metadata["model_selection"].(map[string]any); ok {
+		model, _ := selection["model"].(string)
+		cost, _ := selection["cost"].(string)
+		capabilities := stringValues(selection["capabilities"])
+		if model != "" {
+			if cost == "" {
+				cost = "not configured"
+			}
+			capabilityLabel := "not declared"
+			if len(capabilities) != 0 {
+				capabilityLabel = strings.Join(capabilities, ", ")
+			}
+			fmt.Fprintf(stdout, "  Model selection: %s (cost: %s); capabilities: %s\n", model, cost, capabilityLabel)
+		}
+	}
+	sandbox := ""
+	if engineMetadata, ok := metadata["engine"].(map[string]any); ok {
+		sandbox, _ = engineMetadata["sandbox"].(string)
+	}
+	if sandbox == "" {
+		if cfg, ok := executionPlan["config"].(map[string]any); ok {
+			sandbox, _ = cfg["engine_codex_sandbox"].(string)
+		}
+	}
+	if sandbox != "" {
+		fmt.Fprintf(stdout, "  Sandbox: %s", sandbox)
+		if sandbox == "danger-full-access" {
+			fmt.Fprint(stdout, " — high-risk local execution requested")
+		}
+		fmt.Fprintln(stdout)
+	}
+}
+
+func stringValues(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return values
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func shellQuote(value string) string {
+	if value != "" && !strings.ContainsAny(value, " \t\n'\"\\$`!&;|<>()[]{}*?") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan) {
+	result := "FAILED"
+	if plan.Valid {
+		result = "PASSED"
+	}
+	fmt.Fprintf(stdout, "Preflight: %s\n", result)
+	fmt.Fprintf(stdout, "Valid: %t\n", plan.Valid)
+	fmt.Fprintf(stdout, "Validation scope: %s\n", plan.ValidationMode)
+	if plan.Preflight.Repository != "" {
+		fmt.Fprintf(stdout, "Repository: %s\n", plan.Preflight.Repository)
+	}
+	if plan.Preflight.Folder != "" {
+		fmt.Fprintf(stdout, "Folder: %s\n", plan.Preflight.Folder)
+	}
+	if plan.Preflight.SequenceID != "" {
+		fmt.Fprintf(stdout, "Sequence ID: %s\n", plan.Preflight.SequenceID)
+	}
+	if plan.Preflight.Inspection.MarkdownTotal != 0 {
+		fmt.Fprintf(stdout, "Prompts: %d of %d Markdown files included\n", len(plan.Preflight.Inspection.Prompts), plan.Preflight.Inspection.MarkdownTotal)
+	}
+	for _, prompt := range plan.Preflight.Inspection.Prompts {
+		if prompt.Role == "" {
+			if prompt.Type != runfolder.TypeSpecification {
+				fmt.Fprintf(stdout, "Role: unscoped (%s) — no role boundary or role model policy applies\n", prompt.Name)
+			}
+			continue
+		}
+		fmt.Fprintf(stdout, "Role: %s (%s)\n", prompt.Role, prompt.Name)
+		if prompt.RolePolicy != nil {
+			printValidationPaths(stdout, "  Role boundary", prompt.RolePolicy.AllowedPaths)
+		}
+	}
+	if plan.Error != "" {
+		fmt.Fprintf(stdout, "Error: %s\n", plan.Error)
+	}
+	fmt.Fprintf(stdout, "Worker launch: %t\n", plan.WorkerWouldStart)
+	if plan.Valid {
+		fmt.Fprintln(stdout, "Result: PASSED — no workers launched.")
 	}
 }
 
@@ -2727,6 +2987,7 @@ func printDefaults(stdout io.Writer, report config.DefaultsReport) {
 	fmt.Fprintf(stdout, "  run_folder.commit_each: %t\n", cfg.RunFolderCommitEach)
 	fmt.Fprintf(stdout, "  run_folder.require_clean_git: %t\n", cfg.RunFolderRequireCleanGit)
 	fmt.Fprintf(stdout, "  run_folder.include_specification: %t\n", cfg.RunFolderIncludeSpecification)
+	fmt.Fprintf(stdout, "  run_folder.recovery_attempts: %d\n", cfg.RunFolderRecoveryAttempts)
 	fmt.Fprintf(stdout, "  run_folder.detach: %t\n", cfg.RunFolderDetach)
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Override order: CLI flags > environment variables > repository .ai/config.yaml > ~/.promptgrinder/config.yaml > default template > built-in defaults.")
@@ -2738,6 +2999,11 @@ func printRunFolderProgress(stdout io.Writer, event pgruntime.RunFolderProgressE
 		fmt.Fprintf(stdout, "Sequence %s started: %d prompt(s)\n", event.SequenceID, event.Total)
 	case "prompt.started":
 		fmt.Fprintf(stdout, "[%d/%d] Working on %s (%s)\n", event.Completed+1, event.Total, event.PromptName, event.PromptType)
+	case "prompt.recovering":
+		fmt.Fprintf(stdout, "[%d/%d] Recovering %s (attempt %d)\n", event.Completed+1, event.Total, event.PromptName, event.RecoveryAttempt)
+		if event.Reason != "" {
+			fmt.Fprintf(stdout, "Reason: %s\n", event.Reason)
+		}
 	case "prompt.skipped":
 		fmt.Fprintf(stdout, "[%d/%d] Skipped %s\n", event.Completed, event.Total, event.PromptName)
 	case "prompt.succeeded":

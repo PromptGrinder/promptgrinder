@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -12,9 +13,24 @@ import (
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/execution"
 	"promptgrinder/internal/state"
+	"promptgrinder/internal/testsupport"
 )
 
 var _ engine.Engine = Engine{}
+var _ engine.ModelCatalogProvider = Engine{}
+
+func TestListModelsUsesRuntimeCatalog(t *testing.T) {
+	models, err := (Engine{Command: testsupport.FakeCodex(t)}).ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 || models[0].ID != "gpt-5" || models[1].ID != "gpt-5.5" || models[2].ID != "gpt-5.6-sol" {
+		t.Fatalf("models = %#v", models)
+	}
+	if len(models[0].InputModalities) != 2 || models[0].InputModalities[1] != "image" {
+		t.Fatalf("model modalities = %#v", models[0])
+	}
+}
 
 func FuzzZshQuoteRoundTrip(f *testing.F) {
 	for _, seed := range []string{"plain", "space and ünicode", "quote'$(touch nope)*?[x]", "line1\nline2"} {

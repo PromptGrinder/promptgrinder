@@ -21,7 +21,7 @@ const FrontmatterContractVersion = 2
 
 var (
 	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
-	engineKeys    = map[string]bool{"name": true, "model": true, "profile": true, "sandbox": true, "approval": true, "web_search": true, "images": true}
+	engineKeys    = map[string]bool{"name": true, "model": true, "max_cost": true, "capabilities": true, "profile": true, "sandbox": true, "approval": true, "web_search": true, "images": true}
 	secretPattern = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(sk-[a-z0-9_-]{8,}|(?:api[_ -]?key|[a-z0-9_]*(?:token|password|secret))\s*[:=]\s*\S+))`)
 )
 
@@ -141,6 +141,22 @@ func Validate(task Task, source string) error {
 		for _, key := range sortedKeys(raw) {
 			if !engineKeys[key] {
 				return fail("unknown nested key %q", "engine."+key)
+			}
+		}
+		for _, key := range []string{"name", "model", "max_cost", "profile", "sandbox", "approval"} {
+			if value, ok := raw[key]; ok {
+				text, ok := value.(string)
+				if !ok {
+					return fail("engine.%s must be a string", key)
+				}
+				if strings.TrimSpace(text) == "" {
+					return fail("engine.%s must be a non-empty string", key)
+				}
+			}
+		}
+		if values, ok := raw["capabilities"]; ok {
+			if _, err := optionalStringList(values, "engine.capabilities"); err != nil {
+				return fail("%v", err)
 			}
 		}
 	}

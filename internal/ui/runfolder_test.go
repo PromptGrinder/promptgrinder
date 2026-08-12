@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,17 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererShowsAutomaticRecovery(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement.md", Type: runfolder.TypeImplement, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.recovering", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "recovering", RecoveryAttempt: 1, Reason: "automatic recovery attempt 1 of 1 after: launch failed"})
+	r.Close()
+	if got := out.String(); !strings.Contains(got, "10-implement.md [implement] - active") || !strings.Contains(got, "Reason: automatic recovery attempt 1 of 1 after: launch failed") {
+		t.Fatalf("recovery output = %q", got)
+	}
+}
+
 func TestRunFolderRendererReportsIncludedAndIgnoredMarkdown(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
@@ -84,6 +96,21 @@ func TestRunFolderRendererResumeInventoryAndDurations(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
+	}
+}
+
+func TestRunFolderRendererShowsAutomaticCompatibleResumePlan(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
+	r.Update(runfolder.ProgressEvent{
+		Type:       "run.started",
+		SequenceID: "seq_prior",
+		ResumePlan: "Compatible sequence seq_prior adopted automatically: retaining 4 successful slice(s); restarting at 30-implement.md. Use --fresh to rerun all slices.",
+		Inventory:  inventory(),
+	})
+	r.Close()
+	if got := out.String(); !strings.Contains(got, "Resume plan: Compatible sequence seq_prior adopted automatically") {
+		t.Fatalf("resume plan missing from output: %q", got)
 	}
 }
 
@@ -155,6 +182,30 @@ func TestTerminalFileLinkRejectsControlCharacters(t *testing.T) {
 	got := terminalFileLink("/tmp/worker\x1b]8;;https://example.invalid/worker.log")
 	if got != "worker log" || strings.Contains(got, "\x1b") {
 		t.Fatalf("unsafe terminal link = %q", got)
+	}
+}
+
+func TestTerminalFileLinkShowsCopyableAbsolutePath(t *testing.T) {
+	const relative = "worker logs/wrk_1/worker.log"
+	absolute, err := filepath.Abs(relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := terminalFileLink(relative)
+	if !strings.Contains(got, absolute) || !strings.Contains(got, "file://") {
+		t.Fatalf("terminal link does not expose absolute path and file target: %q", got)
+	}
+}
+
+func TestRunFolderRendererUsesSharedSpinnerFrames(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeDefault})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement.md", Type: runfolder.TypeImplement, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.started", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement})
+	r.Close()
+	if got := out.String(); !strings.Contains(got, "|\033[0m [1/1] 10-implement.md") || strings.Contains(got, "⠋") {
+		t.Fatalf("run-folder did not use shared spinner frame: %q", got)
 	}
 }
 

@@ -292,6 +292,39 @@ func TestLoadUsesDefaultTemplate(t *testing.T) {
 	}
 }
 
+func TestLoadRunFolderRecoveryAttempts(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("run_folder:\n  recovery_attempts: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithHome("", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RunFolderRecoveryAttempts != 2 {
+		t.Fatalf("RunFolderRecoveryAttempts = %d, want 2", cfg.RunFolderRecoveryAttempts)
+	}
+}
+
+func TestLoadRejectsInvalidRunFolderRecoveryAttempts(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("run_folder:\n  recovery_attempts: often\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithHome("", home)
+	if err == nil || !strings.Contains(err.Error(), "run_folder.recovery_attempts must be an integer") {
+		t.Fatalf("err = %v", err)
+	}
+	valid, err := LoadWithHome("", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid.RunFolderRecoveryAttempts = 4
+	if err := Validate(valid); err == nil || !strings.Contains(err.Error(), "run_folder.recovery_attempts") {
+		t.Fatalf("Validate err = %v", err)
+	}
+}
+
 func TestUserConfigOverridesDefaultTemplate(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(filepath.Join(home, "templates"), 0o755); err != nil {
@@ -329,7 +362,7 @@ func TestEnsureDefaultTemplateCreatesExampleWhenAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "close_on_finish: true") || !strings.Contains(string(data), "detach: true") || !strings.Contains(out.String(), "Created") {
+	if !strings.Contains(string(data), "close_on_finish: true") || !strings.Contains(string(data), "recovery_attempts: 0") || !strings.Contains(string(data), "detach: true") || !strings.Contains(out.String(), "Created") {
 		t.Fatalf("template/output missing expected content:\n%s\n%s", string(data), out.String())
 	}
 }

@@ -51,6 +51,7 @@ type Options struct {
 	Template                string
 	EngineOverride          string
 	IncludeSpecification    bool
+	RecoveryAttempts        int
 	HomeDir                 string
 	BaseConfig              config.Config
 	UseRepoConfig           bool
@@ -139,9 +140,11 @@ type ProgressEvent struct {
 	CompletionStatus string           `json:"completion_status,omitempty"`
 	NextPromptSafe   *bool            `json:"next_prompt_safe,omitempty"`
 	Reason           string           `json:"reason,omitempty"`
+	RecoveryAttempt  int              `json:"recovery_attempt,omitempty"`
 	Inventory        []ProgressPrompt `json:"inventory,omitempty"`
 	MarkdownTotal    int              `json:"markdown_total,omitempty"`
 	Ignored          []string         `json:"ignored,omitempty"`
+	ResumePlan       string           `json:"resume_plan,omitempty"`
 }
 
 // ProgressPrompt is the prompt metadata needed to render an ordered run
@@ -158,12 +161,13 @@ type persistedProgressEvent struct {
 }
 
 type Prompt struct {
-	Path      string
-	Name      string
-	ID        string
-	Type      PromptType
-	Role      string
-	DependsOn []string
+	Path       string
+	Name       string
+	ID         string
+	Type       PromptType
+	Role       string
+	RolePolicy *RolePolicy
+	DependsOn  []string
 }
 
 type FolderInspection struct {
@@ -226,6 +230,7 @@ type SequenceItem struct {
 	CompletionStatus string     `json:"completion_status,omitempty"`
 	NextPromptSafe   *bool      `json:"next_prompt_safe,omitempty"`
 	CompletionReason string     `json:"completion_reason,omitempty"`
+	RecoveryAttempts int        `json:"recovery_attempts,omitempty"`
 }
 
 type TokenUsage struct {
@@ -249,21 +254,22 @@ type PromptState struct {
 	CompletionStatus string       `json:"completion_status,omitempty"`
 	NextPromptSafe   *bool        `json:"next_prompt_safe,omitempty"`
 	CompletionReason string       `json:"completion_reason,omitempty"`
+	RecoveryAttempts int          `json:"recovery_attempts,omitempty"`
 	Worker           state.Worker `json:"-"`
 }
 
 func Classify(filename string) PromptType {
 	name := filepath.Base(filename)
 	switch {
-	case matches(name, `^00-specification.*\.md$`):
+	case matches(name, `^00(?:[A-Z]+)?-specification.*\.md$`):
 		return TypeSpecification
-	case matches(name, `^\d\d-implement-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-implement-.+\.md$`):
 		return TypeImplement
-	case matches(name, `^\d\d-test-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-test-.+\.md$`):
 		return TypeTest
-	case matches(name, `^\d\d-verify-.+\.md$`), matches(name, `^\d\d-final-verify.*\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-verify-.+\.md$`), matches(name, `^\d\d(?:[A-Z]+)?-final-verify.*\.md$`):
 		return TypeVerify
-	case matches(name, `^\d\d-review-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-review-.+\.md$`):
 		return TypeReview
 	default:
 		return TypeUnknown
@@ -297,7 +303,7 @@ func Inspect(folder string) (FolderInspection, error) {
 			continue
 		}
 		inspection.MarkdownTotal++
-		if !matches(name, `^\d\d-.+\.md$`) {
+		if !matches(name, `^\d\d(?:[A-Z]+)?-.+\.md$`) {
 			inspection.Ignored = append(inspection.Ignored, name)
 			continue
 		}
@@ -337,7 +343,7 @@ func inspectPrompt(promptPath, name string) (Prompt, error) {
 	filenameType := Classify(name)
 	declaredType := promptTypeValue(task.Metadata["type"])
 	if filenameType != TypeUnknown && filenameType != TypeSpecification && declaredType != TypeUnknown && filenameType != declaredType {
-		return Prompt{}, fmt.Errorf("run-folder preflight: %s declares type %q but filename declares %q", name, declaredType, filenameType)
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s starts with the %q slice naming convention (type %q), but its frontmatter says type: %q; rename it to NN-%s-...md or change frontmatter type to %q", name, filenameType, filenameType, declaredType, declaredType, filenameType)
 	}
 	promptType := filenameType
 	if promptType == TypeUnknown {
@@ -427,6 +433,9 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 	if len(prompts) == 0 {
 		return "", fmt.Errorf("no recognized numbered Markdown prompts found in %s", absFolder)
 	}
+	if err := applyRolePolicies(repoRoot, prompts); err != nil {
+		return "", fmt.Errorf("run-folder preflight: %w", err)
+	}
 	if options.Template == "" {
 		options.Template = "codex"
 	}
@@ -470,6 +479,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		return Summary{}, err
 	}
 	summary = Summary{Run: runState, Sequence: &sequence, Prompts: prompts, Started: true, Resumed: resumed || sequenceResumed}
+	resumePlan := compatibleResumePlan(sequence, preflight.SequenceID, sequenceResumed)
 	if options.HomeDir != "" {
 		sequence.EventPath = filepath.Join(options.HomeDir, "events", "sequences", sequence.SequenceID+".jsonl")
 	}
@@ -515,7 +525,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		}
 		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, Type: prompt.Type, Status: status})
 	}
-	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
+	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, ResumePlan: resumePlan, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
 	if err := store.ensure(); err != nil {
 		return summary, err
 	}
@@ -566,7 +576,34 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		if err := sequenceStore.save(sequence); err != nil {
 			return summary, err
 		}
-		promptState, err := runPrompt(repoRoot, prompt, specContext, sequence.SessionID, options, launcher)
+		recoveryAttempt := 0
+		recoveryContext := ""
+		var promptState PromptState
+		var err error
+		for {
+			promptState, err = runPrompt(repoRoot, prompt, specContext, sequence.SessionID, recoveryContext, options, launcher)
+			promptState.RecoveryAttempts = recoveryAttempt
+			if err == nil || recoveryAttempt >= options.RecoveryAttempts || !recoverableFailure(promptState, err) {
+				break
+			}
+			recoveryAttempt++
+			promptState.Status = "recovering"
+			promptState.Error = err.Error()
+			if promptState.Worker.ID == "" {
+				promptState.Worker = state.Worker{ID: promptState.WorkerID, ExitCode: promptState.ExitCode}
+			}
+			if err := store.savePrompt(promptState); err != nil {
+				return summary, err
+			}
+			sequence.mark(prompt.Name, "running", promptState.Worker, nil, recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err))
+			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.refreshSummary()
+			_ = sequenceStore.save(sequence)
+			_ = store.saveSummary(sequence)
+			identity := workeridentity.FromWorker(promptState.Worker)
+			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, Completed: len(runState.Completed), Total: len(prompts)})
+			recoveryContext = recoveryPromptContext(recoveryAttempt, options.RecoveryAttempts, err, promptState)
+		}
 		if err != nil {
 			promptState.Status = "failed"
 			promptState.Error = err.Error()
@@ -574,6 +611,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 				promptState.Worker = state.Worker{ID: promptState.WorkerID, ExitCode: promptState.ExitCode}
 			}
 			sequence.mark(prompt.Name, "failed", promptState.Worker, promptState.FinishedAt, err.Error())
+			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
 			finished := time.Now().UTC()
 			sequence.FinishedAt = &finished
 			sequence.refreshSummary()
@@ -597,6 +635,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			sequence.SessionID = promptState.Worker.EngineResult.SessionID
 		}
 		sequence.mark(prompt.Name, "succeeded", promptState.Worker, promptState.FinishedAt, "")
+		sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
 		sequence.refreshSummary()
 		_ = sequenceStore.save(sequence)
 		_ = store.saveSummary(sequence)
@@ -656,7 +695,7 @@ func validatePrompts(prompts []Prompt) error {
 			return fmt.Errorf("task frontmatter %s: %w", prompt.Name, err)
 		}
 		if len(expected) > 0 {
-			violations, err := workerpathpolicy.Violations(policy, expected)
+			violations, err := promptPolicyViolations(prompt, policy, expected)
 			if err != nil {
 				return fmt.Errorf("task frontmatter %s: validate expected_paths: %w", prompt.Name, err)
 			}
@@ -771,14 +810,14 @@ func startSupervisorHeartbeat(options Options, sequence *SequenceState) func(str
 	}
 }
 
-func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, options Options, launcher Launcher) (PromptState, error) {
+func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryContext string, options Options, launcher Launcher) (PromptState, error) {
 	started := time.Now().UTC()
 	promptState := PromptState{Prompt: prompt.Name, PromptType: prompt.Type, Status: "running", StartedAt: &started}
 	policy, err := taskPathPolicy(prompt.Path)
 	if err != nil {
 		return promptState, err
 	}
-	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0
+	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0 || roleHasPathPolicy(prompt.RolePolicy)
 	var baseline workerpathpolicy.Snapshot
 	if needsGitTracking {
 		baseline, err = workerpathpolicy.Capture(repoRoot)
@@ -796,9 +835,12 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHABefore, _ = gitSHA(repoRoot)
 	}
-	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach)
+	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach, prompt.RolePolicy)
 	if err != nil {
 		return promptState, err
+	}
+	if recoveryContext != "" {
+		content += recoveryContext
 	}
 	worker, err := launcher.LaunchPrompt(prompt.Path, content, sessionID)
 	promptState.Worker = worker
@@ -878,7 +920,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID string, op
 	if err != nil {
 		return promptState, fmt.Errorf("attribute worker changes: %w", err)
 	}
-	violations, err := workerpathpolicy.Violations(policy, changed)
+	violations, err := promptPolicyViolations(prompt, policy, changed)
 	if err != nil {
 		return promptState, fmt.Errorf("evaluate task path policy: %w", err)
 	}
@@ -953,7 +995,27 @@ func formatViolations(violations []workerpathpolicy.Violation) string {
 	return strings.Join(parts, ", ")
 }
 
-func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
+func roleHasPathPolicy(role *RolePolicy) bool {
+	return role != nil && len(role.AllowedPaths) > 0
+}
+
+func promptPolicyViolations(prompt Prompt, slicePolicy workerdomain.WorkerPolicy, paths []string) ([]workerpathpolicy.Violation, error) {
+	violations, err := workerpathpolicy.Violations(slicePolicy, paths)
+	if err != nil || prompt.RolePolicy == nil || len(prompt.RolePolicy.AllowedPaths) == 0 {
+		return violations, err
+	}
+	rolePolicy := workerdomain.WorkerPolicy{AllowedPaths: prompt.RolePolicy.AllowedPaths}
+	roleViolations, err := workerpathpolicy.Violations(rolePolicy, paths)
+	if err != nil {
+		return nil, err
+	}
+	for index := range roleViolations {
+		roleViolations[index].Reason = "outside role allowed paths"
+	}
+	return append(violations, roleViolations...), nil
+}
+
+func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RolePolicy) (string, error) {
 	active, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -964,6 +1026,7 @@ func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
 	if strings.TrimSpace(specContext) != "" {
 		assembledBody = "# Shared Context\n\n" + specContext + "\n\n# Active Prompt\n\n"
 	}
+	assembledBody += rolePolicyPrompt(rolePolicy)
 	assembledBody += body
 	if commitEach {
 		assembledBody += promptGrinderCommitOwnershipContract
@@ -973,6 +1036,47 @@ func assemblePrompt(path, specContext string, commitEach bool) (string, error) {
 		return frontmatter + assembledBody, nil
 	}
 	return assembledBody, nil
+}
+
+func rolePolicyPrompt(role *RolePolicy) string {
+	if role == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# Effective Role Policy\n\n")
+	fmt.Fprintf(&b, "Role: `%s`\n\n", role.ID)
+	if role.Description != "" {
+		b.WriteString(role.Description + "\n\n")
+	}
+	if len(role.AllowedPaths) > 0 {
+		b.WriteString("## Role Scope\n\nThe role boundary is enforced in addition to this slice's path policy. Do not modify files outside:\n\n")
+		for _, pattern := range role.AllowedPaths {
+			fmt.Fprintf(&b, "- `%s`\n", pattern)
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString("## Validation Boundary\n\nRun only validation declared by this slice. Role quality gates are readiness guidance, not required commands for this intermediate slice.\n\n")
+	if role.Runtime.Model != "" || role.Runtime.MaxCost != "" || len(role.Runtime.Capabilities) > 0 {
+		b.WriteString("## Model Selection\n\nThis role supplies model defaults. A slice may explicitly override them in `engine`.\n\n")
+		if role.Runtime.Model != "" {
+			fmt.Fprintf(&b, "- Model: `%s`\n", role.Runtime.Model)
+		}
+		if role.Runtime.MaxCost != "" {
+			fmt.Fprintf(&b, "- Maximum cost tier: `%s`\n", role.Runtime.MaxCost)
+		}
+		if len(role.Runtime.Capabilities) > 0 {
+			fmt.Fprintf(&b, "- Required capabilities: `%s`\n", strings.Join(role.Runtime.Capabilities, "`, `"))
+		}
+		b.WriteByte('\n')
+	}
+	if len(role.QualityGates) > 0 {
+		b.WriteString("## Role Readiness Guidance\n\n")
+		for _, gate := range role.QualityGates {
+			fmt.Fprintf(&b, "- %s\n", gate)
+		}
+		b.WriteString("\nDo not run these gates unless the slice's validation or task body explicitly requires them.\n\n")
+	}
+	return b.String()
 }
 
 const promptGrinderCommitOwnershipContract = `
@@ -991,7 +1095,7 @@ End your final answer with exactly one occurrence of each field:
 STATUS: PASS
 NEXT_PROMPT_SAFE: yes
 
-Use STATUS: BLOCKED or STATUS: PARTIAL and NEXT_PROMPT_SAFE: no when the task is not fully and safely complete. PromptGrinder will stop this ordered sequence unless the final report is unambiguous PASS/yes.
+Use STATUS: BLOCKED or STATUS: PARTIAL and NEXT_PROMPT_SAFE: no when the task is not fully and safely complete. PromptGrinder will not advance to a later slice unless the final report is unambiguous PASS/yes.
 `
 
 func splitFrontmatter(text string) (string, string, bool) {
@@ -1169,6 +1273,48 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 	}
 	s.Status = sequenceStatus(s.Items)
 	s.touch()
+}
+
+func (s *SequenceState) setRecoveryAttempts(promptName string, attempts int) {
+	for i := range s.Items {
+		if s.Items[i].PromptName == promptName {
+			s.Items[i].RecoveryAttempts = attempts
+			return
+		}
+	}
+}
+
+func recoverableFailure(prompt PromptState, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error() + " " + prompt.CompletionReason)
+	for _, unsafe := range []string{
+		"path policy violation", "outside allowed paths", "forbidden paths",
+		"model preflight", "not selectable by this codex runtime",
+		"working tree is dirty", "cancelled", "preflight",
+	} {
+		if strings.Contains(text, unsafe) {
+			return false
+		}
+	}
+	return true
+}
+
+func recoveryMessage(attempt, maximum int, err error) string {
+	return fmt.Sprintf("automatic recovery attempt %d of %d after: %s", attempt, maximum, err)
+}
+
+func recoveryPromptContext(attempt, maximum int, err error, previous PromptState) string {
+	var b strings.Builder
+	b.WriteString("\n# Recovery Attempt\n\n")
+	fmt.Fprintf(&b, "PromptGrinder is retrying this same slice (attempt %d of %d). Earlier successful slices remain complete; do not broaden this slice's scope.\n\n", attempt, maximum)
+	b.WriteString("The previous attempt failed. Diagnose and correct a recoverable execution, reasoning, or completion-report problem before continuing. Preserve permitted existing changes, do not bypass path policy, do not change model or safety configuration, and emit the required completion report exactly once.\n\n")
+	fmt.Fprintf(&b, "Previous failure: %s\n", err)
+	if previous.CompletionReason != "" {
+		fmt.Fprintf(&b, "Previous completion reason: %s\n", previous.CompletionReason)
+	}
+	return b.String()
 }
 
 func sequenceStatus(items []SequenceItem) string {
@@ -1593,8 +1739,78 @@ func (s sequenceStore) loadOrCreate(folder, repoRoot string, prompts []Prompt, o
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return SequenceState{}, false, err
 		}
+		compatible, found, err := s.findCompatibleResume(folder, repoRoot, prompts)
+		if err != nil {
+			return SequenceState{}, false, err
+		}
+		if found {
+			return compatible, true, nil
+		}
 	}
 	return base, false, nil
+}
+
+// findCompatibleResume adopts only an unfinished sequence whose completed
+// prefix still matches the current prompt files. It lets users repair a later
+// slice or role policy without rerunning successful earlier slices. This is
+// the default when an exact sequence identity no longer exists; --fresh,
+// --restart, and --no-resume remain the explicit ways to discard that prefix.
+func (s sequenceStore) findCompatibleResume(folder, repoRoot string, prompts []Prompt) (SequenceState, bool, error) {
+	sequences, err := s.list()
+	if err != nil {
+		return SequenceState{}, false, err
+	}
+	for _, sequence := range sequences {
+		if sequence.Folder != folder || (sequence.RepositoryPath != "" && sequence.RepositoryPath != repoRoot) || sequence.Status == "completed" || sequence.Status == "cancelled" || len(sequence.Items) != len(prompts) {
+			continue
+		}
+		compatible := true
+		seenIncomplete := false
+		for index, item := range sequence.Items {
+			if item.PromptName != prompts[index].Name {
+				compatible = false
+				break
+			}
+			complete := item.Status == "succeeded" || item.Status == "skipped"
+			if !complete {
+				seenIncomplete = true
+				continue
+			}
+			if seenIncomplete {
+				compatible = false
+				break
+			}
+			effectiveHash, hashErr := promptContentHash(prompts[index].Path, prompts[index].RolePolicy)
+			rawHash, rawErr := fileHash(prompts[index].Path)
+			if hashErr != nil || rawErr != nil || (item.ContentHash != effectiveHash && item.ContentHash != rawHash) {
+				compatible = false
+				break
+			}
+		}
+		if compatible {
+			return sequence, true, nil
+		}
+	}
+	return SequenceState{}, false, nil
+}
+
+func compatibleResumePlan(sequence SequenceState, requestedSequenceID string, adopted bool) string {
+	if !adopted || sequence.SequenceID == requestedSequenceID {
+		return ""
+	}
+	retained := 0
+	restartAt := "the first unfinished slice"
+	for _, item := range sequence.Items {
+		if item.Status == "succeeded" {
+			retained++
+		}
+		if item.Status == "succeeded" || item.Status == "skipped" {
+			continue
+		}
+		restartAt = item.PromptName
+		break
+	}
+	return fmt.Sprintf("Compatible sequence %s adopted automatically: retaining %d successful slice(s); restarting at %s. Use --fresh to rerun all slices.", sequence.SequenceID, retained, restartAt)
 }
 
 func (s sequenceStore) load(sequenceID string) (SequenceState, error) {
@@ -1649,7 +1865,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 	}
 	engines := []string{}
 	for _, prompt := range prompts {
-		hash, err := fileHash(prompt.Path)
+		hash, err := promptContentHash(prompt.Path, prompt.RolePolicy)
 		if err != nil {
 			return SequenceState{}, err
 		}
@@ -1770,6 +1986,15 @@ func fileHash(path string) (string, error) {
 		return "", err
 	}
 	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func promptContentHash(path string, role *RolePolicy) (string, error) {
+	hash, err := fileHash(path)
+	if err != nil || role == nil {
+		return hash, err
+	}
+	sum := sha256.Sum256([]byte(hash + "\n" + role.identity()))
 	return hex.EncodeToString(sum[:]), nil
 }
 

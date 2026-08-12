@@ -782,10 +782,33 @@ func (s Service) Defaults() config.DefaultsReport {
 	return config.Defaults(repoRoot, cfg)
 }
 
-func (s Service) Validate(path, engineOverride string) (worker.ValidationPlan, error) {
+func (s Service) Validate(path, engineOverride, repoPath string) (worker.ValidationPlan, error) {
 	manager := s.Worker
 	manager.EngineOverride = engineOverride
-	return manager.Validate(path)
+	manager.RepositoryOverride = repoPath
+	plan, err := manager.Validate(path)
+	if plan.ExecutionPlan == nil {
+		plan.ExecutionPlan = map[string]any{}
+	}
+	if repoPath != "" {
+		plan.ExecutionPlan["repository_source"] = "explicit"
+	} else {
+		plan.ExecutionPlan["repository_source"] = "inferred"
+	}
+	plan.ExecutionPlan["validation_mode"] = "standalone task; run-folder ordering, dependency, and completion checks are not evaluated"
+	if err != nil {
+		return plan, err
+	}
+	repoRoot, _ := plan.ExecutionPlan["repository_path"].(string)
+	policy, policyErr := runfolder.InspectTaskPolicy(repoRoot, path)
+	if policyErr != nil {
+		err = fmt.Errorf("validate role and path policy: %w", policyErr)
+		plan.Valid = false
+		plan.Errors = append(plan.Errors, err.Error())
+		return plan, err
+	}
+	plan.ExecutionPlan["task_policy"] = policy
+	return plan, nil
 }
 
 func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFolderSummary, error) {
@@ -795,14 +818,11 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 	if options.RepoPath == "" {
 		options.RepoPath = "."
 	}
-	absRepoPath, err := filepath.Abs(options.RepoPath)
+	preflight, err := s.PreflightRunFolder(path, options)
 	if err != nil {
 		return RunFolderSummary{}, err
 	}
-	repoRoot, err := repository.DetectRoot(absRepoPath)
-	if err != nil {
-		return RunFolderSummary{}, err
-	}
+	repoRoot := preflight.Repository
 	options.RepoPath = repoRoot
 	lease, err := worktree.Acquire(options.HomeDir, repoRoot, "run-folder "+path, options.AllowConcurrentWorktree)
 	if err != nil {
@@ -834,7 +854,27 @@ func (s Service) PreflightRunFolder(path string, options RunFolderOptions) (RunF
 	}
 	options.BaseConfig = s.Worker.BaseConfig
 	options.UseRepoConfig = s.Worker.UseRepoConfig
-	return runfolder.Preflight(path, options)
+	preflight, err := runfolder.Preflight(path, options)
+	if err != nil {
+		return preflight, err
+	}
+	manager := s.Worker
+	manager.EngineOverride = options.EngineOverride
+	manager.RepositoryOverride = preflight.Repository
+	manager.SkipExecutorValidation = true
+	for _, prompt := range preflight.Inspection.Prompts {
+		if prompt.Type == runfolder.TypeSpecification {
+			continue
+		}
+		content, err := os.ReadFile(prompt.Path)
+		if err != nil {
+			return RunFolderPreflight{}, err
+		}
+		if err := manager.ValidateContentWithMetadata(prompt.Path, string(content), nil); err != nil {
+			return RunFolderPreflight{}, fmt.Errorf("run-folder model preflight %s: %w", prompt.Name, err)
+		}
+	}
+	return preflight, nil
 }
 
 func (s Service) Sequences() ([]SequenceProgress, error) {

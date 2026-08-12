@@ -140,20 +140,21 @@ Exercise the public behavior, fix only regressions caused by this feature, and
 run the declared validation. Report any residual risk.
 EOF
 
-promptgrinder validate tasks/project-archive/10-implement-domain.md
-promptgrinder validate tasks/project-archive/20-implement-cli.md
-promptgrinder validate tasks/project-archive/30-verify-project-archive.md
+promptgrinder validate-folder tasks/project-archive --repo .
 
 git add .promptgrinder tasks/project-archive
 git commit -m "Add PromptGrinder roles and project archive slices"
 ```
 
-Runnable slice names use `NN-implement-*.md`, `NN-test-*.md`,
-`NN-verify-*.md`, or `NN-review-*.md`. An optional
+Runnable slice names use `NN[A-Z]*-implement-*.md`, `NN[A-Z]*-test-*.md`,
+`NN[A-Z]*-verify-*.md`, or `NN[A-Z]*-review-*.md`; the letter suffix is
+optional, so both `10-implement-domain.md` and
+`08A-implement-ranking-history.md` are valid. An optional
 `00-specification*.md` supplies shared context. Existing descriptive filenames
-such as `01-snapshot-reliability.md` are also safe when frontmatter declares a
-stable `id` and explicit `type`; `role` identifies the worker responsibility
-and `depends_on` names earlier task IDs. For a large SonarQube cleanup,
+such as `01-snapshot-reliability.md` or `08A-ranking-history-semantics.md` are
+also safe when frontmatter declares a stable `id` and explicit `type`; `role`
+identifies the worker responsibility and `depends_on` names earlier task IDs.
+For a large SonarQube cleanup,
 use the same pattern but group related findings into bounded files such as
 `10-implement-sonar-service-errors.md`, `20-implement-sonar-cli-errors.md`, and
 `30-verify-sonar-cleanup.md`; put rule IDs, affected paths, and the relevant
@@ -168,6 +169,95 @@ enforce a slice's file boundary, while project roles add reusable
 responsibility, runtime, and path restrictions for named workers. These
 controls reduce risk, but they do not replace reviewing the generated changes
 and test evidence.
+
+When a slice declares `role`, PromptGrinder loads that role's description and
+path boundary into the worker prompt. Role paths are an outer boundary: a slice
+can narrow them with its own path policy but cannot escape them. Role quality
+gates remain readiness guidance; only the slice's declared `validation` is
+required for that slice.
+
+### Choose models deliberately
+
+Use repository-owned model policy to make cost and capability choices
+reviewable. PromptGrinder never silently falls back to a more expensive model.
+The installed, signed-in Codex runtime remains the authority on which configured
+models are currently selectable.
+
+```yaml
+# .promptgrinder/models.yaml
+version: 1
+default: gpt-5.6-terra
+models:
+  - id: gpt-5.6-luna
+    cost: low
+    capabilities: [text, code]
+  - id: gpt-5.6-terra
+    cost: medium
+    capabilities: [text, code, image]
+  - id: gpt-5.6-sol
+    cost: high
+    capabilities: [text, code, image, web-search]
+```
+
+Roles can select a bounded default without widening their file scope. Keep
+production code out of a documentation or CI role's `allowed_paths`; the role
+path policy remains an enforced outer boundary for every slice using that role.
+
+```yaml
+# .promptgrinder/roles/documentation.yaml
+id: documentation
+allowed_paths: [README.md, docs/**]
+runtime:
+  model: gpt-5.6-luna
+  max_cost: low
+  capabilities: [text, code]
+```
+
+A task may explicitly override a role, or request the lowest-cost configured
+model that satisfies its needs:
+
+```yaml
+engine:
+  name: codex
+  max_cost: medium
+  capabilities: [code, image]
+```
+
+Precedence is task `engine` settings, then role runtime defaults, then the
+project policy default. Before launch, PromptGrinder checks the resolved model
+against Codex's live catalog. An unavailable, disallowed, over-budget, or
+incapable model fails preflight and starts no worker. If Codex rejects a model
+after preflight because availability changed, the worker stops and retains the
+runtime error; PromptGrinder does not retry with another model.
+
+### Recover an obviously stuck slice without rerunning the completed prefix
+
+Automatic recovery is opt-in and bounded. Set one to three attempts when an
+agent can often correct its own execution, reasoning, or completion-report
+mistake after seeing the exact first failure:
+
+```yaml
+# ~/.promptgrinder/config.yaml, .ai/config.yaml, or the default template
+run_folder:
+  recovery_attempts: 1
+```
+
+The command-line equivalent is `--recovery-attempts 1`. The default is `0`:
+existing fail-fast behavior remains unchanged. A retry applies only to the
+current failed slice; earlier successful slices are not rerun, and the retry
+receives the preceding failure as additional context. PromptGrinder persists
+the recovery count and emits a `prompt.recovering` event.
+
+Recovery never overrides safeguards. Invalid model selection, preflight or
+path-policy failures, cancellation, and a dirty required baseline stop
+immediately. A `BLOCKED` or otherwise non-passing completion can retry the
+same slice, but no later slice starts until it produces `PASS` and
+`NEXT_PROMPT_SAFE: yes`. PromptGrinder also never selects a fallback model;
+inspect the retained worker log and use `--resume` after a human repair when a
+failure is not recoverable.
+
+See [Slice DSL Reference](docs/slice-dsl.md) for the complete filename,
+frontmatter, path-policy, ordering, and completion-report contract.
 
 ### 5. Run the slices
 
@@ -375,7 +465,8 @@ commits are intended.
 | `roles refine <id\|latest>` | Re-run deterministic refinement without AI |
 | `roles apply <id\|latest>` | Apply safe additions or explicitly selected stored items without AI |
 | `roles reject <id\|latest>` | Reject a stored review without writing role YAML |
-| `validate <task.md>` | Validate a work order without creating a worker; add `--render` to print the exact engine prompt |
+| `validate <task.md>` | Validate one work order without creating a worker; use `--repo` for an external task folder and `--render` to print the exact engine prompt |
+| `validate-folder <folder>` | Run the complete role, path, dependency, model, and Git preflight without launching workers |
 | `doctor` | Inventory supported runtimes and terminals, then check platform, Git, configuration, state, and readiness |
 | `setup` | Run the read-only machine scan, then preview or create PromptGrinder-owned first-use files |
 | `list` | List workers |
@@ -395,15 +486,23 @@ output.
 ### Ordered folder completion contract
 
 `run-folder` discovers recognized typed Markdown names:
-`00-specification*.md`, `NN-implement-*.md`, `NN-test-*.md`,
-`NN-verify-*.md`, `NN-final-verify*.md`, and `NN-review-*.md`. It also accepts
-generic `NN-*.md` names when they declare valid `id` and `type` frontmatter.
+`00[A-Z]*-specification*.md`, `NN[A-Z]*-implement-*.md`,
+`NN[A-Z]*-test-*.md`, `NN[A-Z]*-verify-*.md`,
+`NN[A-Z]*-final-verify*.md`, and `NN[A-Z]*-review-*.md`. The letter suffix is
+optional. It also accepts generic `NN[A-Z]*-*.md` names when they declare valid
+`id` and `type` frontmatter.
 README files, notes, completion reports, and untyped numbered files are never runnable.
 Before detaching or creating sequence state, PromptGrinder classifies every visible Markdown
 file, validates every included prompt and dependency, resolves roles, and checks
 the Git baseline. Numbered task-like files with an
 unsupported name fail preflight with included/total counts instead of being
 silently skipped; ordinary notes are reported as ignored.
+When a prompt declares a role, it must be registered in
+`.promptgrinder/project.yaml` and have a matching role YAML file. Prompts
+without a role remain supported but are explicitly reported as `unscoped` by
+folder validation, meaning no role boundary or role-specific model policy
+applies. Independent role, prompt, and dirty-baseline problems are reported
+together before a worker can launch.
 Specifications are shared context unless `--include-specification` is set.
 
 PromptGrinder appends one visible completion-report instruction to every
@@ -425,13 +524,22 @@ Detached completion and failure notifications are deterministic
 local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
 Foreground execution stays in the invoking terminal, prints the full prompt
 inventory before launch, and shows live status, elapsed time, worker IDs, logs,
-and immediate failure reasons. `--plain` keeps the same information without
+and immediate failure reasons. It uses the same `|`, `/`, `-`, and `\\` spinner
+as foreground shared `run` work. Failed rows display a copyable absolute worker
+log path, with a local file hyperlink in terminals that support it. `--plain` keeps the same information without
 colors, animation, or terminal control sequences.
 
 Run-folder state is stored below `PROMPTGRINDER_HOME/state/run-folders/<sequence-id>`;
 it is not written into the repository. With `--commit-each` or
 `--require-clean-git`, preflight reports modified, added, deleted, conflicted,
 and untracked paths and asks the user to commit, stash, or isolate them before retrying.
+PromptGrinder automatically adopts the latest unfinished sequence for the same
+folder and repository when its completed prefix still matches the current slice
+files. It prints the retained prefix and restart point, then reruns only the
+first failed or changed slice onward. A changed completed slice is never
+silently adopted. Use `--fresh`, `--restart`, or `--no-resume` to intentionally
+discard previous sequence state; `--resume` remains available as an explicit
+request to reuse it.
 
 For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys
@@ -505,7 +613,7 @@ task instructions:
   or `review`, `role` identifies the declared execution responsibility, and
   `depends_on` lists stable IDs that must appear earlier in a serialized folder;
 
-- `engine` (a name or mapping with `name`, `model`, `profile`, `sandbox`,
+- `engine` (a name or mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`,
   `approval`, `web_search`, and `images`), plus the compatible top-level engine
   keys `sandbox`, `approval`, `web_search`, and `images`;
 - `working_directory`, `timeout`, `labels`, and `env` configure execution or
@@ -535,6 +643,16 @@ rules, empty required values, wrong types, and secret-looking semantic values
 are rejected. A deterministic warning is emitted when frontmatter is at least
 2048 bytes, rendered task instructions are at most 256 bytes, and frontmatter
 is at least eight times larger; warnings appear in human and JSON validation.
+
+Use `promptgrinder validate --repo <repository> <task.md>` when a task file
+lives outside the checkout it will modify. Validation prints the explicit or
+inferred repository, resolved role and outer role boundary, slice paths,
+effective-scope rule, selected model cost/capabilities, and sandbox level. An
+inferred non-Git task directory is prominently warned: it cannot provide a
+repository-backed role policy. `promptgrinder validate-folder <folder> --repo
+<repository>` runs the complete ordered-folder preflight—including filenames,
+dependencies, role/slice paths, configured clean-baseline checks, and live
+model checks—without creating sequence or worker state.
 
 Use `promptgrinder validate --render <task.md>` to inspect the exact prompt
 bytes without launching Codex or creating worker state. `--render` and `--json`
@@ -672,7 +790,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.2.3` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.2.4` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -720,6 +838,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
+- [RC.2.4 qualification](docs/release/v1.0.0-rc.2.4-qualification.md)
+- [RC.2.4 final gate](docs/release/v1.0.0-rc.2.4-final-gate.md)
+- [RC.2.4 candidate notes](docs/release/v1.0.0-rc.2.4-release-notes.md)
 - [RC.2.3 qualification](docs/release/v1.0.0-rc.2.3-qualification.md)
 - [RC.2.3 final gate](docs/release/v1.0.0-rc.2.3-final-gate.md)
 - [RC.2.3 candidate notes](docs/release/v1.0.0-rc.2.3-release-notes.md)

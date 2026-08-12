@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,11 +17,14 @@ import (
 	"promptgrinder/internal/engine"
 	"promptgrinder/internal/execution"
 	"promptgrinder/internal/markdown"
+	"promptgrinder/internal/modelpolicy"
 	"promptgrinder/internal/repository"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/terminal"
 	"promptgrinder/internal/workerdomain"
 	"promptgrinder/internal/workerpathpolicy"
+
+	"gopkg.in/yaml.v3"
 )
 
 type ExecutorFactory func(config.Config) (execution.Executor, error)
@@ -42,6 +47,7 @@ type Manager struct {
 	TerminalAdapterOverride string
 	TerminalModeOverride    string
 	SelectTerminalAdapter   TerminalAdapterSelector
+	SkipExecutorValidation  bool
 }
 
 type LaunchResult struct {
@@ -124,6 +130,9 @@ func (m Manager) ValidateContentWithMetadata(taskPath, content string, metadata 
 	if err := adapter.Validate(ctx); err != nil {
 		return err
 	}
+	if m.SkipExecutorValidation {
+		return nil
+	}
 	_, err = m.executor(cfg)
 	return err
 }
@@ -158,7 +167,11 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 	if err := markdown.Validate(task, absTask); err != nil {
 		return invalidValidationPlan("", err), err
 	}
-	repoRoot, err := repository.DetectRoot(absTask)
+	repoRootPath := absTask
+	if m.RepositoryOverride != "" {
+		repoRootPath = m.RepositoryOverride
+	}
+	repoRoot, err := repository.DetectRoot(repoRootPath)
 	if err != nil {
 		return invalidValidationPlan("", err), err
 	}
@@ -200,10 +213,14 @@ func (m Manager) Validate(taskPath string) (ValidationPlan, error) {
 	if preview, ok := request.CommandData["command_preview"].(string); ok && preview != "" {
 		executionPlan["command_preview"] = preview
 	}
+	warnings := markdown.Warnings(task)
+	if m.RepositoryOverride == "" && !repository.IsGitRoot(repoRoot) {
+		warnings = append(warnings, "task is outside a Git repository; validation inferred the task directory and cannot provide repository-backed role policy")
+	}
 	return ValidationPlan{
 		Valid:          true,
 		Engine:         selected,
-		Warnings:       markdown.Warnings(task),
+		Warnings:       warnings,
 		Errors:         []string{},
 		ExecutionPlan:  redactValue(executionPlan).(map[string]any),
 		RenderedPrompt: string(request.Prompt),
@@ -308,6 +325,9 @@ func (m Manager) resolveLaunchInputs(repoRoot, taskPath string, taskMetadata map
 		cfg.CodexSandbox = m.SandboxOverride
 	}
 	metadata := resolvedMetadata(taskMetadata, cfg, engineName)
+	if err := applyRoleModelDefaults(repoRoot, metadata); err != nil {
+		return cfg, engineName, metadata, nil, err
+	}
 	if m.SandboxOverride != "" {
 		engineMetadata := metadata["engine"].(map[string]any)
 		engineMetadata["sandbox"] = m.SandboxOverride
@@ -345,7 +365,138 @@ func (m Manager) resolveLaunchInputs(repoRoot, taskPath string, taskMetadata map
 			return cfg, engineName, metadata, adapter, err
 		}
 	}
+	if err := resolveAndValidateModel(repoRoot, engineName, metadata, adapter); err != nil {
+		return cfg, engineName, metadata, adapter, err
+	}
 	return cfg, engineName, metadata, adapter, nil
+}
+
+type roleRuntimeDefaults struct {
+	ID      string `yaml:"id"`
+	Runtime struct {
+		Model        string   `yaml:"model"`
+		MaxCost      string   `yaml:"max_cost"`
+		Capabilities []string `yaml:"capabilities"`
+	} `yaml:"runtime"`
+}
+
+func applyRoleModelDefaults(repoRoot string, metadata map[string]any) error {
+	roleID, _ := metadata["role"].(string)
+	if roleID == "" {
+		return nil
+	}
+	path := filepath.Join(repoRoot, ".promptgrinder", "roles", roleID+".yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // run-folder provides the stronger missing-role diagnostic.
+		}
+		return fmt.Errorf("read role %q for model defaults: %w", roleID, err)
+	}
+	var role roleRuntimeDefaults
+	if err := yaml.Unmarshal(data, &role); err != nil {
+		return fmt.Errorf("parse role %q for model defaults: %w", roleID, err)
+	}
+	if role.ID != roleID {
+		return fmt.Errorf("role file %s declares id %q, expected %q", path, role.ID, roleID)
+	}
+	engineMetadata, ok := metadata["engine"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("engine metadata must be a mapping after resolution")
+	}
+	for key, value := range map[string]any{"model": role.Runtime.Model, "max_cost": role.Runtime.MaxCost, "capabilities": role.Runtime.Capabilities} {
+		if _, set := engineMetadata[key]; !set && !isEmptyModelDefault(value) {
+			engineMetadata[key] = value
+		}
+	}
+	return nil
+}
+
+func isEmptyModelDefault(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []string:
+		return len(typed) == 0
+	default:
+		return value == nil
+	}
+}
+
+func resolveAndValidateModel(repoRoot, engineName string, metadata map[string]any, adapter engine.Engine) error {
+	engineMetadata, ok := metadata["engine"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("engine metadata must be a mapping after resolution")
+	}
+	requirements := modelpolicy.Requirements{}
+	requirements.Model, _ = engineMetadata["model"].(string)
+	requirements.MaxCost, _ = engineMetadata["max_cost"].(string)
+	if values, ok := engineMetadata["capabilities"].([]any); ok {
+		for _, value := range values {
+			if text, ok := value.(string); ok {
+				requirements.Capabilities = append(requirements.Capabilities, text)
+			}
+		}
+	}
+	if values, ok := engineMetadata["capabilities"].([]string); ok {
+		requirements.Capabilities = append(requirements.Capabilities, values...)
+	}
+	policy, present, err := modelpolicy.Load(repoRoot)
+	if err != nil {
+		return err
+	}
+	selection, err := modelpolicy.Resolve(policy, present, requirements)
+	if err != nil {
+		return err
+	}
+	if selection.Model == "" {
+		return nil
+	}
+	engineMetadata["model"] = selection.Model
+	metadata["model_selection"] = map[string]any{"model": selection.Model, "cost": selection.Cost, "capabilities": selection.Capabilities}
+	if engineName != "codex" {
+		return nil
+	}
+	catalog, ok := adapter.(engine.ModelCatalogProvider)
+	if !ok {
+		return fmt.Errorf("codex adapter cannot verify whether model %q is selectable", selection.Model)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	models, err := catalog.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("model preflight could not list selectable Codex models: %w", err)
+	}
+	available := make([]string, 0, len(models))
+	var selected *engine.Model
+	for index := range models {
+		available = append(available, models[index].ID)
+		if models[index].ID == selection.Model {
+			selected = &models[index]
+		}
+	}
+	if selected == nil {
+		sort.Strings(available)
+		return fmt.Errorf("model %q is not selectable by this Codex runtime; available models: %s", selection.Model, strings.Join(available, ", "))
+	}
+	if imageRequested(engineMetadata) && !containsString(selected.InputModalities, "image") {
+		return fmt.Errorf("model %q is selectable but does not support image input required by this task", selection.Model)
+	}
+	return nil
+}
+
+func imageRequested(metadata map[string]any) bool {
+	values, _ := metadata["images"].([]any)
+	return len(values) > 0
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Manager) defaultEngineName(cfg config.Config) string {

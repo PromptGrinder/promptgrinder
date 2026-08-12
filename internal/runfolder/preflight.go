@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/repository"
+	"promptgrinder/internal/workerdomain"
+	"promptgrinder/internal/workerpathpolicy"
 
 	"gopkg.in/yaml.v3"
 )
@@ -25,6 +29,9 @@ type PreflightResult struct {
 // Preflight validates everything that can fail without launching a worker or
 // creating sequence state. Detached callers run this synchronously.
 func Preflight(folder string, options Options) (PreflightResult, error) {
+	if options.RecoveryAttempts < 0 || options.RecoveryAttempts > 3 {
+		return PreflightResult{}, fmt.Errorf("recovery attempts must be between 0 and 3")
+	}
 	if options.Resume && options.Fresh {
 		return PreflightResult{}, fmt.Errorf("--resume and --fresh are mutually exclusive")
 	}
@@ -59,51 +66,239 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	if len(inspection.Prompts) == 0 {
 		return PreflightResult{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
 	}
-	if err := validatePrompts(inspection.Prompts); err != nil {
-		return PreflightResult{}, fmt.Errorf("run-folder preflight: %w", err)
+	result := PreflightResult{Folder: absFolder, Repository: repoRoot, Inspection: inspection}
+	issues := []error{}
+	if err := applyRolePolicies(repoRoot, inspection.Prompts); err != nil {
+		issues = append(issues, err)
 	}
-	if err := validateRoles(repoRoot, inspection.Prompts); err != nil {
-		return PreflightResult{}, fmt.Errorf("run-folder preflight: %w", err)
+	if err := validatePrompts(inspection.Prompts); err != nil {
+		issues = append(issues, err)
+	}
+	if options.CommitEach || options.RequireCleanGit {
+		if err := requireCleanBaseline(repoRoot); err != nil {
+			issues = append(issues, err)
+		}
+	}
+	if len(issues) > 0 {
+		return result, preflightIssues(issues)
 	}
 	sequence, err := buildSequence(absFolder, repoRoot, inspection.Prompts, options)
 	if err != nil {
 		return PreflightResult{}, err
 	}
-	if options.CommitEach || options.RequireCleanGit {
-		if err := requireCleanBaseline(repoRoot); err != nil {
-			return PreflightResult{}, err
-		}
-	}
-	return PreflightResult{Folder: absFolder, Repository: repoRoot, Inspection: inspection, SequenceID: sequence.SequenceID}, nil
+	result.SequenceID = sequence.SequenceID
+	return result, nil
 }
 
-func validateRoles(repoRoot string, prompts []Prompt) error {
-	seen := map[string]bool{}
-	for _, prompt := range prompts {
-		if prompt.Role == "" || seen[prompt.Role] {
+func preflightIssues(issues []error) error {
+	if len(issues) == 1 {
+		return fmt.Errorf("run-folder preflight: %w", issues[0])
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "run-folder preflight found %d independent issues:", len(issues))
+	for _, issue := range issues {
+		fmt.Fprintf(&b, "\n\n%s", issue)
+	}
+	return errors.New(b.String())
+}
+
+type RolePolicy struct {
+	ID           string   `yaml:"id"`
+	Description  string   `yaml:"description"`
+	AllowedPaths []string `yaml:"allowed_paths"`
+	QualityGates []string `yaml:"quality_gates"`
+	Runtime      struct {
+		Model        string   `yaml:"model"`
+		MaxCost      string   `yaml:"max_cost"`
+		Capabilities []string `yaml:"capabilities"`
+	} `yaml:"runtime"`
+}
+
+// TaskPolicyPreview describes the role and task boundaries that apply to one
+// Markdown task. Both boundaries apply: role scope is an outer limit and task
+// scope can only narrow it.
+type TaskPolicyPreview struct {
+	RoleID              string   `json:"role_id,omitempty"`
+	RolePath            string   `json:"role_path,omitempty"`
+	RoleAllowedPaths    []string `json:"role_allowed_paths,omitempty"`
+	SliceAllowedPaths   []string `json:"slice_allowed_paths,omitempty"`
+	SliceForbiddenPaths []string `json:"slice_forbidden_paths,omitempty"`
+	ExpectedPaths       []string `json:"expected_paths,omitempty"`
+	EffectiveRule       string   `json:"effective_rule"`
+}
+
+// InspectTaskPolicy validates and describes the same role/slice path boundary
+// that run-folder enforces before workers launch.
+func InspectTaskPolicy(repoRoot, taskPath string) (TaskPolicyPreview, error) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	task, err := markdown.Parse(string(data))
+	if err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	if err := markdown.Validate(task, taskPath); err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	preview := TaskPolicyPreview{
+		SliceAllowedPaths:   metadataStrings(task.Metadata, "allowed_paths"),
+		SliceForbiddenPaths: metadataStrings(task.Metadata, "forbidden_paths"),
+		ExpectedPaths:       metadataStrings(task.Metadata, "expected_paths"),
+		EffectiveRule:       "all declared role and slice path rules apply; the slice cannot widen the role boundary",
+	}
+	roleID, _ := task.Metadata["role"].(string)
+	if roleID == "" {
+		return preview, nil
+	}
+	prompts := []Prompt{{Path: taskPath, Name: filepath.Base(taskPath), Role: roleID}}
+	if err := applyRolePolicies(repoRoot, prompts); err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	prompt := prompts[0]
+	preview.RoleID = roleID
+	preview.RolePath = filepath.Join(repoRoot, ".promptgrinder", "roles", roleID+".yaml")
+	preview.RoleAllowedPaths = append([]string(nil), prompt.RolePolicy.AllowedPaths...)
+	policy := workerdomain.WorkerPolicy{AllowedPaths: preview.SliceAllowedPaths, ForbiddenPaths: preview.SliceForbiddenPaths}
+	if err := workerpathpolicy.ValidatePatterns(policy); err != nil {
+		return TaskPolicyPreview{}, err
+	}
+	if len(preview.ExpectedPaths) > 0 {
+		violations, err := promptPolicyViolations(prompt, policy, preview.ExpectedPaths)
+		if err != nil {
+			return TaskPolicyPreview{}, err
+		}
+		if len(violations) > 0 {
+			return TaskPolicyPreview{}, fmt.Errorf("expected_paths are not permitted by the effective role/slice path policy: %s", formatViolations(violations))
+		}
+	}
+	return preview, nil
+}
+
+func (r RolePolicy) identity() string {
+	return strings.Join([]string{r.ID, r.Description, strings.Join(r.AllowedPaths, "\x00"), strings.Join(r.QualityGates, "\x00"), r.Runtime.Model, r.Runtime.MaxCost, strings.Join(r.Runtime.Capabilities, "\x00")}, "\x00")
+}
+
+func applyRolePolicies(repoRoot string, prompts []Prompt) error {
+	loaded := map[string]RolePolicy{}
+	registered, registryPresent, err := projectRoleRegistry(repoRoot)
+	if err != nil {
+		return err
+	}
+	issues := []error{}
+	for index := range prompts {
+		prompt := &prompts[index]
+		if prompt.Role == "" {
 			continue
 		}
-		seen[prompt.Role] = true
+		if registryPresent {
+			if _, ok := registered[prompt.Role]; !ok {
+				issues = append(issues, fmt.Errorf("%s declares role %q, but it is not registered in %s; add it under roles or select a registered role", prompt.Name, prompt.Role, filepath.Join(repoRoot, ".promptgrinder", "project.yaml")))
+				continue
+			}
+		}
+		if role, ok := loaded[prompt.Role]; ok {
+			prompt.RolePolicy = &role
+			continue
+		}
 		path := filepath.Join(repoRoot, ".promptgrinder", "roles", prompt.Role+".yaml")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("%s declares role %q, but %s does not exist", prompt.Name, prompt.Role, path)
+				issues = append(issues, fmt.Errorf("%s declares role %q, but %s does not exist", prompt.Name, prompt.Role, path))
+				continue
 			}
-			return fmt.Errorf("read role %q: %w", prompt.Role, err)
+			issues = append(issues, fmt.Errorf("read role %q: %w", prompt.Role, err))
+			continue
 		}
-		var role struct {
-			ID string `yaml:"id"`
-		}
+		var role RolePolicy
 		decoder := yaml.NewDecoder(bytes.NewReader(data))
 		if err := decoder.Decode(&role); err != nil {
-			return fmt.Errorf("parse role %q: %w", prompt.Role, err)
+			issues = append(issues, fmt.Errorf("parse role %q: %w", prompt.Role, err))
+			continue
 		}
 		if role.ID != prompt.Role {
-			return fmt.Errorf("role file %s declares id %q, expected %q", path, role.ID, prompt.Role)
+			issues = append(issues, fmt.Errorf("role file %s declares id %q, expected %q", path, role.ID, prompt.Role))
+			continue
+		}
+		if err := validateRoleAllowedPaths(role.AllowedPaths); err != nil {
+			issues = append(issues, fmt.Errorf("role file %s: %w", path, err))
+			continue
+		}
+		role.AllowedPaths = normalizeRoleAllowedPaths(repoRoot, role.AllowedPaths)
+		if err := workerpathpolicy.ValidatePatterns(workerdomain.WorkerPolicy{AllowedPaths: role.AllowedPaths}); err != nil {
+			issues = append(issues, fmt.Errorf("role file %s: %w", path, err))
+			continue
+		}
+		loaded[prompt.Role] = role
+		prompt.RolePolicy = &role
+	}
+	return joinIssues(issues)
+}
+
+type projectRoleManifest struct {
+	Roles []string `yaml:"roles"`
+}
+
+func projectRoleRegistry(repoRoot string) (map[string]struct{}, bool, error) {
+	path := filepath.Join(repoRoot, ".promptgrinder", "project.yaml")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read project role registry %s: %w", path, err)
+	}
+	var manifest projectRoleManifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, false, fmt.Errorf("parse project role registry %s: %w", path, err)
+	}
+	registered := make(map[string]struct{}, len(manifest.Roles))
+	for _, role := range manifest.Roles {
+		if role = strings.TrimSpace(role); role != "" {
+			registered[role] = struct{}{}
+		}
+	}
+	return registered, true, nil
+}
+
+func joinIssues(issues []error) error {
+	if len(issues) == 0 {
+		return nil
+	}
+	if len(issues) == 1 {
+		return issues[0]
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d role configuration issues:", len(issues))
+	for _, issue := range issues {
+		fmt.Fprintf(&b, "\n- %s", issue)
+	}
+	return errors.New(b.String())
+}
+
+func validateRoleAllowedPaths(patterns []string) error {
+	for _, pattern := range patterns {
+		clean := path.Clean(pattern)
+		if strings.Contains(pattern, "\\") || path.IsAbs(pattern) || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("allowed_paths pattern %q must be repository-relative and must not escape the repository", pattern)
 		}
 	}
 	return nil
+}
+
+func normalizeRoleAllowedPaths(repoRoot string, patterns []string) []string {
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		normalized := pattern
+		if !strings.ContainsAny(pattern, "*?[") {
+			if info, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(pattern))); err == nil && info.IsDir() {
+				normalized = strings.TrimSuffix(pattern, "/") + "/**"
+			}
+		}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 type dirtyBaseline struct {

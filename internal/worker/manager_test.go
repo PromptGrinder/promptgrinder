@@ -279,6 +279,80 @@ func TestLaunchPersistsLegacyCodexMetadata(t *testing.T) {
 	}
 }
 
+func TestValidateStopsBeforeLaunchWhenCodexCannotSelectModel(t *testing.T) {
+	root := t.TempDir()
+	task := filepath.Join(root, "task.md")
+	if err := os.WriteFile(task, []byte("---\nengine:\n  name: codex\n  model: not-selectable\n---\n# Task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
+	manager := Manager{Store: store, Engine: codex.Engine{}, EngineName: "codex", BaseConfig: config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t)}}
+	_, err := manager.Validate(task)
+	if err == nil || !strings.Contains(err.Error(), `model "not-selectable" is not selectable`) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(store.WorkersDir); !os.IsNotExist(statErr) {
+		t.Fatalf("model preflight created worker state: %v", statErr)
+	}
+}
+
+func TestRoleModelDefaultsSelectLowestConfiguredCostThatHasCapabilities(t *testing.T) {
+	root := t.TempDir()
+	rolePath := filepath.Join(root, ".promptgrinder", "roles", "documentation.yaml")
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rolePath, []byte("id: documentation\nruntime:\n  max_cost: high\n  capabilities: [code]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(root, ".promptgrinder", "models.yaml")
+	if err := os.WriteFile(policyPath, []byte("version: 1\nmodels:\n  - id: gpt-5\n    cost: low\n    capabilities: [text]\n  - id: gpt-5.5\n    cost: medium\n    capabilities: [text, code]\n  - id: gpt-5.6-sol\n    cost: high\n    capabilities: [text, code]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task := filepath.Join(root, "task.md")
+	if err := os.WriteFile(task, []byte("---\nrole: documentation\n---\n# Task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
+	manager := Manager{Store: store, Engine: codex.Engine{}, EngineName: "codex", Executable: "promptgrinder", BaseConfig: config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"}, NewExecutor: testExecutorFactory(store, terminal.DryRunAdapter{})}
+	result := manager.Launch(task)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	resolved := result.Worker.ResolvedMetadata["engine"].(map[string]any)
+	if resolved["model"] != "gpt-5.5" {
+		t.Fatalf("resolved engine = %#v", resolved)
+	}
+	selection := result.Worker.ResolvedMetadata["model_selection"].(map[string]any)
+	if selection["cost"] != "medium" {
+		t.Fatalf("model selection = %#v", selection)
+	}
+}
+
+func TestPromptModelOverridesRoleModelDefault(t *testing.T) {
+	root := t.TempDir()
+	rolePath := filepath.Join(root, ".promptgrinder", "roles", "documentation.yaml")
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rolePath, []byte("id: documentation\nruntime:\n  model: gpt-5.6-sol\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task := filepath.Join(root, "task.md")
+	if err := os.WriteFile(task, []byte("---\nrole: documentation\nengine:\n  name: codex\n  model: gpt-5\n---\n# Task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewStore(filepath.Join(t.TempDir(), "home"))
+	manager := Manager{Store: store, Engine: codex.Engine{}, EngineName: "codex", Executable: "promptgrinder", BaseConfig: config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), TerminalAdapter: "terminal", TerminalMode: "dry-run"}, NewExecutor: testExecutorFactory(store, terminal.DryRunAdapter{})}
+	result := manager.Launch(task)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	if got := result.Worker.ResolvedMetadata["engine"].(map[string]any)["model"]; got != "gpt-5" {
+		t.Fatalf("resolved model = %#v", got)
+	}
+}
+
 func TestLaunchPrefersV2CodexMetadataOverLegacy(t *testing.T) {
 	root := t.TempDir()
 	task := filepath.Join(root, "task.md")

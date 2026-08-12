@@ -17,14 +17,18 @@ import (
 )
 
 type fakeLauncher struct {
-	calls             []launchCall
-	failName          string
-	running           bool
-	logDir            string
-	logText           string
-	onLaunch          func(path string)
-	reportedSessionID string
-	result            *state.EngineResult
+	calls              []launchCall
+	failName           string
+	failOnceName       string
+	failedOnce         bool
+	running            bool
+	logDir             string
+	logText            string
+	onLaunch           func(path string)
+	reportedSessionID  string
+	result             *state.EngineResult
+	resultOnce         *state.EngineResult
+	returnedResultOnce bool
 }
 
 type launchCall struct {
@@ -48,13 +52,21 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 	if filepath.Base(path) == f.failName {
 		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
 	}
+	if filepath.Base(path) == f.failOnceName && !f.failedOnce {
+		f.failedOnce = true
+		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
+	}
 	if f.running {
 		return state.Worker{ID: "wrk_running", Status: state.StatusRunning}, nil
 	}
 	zero := 0
 	nextSafe := true
 	worker := state.Worker{ID: "wrk_" + strings.TrimSuffix(filepath.Base(path), ".md"), Status: state.StatusSucceeded, ExitCode: &zero, EngineResult: &state.EngineResult{Summary: "done\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: &nextSafe}}
-	if f.result != nil {
+	if f.resultOnce != nil && !f.returnedResultOnce {
+		copy := *f.resultOnce
+		worker.EngineResult = &copy
+		f.returnedResultOnce = true
+	} else if f.result != nil {
 		copy := *f.result
 		worker.EngineResult = &copy
 	}
@@ -105,6 +117,73 @@ func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
 	}
 }
 
+func TestRunFolderRecoversOnlyTheFailedSlice(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	writePromptFile(t, dir, "20-implement-recover.md", "recover")
+	writePromptFile(t, dir, "30-test-last.md", "last")
+	events := []ProgressEvent{}
+	launcher := &fakeLauncher{failOnceName: "20-implement-recover.md"}
+
+	summary, err := Run(dir, Options{HomeDir: home, RecoveryAttempts: 1, Progress: func(event ProgressEvent) {
+		events = append(events, event)
+	}}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 4 {
+		t.Fatalf("calls = %#v", launcher.calls)
+	}
+	if got := []string{filepath.Base(launcher.calls[0].Path), filepath.Base(launcher.calls[1].Path), filepath.Base(launcher.calls[2].Path), filepath.Base(launcher.calls[3].Path)}; strings.Join(got, ",") != "10-implement-first.md,20-implement-recover.md,20-implement-recover.md,30-test-last.md" {
+		t.Fatalf("launch order = %v", got)
+	}
+	if !strings.Contains(launcher.calls[2].Content, "# Recovery Attempt") || !strings.Contains(launcher.calls[2].Content, "Previous failure: launch failed") {
+		t.Fatalf("recovery prompt = %q", launcher.calls[2].Content)
+	}
+	if summary.Sequence.Status != "completed" || summary.Sequence.Items[1].RecoveryAttempts != 1 {
+		t.Fatalf("summary = %#v", summary.Sequence)
+	}
+	foundRecovery := false
+	for _, event := range events {
+		if event.Type == "prompt.recovering" && event.PromptName == "20-implement-recover.md" && event.RecoveryAttempt == 1 {
+			foundRecovery = true
+		}
+	}
+	if !foundRecovery {
+		t.Fatalf("progress events = %#v", events)
+	}
+}
+
+func TestRunFolderRecoversBlockedCompletionInTheSameSlice(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	launcher := &fakeLauncher{resultOnce: completionResult("BLOCKED", false)}
+
+	summary, err := Run(dir, Options{HomeDir: home, RecoveryAttempts: 1}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 2 || summary.Sequence.Items[0].RecoveryAttempts != 1 {
+		t.Fatalf("calls = %#v", launcher.calls)
+	}
+	if !strings.Contains(launcher.calls[1].Content, "Previous completion reason: STATUS is BLOCKED, not PASS") {
+		t.Fatalf("recovery prompt = %q", launcher.calls[1].Content)
+	}
+}
+
+func TestRecoveryNeverBypassesSafetyFailures(t *testing.T) {
+	for _, message := range []string{
+		"path policy violation at completion: outside.txt (outside allowed paths)",
+		"run-folder model preflight task: model is not selectable by this Codex runtime",
+		"working tree is dirty; automatic commits require a clean baseline",
+		"cancelled by user",
+	} {
+		if recoverableFailure(PromptState{}, errors.New(message)) {
+			t.Fatalf("recoverable failure for %q", message)
+		}
+	}
+}
+
 func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
 	dir := initGitRepo(t)
 	writePromptFile(t, dir, "00-specification.md", "shared")
@@ -116,6 +195,127 @@ func TestOrderedPromptInjectsContractExactlyOnce(t *testing.T) {
 	content := launcher.calls[0].Content
 	if strings.Count(content, "# Required Completion Report") != 1 || !strings.Contains(content, "STATUS: PASS") || !strings.Contains(content, "NEXT_PROMPT_SAFE: yes") {
 		t.Fatalf("assembled prompt = %q", content)
+	}
+}
+
+func TestRunFolderInjectsEffectiveRolePolicyWithoutRequiringRoleGates(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend/**"}, []string{"./mvnw verify"})
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\nvalidation: ./mvnw -pl backend test\n---\ntask")
+	launcher := &fakeLauncher{}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher); err != nil {
+		t.Fatal(err)
+	}
+	content := launcher.calls[0].Content
+	for _, want := range []string{"# Effective Role Policy", "Implement backend features.", "`backend/**`", "Run only validation declared by this slice", "./mvnw verify", "Do not run these gates unless"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("assembled prompt missing %q: %s", want, content)
+		}
+	}
+}
+
+func TestRolePolicyRejectsExpectedPathsOutsideRoleBoundary(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\nallowed_paths: [\"**\"]\nexpected_paths: [mobile-android/app/Main.kt]\n---\ntask")
+	_, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "outside role allowed paths") || !strings.Contains(err.Error(), "mobile-android/app/Main.kt") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRolePolicyRejectsChangesOutsideRoleBoundary(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\n---\ntask")
+	launcher := &fakeLauncher{onLaunch: func(string) {
+		if err := os.MkdirAll(filepath.Join(dir, "mobile-android", "app"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "mobile-android", "app", "Main.kt"), []byte("bad scope"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "outside role allowed paths") || !strings.Contains(err.Error(), "mobile-android/app/Main.kt") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRolePolicyNormalizesLegacyDirectoryScope(t *testing.T) {
+	dir := initGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, dir, "backend-feature", "Implement backend features.", []string{"backend"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\n---\ntask")
+	launcher := &fakeLauncher{onLaunch: func(string) {
+		if err := os.WriteFile(filepath.Join(dir, "backend", "Service.java"), []byte("in scope"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}, launcher); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRolePolicyChangesSequenceIdentity(t *testing.T) {
+	dir := initGitRepo(t)
+	writeRolePolicy(t, dir, "backend-feature", "Initial guidance.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-implement-a.md", "---\nrole: backend-feature\n---\ntask")
+	first, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, dir, "backend-feature", "Changed guidance.", []string{"backend/**"}, nil)
+	second, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SequenceID == second.SequenceID {
+		t.Fatalf("sequence ID did not change: %s", first.SequenceID)
+	}
+}
+
+func TestPreflightRejectsRoleMissingFromProjectRegistryBeforeWorkerLaunch(t *testing.T) {
+	dir := initGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, ".promptgrinder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".promptgrinder", "project.yaml"), []byte("name: example\nroles: [backend-feature]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, dir, "release-evidence", "Cross-stack verification.", []string{"backend/**"}, nil)
+	writePromptFile(t, dir, "10-verify-release.md", "---\nrole: release-evidence\n---\nverify")
+	_, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "not registered") || !strings.Contains(err.Error(), "project.yaml") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreflightReportsRoleAndDirtyBaselineIssuesTogether(t *testing.T) {
+	dir := initGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, ".promptgrinder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".promptgrinder", "project.yaml"), []byte("name: example\nroles: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "10-verify-release.md", "---\nrole: release-evidence\n---\nverify")
+	if err := os.WriteFile(filepath.Join(dir, "retained-report.md"), []byte("pending review"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir(), RequireCleanGit: true})
+	if err == nil {
+		t.Fatal("expected preflight failure")
+	}
+	for _, want := range []string{"independent issues", "not registered", "Cannot use --commit-each or --require-clean-git", "retained-report.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%s", want, err)
+		}
+	}
+	if got := result.Inspection.Prompts; len(got) != 1 || got[0].Name != "10-verify-release.md" {
+		t.Fatalf("preflight inspection = %#v", got)
 	}
 }
 
@@ -233,7 +433,9 @@ func TestDiscoverSortsMarkdownAlphabetically(t *testing.T) {
 func TestClassifyPromptTypes(t *testing.T) {
 	cases := map[string]PromptType{
 		"00-specification.md":          TypeSpecification,
+		"00A-specification.md":         TypeSpecification,
 		"10-implement-v1-cleanup.md":   TypeImplement,
+		"08A-implement-ranking.md":     TypeImplement,
 		"30-test-benchmark.md":         TypeTest,
 		"40-verify-geography.md":       TypeVerify,
 		"50-review-v1-removal.md":      TypeReview,
@@ -243,6 +445,26 @@ func TestClassifyPromptTypes(t *testing.T) {
 	for name, want := range cases {
 		if got := Classify(name); got != want {
 			t.Fatalf("Classify(%q) = %s, want %s", name, got, want)
+		}
+	}
+}
+
+func TestInspectExplainsTypedFilenameAndFrontmatterMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "40-test-and-final-verify-ranking-rivals.md", "---\ntype: verify\n---\nverify")
+
+	_, err := Inspect(dir)
+	if err == nil {
+		t.Fatal("expected type mismatch error")
+	}
+	for _, want := range []string{
+		"starts with the \"test\" slice naming convention",
+		"frontmatter says type: \"verify\"",
+		"rename it to NN-verify-...md",
+		"change frontmatter type to \"test\"",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
 		}
 	}
 }
@@ -280,6 +502,23 @@ func TestDiscoverUsesExplicitMetadataForGenericNumberedPrompts(t *testing.T) {
 	}
 	if len(prompts) != 2 || prompts[0].ID != "snapshot-reliability" || prompts[0].Type != TypeImplement || prompts[0].Role != "backend-feature" || prompts[1].Type != TypeReview || strings.Join(prompts[1].DependsOn, ",") != "snapshot-reliability" {
 		t.Fatalf("prompts = %#v", prompts)
+	}
+}
+
+func TestDiscoverSupportsLetterSuffixedOrderingTokens(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "08C-score-contribution.md", "---\nid: score-contribution\ntype: implement\ndepends_on: [round-snapshots]\n---\nthird")
+	writePromptFile(t, dir, "08A-ranking-history.md", "---\nid: ranking-history\ntype: implement\ndepends_on: []\n---\nfirst")
+	writePromptFile(t, dir, "08B-round-snapshots.md", "---\nid: round-snapshots\ntype: implement\ndepends_on: [ranking-history]\n---\nsecond")
+
+	prompts, err := Discover(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := names(prompts)
+	want := []string{"08A-ranking-history.md", "08B-round-snapshots.md", "08C-score-contribution.md"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("prompts = %v, want %v", got, want)
 	}
 }
 
@@ -543,6 +782,72 @@ func TestSequenceWithSucceededPrefixResumesAtFirstFailedPrompt(t *testing.T) {
 	progress := summary.Sequence.Progress()
 	if progress.Succeeded != 14 || progress.Pending != 0 || progress.Failed != 0 {
 		t.Fatalf("progress = %#v", progress)
+	}
+}
+
+func TestExplicitResumeAdoptsCompatiblePrefixAfterLaterPromptChanges(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "20-implement-b.md", "b")
+	writePromptFile(t, dir, "30-implement-c.md", "c")
+	first := &fakeLauncher{failName: "20-implement-b.md"}
+	firstSummary, err := Run(dir, Options{HomeDir: home}, first)
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	writePromptFile(t, dir, "30-implement-c.md", "changed")
+	resume := &fakeLauncher{}
+	summary, err := Run(dir, Options{HomeDir: home, Resume: true}, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.Resumed || summary.Sequence.SequenceID != firstSummary.Sequence.SequenceID {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if got, want := strings.Join(namesFromCalls(resume.calls), ","), "20-implement-b.md,30-implement-c.md"; got != want {
+		t.Fatalf("resume calls = %s, want %s", got, want)
+	}
+}
+
+func TestDefaultRunAdoptsCompatiblePrefixAfterFailedSliceChanges(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "20-implement-b.md", "b")
+	writePromptFile(t, dir, "30-implement-c.md", "c")
+	first := &fakeLauncher{failName: "30-implement-c.md"}
+	firstSummary, err := Run(dir, Options{HomeDir: home}, first)
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	writePromptFile(t, dir, "30-implement-c.md", "repaired prompt")
+
+	resume := &fakeLauncher{}
+	summary, err := Run(dir, Options{HomeDir: home}, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.Resumed || summary.Sequence.SequenceID != firstSummary.Sequence.SequenceID {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if got, want := strings.Join(namesFromCalls(resume.calls), ","), "30-implement-c.md"; got != want {
+		t.Fatalf("resume calls = %s, want %s", got, want)
+	}
+}
+
+func TestExplicitResumeRejectsChangedCompletedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "20-implement-b.md", "b")
+	if _, err := Run(dir, Options{HomeDir: home}, &fakeLauncher{failName: "20-implement-b.md"}); err == nil {
+		t.Fatal("expected failure")
+	}
+	writePromptFile(t, dir, "10-implement-a.md", "changed")
+	_, err := Run(dir, Options{HomeDir: home, Resume: true}, &fakeLauncher{})
+	if err == nil || !strings.Contains(err.Error(), "no run state found") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -1206,6 +1511,31 @@ func TestRunFolderPathPolicyRejectsWorkerCreatedUnallowedPath(t *testing.T) {
 func writePromptFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeRolePolicy(t *testing.T, dir, id, description string, allowedPaths, qualityGates []string) {
+	t.Helper()
+	roleDir := filepath.Join(dir, ".promptgrinder", "roles")
+	if err := os.MkdirAll(roleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var body strings.Builder
+	fmt.Fprintf(&body, "id: %s\ndescription: %s\n", id, description)
+	if len(allowedPaths) > 0 {
+		body.WriteString("allowed_paths:\n")
+		for _, pattern := range allowedPaths {
+			fmt.Fprintf(&body, "  - %s\n", pattern)
+		}
+	}
+	if len(qualityGates) > 0 {
+		body.WriteString("quality_gates:\n")
+		for _, gate := range qualityGates {
+			fmt.Fprintf(&body, "  - %s\n", gate)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(roleDir, id+".yaml"), []byte(body.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
