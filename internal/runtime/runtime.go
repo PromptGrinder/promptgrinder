@@ -862,7 +862,10 @@ func (s Service) PreflightRunFolder(path string, options RunFolderOptions) (RunF
 	manager.EngineOverride = options.EngineOverride
 	manager.RepositoryOverride = preflight.Repository
 	manager.SkipExecutorValidation = true
-	for _, prompt := range preflight.Inspection.Prompts {
+	for index, prompt := range preflight.Inspection.Prompts {
+		if index < preflight.ResumeIndex {
+			continue
+		}
 		if prompt.Type == runfolder.TypeSpecification {
 			continue
 		}

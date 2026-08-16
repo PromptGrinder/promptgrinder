@@ -40,6 +40,7 @@ const (
 
 type Options struct {
 	Resume                  bool
+	ResumeSequence          string
 	Fresh                   bool
 	Restart                 bool
 	NoResume                bool
@@ -114,6 +115,7 @@ type WaitLauncher interface {
 type Summary struct {
 	Run      RunState
 	Sequence *SequenceState
+	Adoption *SequenceAdoption
 	Prompts  []Prompt
 	Started  bool
 	Resumed  bool
@@ -122,29 +124,30 @@ type Summary struct {
 }
 
 type ProgressEvent struct {
-	Type             string           `json:"type"`
-	SequenceID       string           `json:"sequence_id"`
-	PromptName       string           `json:"prompt_name,omitempty"`
-	PromptType       PromptType       `json:"prompt_type,omitempty"`
-	Status           string           `json:"status,omitempty"`
-	WorkerID         string           `json:"worker_id,omitempty"`
-	Scope            string           `json:"scope,omitempty"`
-	Engine           string           `json:"engine,omitempty"`
-	Model            string           `json:"model,omitempty"`
-	LogPath          string           `json:"log_path,omitempty"`
-	Completed        int              `json:"completed"`
-	Total            int              `json:"total"`
-	Folder           string           `json:"folder,omitempty"`
-	Duration         time.Duration    `json:"duration,omitempty"`
-	ExitCode         *int             `json:"exit_code,omitempty"`
-	CompletionStatus string           `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool            `json:"next_prompt_safe,omitempty"`
-	Reason           string           `json:"reason,omitempty"`
-	RecoveryAttempt  int              `json:"recovery_attempt,omitempty"`
-	Inventory        []ProgressPrompt `json:"inventory,omitempty"`
-	MarkdownTotal    int              `json:"markdown_total,omitempty"`
-	Ignored          []string         `json:"ignored,omitempty"`
-	ResumePlan       string           `json:"resume_plan,omitempty"`
+	Type             string            `json:"type"`
+	SequenceID       string            `json:"sequence_id"`
+	PromptName       string            `json:"prompt_name,omitempty"`
+	PromptType       PromptType        `json:"prompt_type,omitempty"`
+	Status           string            `json:"status,omitempty"`
+	WorkerID         string            `json:"worker_id,omitempty"`
+	Scope            string            `json:"scope,omitempty"`
+	Engine           string            `json:"engine,omitempty"`
+	Model            string            `json:"model,omitempty"`
+	LogPath          string            `json:"log_path,omitempty"`
+	Completed        int               `json:"completed"`
+	Total            int               `json:"total"`
+	Folder           string            `json:"folder,omitempty"`
+	Duration         time.Duration     `json:"duration,omitempty"`
+	ExitCode         *int              `json:"exit_code,omitempty"`
+	CompletionStatus string            `json:"completion_status,omitempty"`
+	NextPromptSafe   *bool             `json:"next_prompt_safe,omitempty"`
+	Reason           string            `json:"reason,omitempty"`
+	RecoveryAttempt  int               `json:"recovery_attempt,omitempty"`
+	Inventory        []ProgressPrompt  `json:"inventory,omitempty"`
+	MarkdownTotal    int               `json:"markdown_total,omitempty"`
+	Ignored          []string          `json:"ignored,omitempty"`
+	ResumePlan       string            `json:"resume_plan,omitempty"`
+	Adoption         *SequenceAdoption `json:"adoption,omitempty"`
 }
 
 // ProgressPrompt is the prompt metadata needed to render an ordered run
@@ -188,22 +191,41 @@ type RunState struct {
 }
 
 type SequenceState struct {
-	SequenceID       string         `json:"sequence_id"`
-	Folder           string         `json:"folder"`
-	RepositoryPath   string         `json:"repository_path,omitempty"`
-	Status           string         `json:"status"`
-	Template         string         `json:"template"`
-	Engine           string         `json:"engine,omitempty"`
-	SessionID        string         `json:"session_id,omitempty"`
-	Items            []SequenceItem `json:"items"`
-	TokenUsage       TokenUsage     `json:"token_usage"`
-	ExecutiveSummary string         `json:"executive_summary"`
-	CreatedAt        *time.Time     `json:"created_at,omitempty"`
-	StartedAt        *time.Time     `json:"started_at"`
-	UpdatedAt        *time.Time     `json:"updated_at"`
-	FinishedAt       *time.Time     `json:"finished_at,omitempty"`
-	Supervisor       *Supervisor    `json:"supervisor,omitempty"`
-	EventPath        string         `json:"event_path,omitempty"`
+	StateVersion     int                `json:"state_version,omitempty"`
+	SequenceID       string             `json:"sequence_id"`
+	Folder           string             `json:"folder"`
+	RepositoryPath   string             `json:"repository_path,omitempty"`
+	Status           string             `json:"status"`
+	Template         string             `json:"template"`
+	Engine           string             `json:"engine,omitempty"`
+	SessionID        string             `json:"session_id,omitempty"`
+	Items            []SequenceItem     `json:"items"`
+	TokenUsage       TokenUsage         `json:"token_usage"`
+	ExecutiveSummary string             `json:"executive_summary"`
+	CreatedAt        *time.Time         `json:"created_at,omitempty"`
+	StartedAt        *time.Time         `json:"started_at"`
+	UpdatedAt        *time.Time         `json:"updated_at"`
+	FinishedAt       *time.Time         `json:"finished_at,omitempty"`
+	Supervisor       *Supervisor        `json:"supervisor,omitempty"`
+	EventPath        string             `json:"event_path,omitempty"`
+	Adoptions        []SequenceAdoption `json:"adoptions,omitempty"`
+}
+
+type SequenceAdoption struct {
+	SequenceID          string             `json:"sequence_id"`
+	Explicit            bool               `json:"explicit"`
+	MigratedLegacyState bool               `json:"migrated_legacy_state,omitempty"`
+	RetainedPrompts     []string           `json:"retained_prompts"`
+	RestartAt           string             `json:"restart_at"`
+	PolicyHashChanges   []PolicyHashChange `json:"policy_hash_changes,omitempty"`
+	AdoptedAt           time.Time          `json:"adopted_at"`
+}
+
+type PolicyHashChange struct {
+	PromptName   string `json:"prompt_name"`
+	PreviousHash string `json:"previous_hash"`
+	CurrentHash  string `json:"current_hash"`
+	Retained     bool   `json:"retained"`
 }
 
 type Supervisor struct {
@@ -219,6 +241,10 @@ type Supervisor struct {
 type SequenceItem struct {
 	PromptPath       string     `json:"prompt_path"`
 	PromptName       string     `json:"prompt_name"`
+	PromptID         string     `json:"prompt_id,omitempty"`
+	DependsOn        []string   `json:"depends_on,omitempty"`
+	PromptHash       string     `json:"prompt_hash,omitempty"`
+	PolicyHash       string     `json:"policy_hash,omitempty"`
 	ContentHash      string     `json:"content_hash"`
 	Status           string     `json:"status"`
 	WorkerID         string     `json:"worker_id,omitempty"`
@@ -415,6 +441,13 @@ func isPromptFile(name string) bool {
 // ResolveSequenceID computes the stable identity used by Run without creating
 // or mutating sequence state.
 func ResolveSequenceID(folder string, options Options) (string, error) {
+	if options.ResumeSequence != "" {
+		preflight, err := Preflight(folder, options)
+		if err != nil {
+			return "", err
+		}
+		return preflight.SequenceID, nil
+	}
 	absFolder, err := filepath.Abs(folder)
 	if err != nil {
 		return "", err
@@ -474,7 +507,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	prompts := inspection.Prompts
 
 	sequenceStore := newSequenceStore(options.HomeDir)
-	sequence, sequenceResumed, err := sequenceStore.loadOrCreate(absFolder, repoRoot, prompts, options)
+	sequence, sequenceResumed, adoption, err := sequenceStore.loadOrCreate(absFolder, repoRoot, prompts, options)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -483,8 +516,28 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	if err != nil {
 		return Summary{}, err
 	}
-	summary = Summary{Run: runState, Sequence: &sequence, Prompts: prompts, Started: true, Resumed: resumed || sequenceResumed}
+	if adoption != nil {
+		runState.Completed = append([]string(nil), adoption.RetainedPrompts...)
+		runState.Current = adoption.RestartAt
+		runState.Status = "running"
+		runState.touch()
+	}
+	summary = Summary{Run: runState, Sequence: &sequence, Adoption: adoption, Prompts: prompts, Started: true, Resumed: resumed || sequenceResumed}
 	resumePlan := compatibleResumePlan(sequence, preflight.SequenceID, sequenceResumed)
+	if adoption != nil {
+		if err := refreshAdoptedFingerprints(&sequence, prompts, repoRoot); err != nil {
+			return summary, err
+		}
+		sequence.Adoptions = append(sequence.Adoptions, *adoption)
+		sequence.FinishedAt = nil
+		sequence.touch()
+		sequence.refreshSummary()
+		if err := sequenceStore.save(sequence); err != nil {
+			return summary, err
+		}
+		resumePlan = explicitAdoptionPlan(*adoption)
+		emitProgress(options, ProgressEvent{Type: "sequence.adopted", SequenceID: sequence.SequenceID, Folder: sequence.Folder, Status: sequence.Status, Adoption: adoption, ResumePlan: resumePlan, Completed: len(adoption.RetainedPrompts), Total: len(sequence.Items)})
+	}
 	if options.HomeDir != "" {
 		sequence.EventPath = filepath.Join(options.HomeDir, "events", "sequences", sequence.SequenceID+".jsonl")
 	}
@@ -540,7 +593,9 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	}
 	completed := map[string]bool{}
 	if sequenceResumed {
-		completed = setFromSlice(runState.Completed)
+		if adoption == nil {
+			completed = setFromSlice(runState.Completed)
+		}
 		for _, item := range sequence.Items {
 			if item.Status == "succeeded" || item.Status == "skipped" {
 				completed[item.PromptName] = true
@@ -1421,8 +1476,31 @@ func (s SequenceState) SummaryMarkdown() string {
 	} else {
 		fmt.Fprintf(&b, "- Total tokens used: not reported by worker logs\n")
 	}
+	if len(s.Adoptions) > 0 {
+		fmt.Fprintf(&b, "\n## Sequence Adoption\n")
+		for _, adoption := range s.Adoptions {
+			fmt.Fprintf(&b, "\n- %s: explicitly adopted `%s`; retained %d succeeded/skipped slice(s); restarted at `%s`.\n", adoption.AdoptedAt.Format(time.RFC3339), adoption.SequenceID, len(adoption.RetainedPrompts), adoption.RestartAt)
+			if adoption.MigratedLegacyState {
+				fmt.Fprintf(&b, "  - Legacy state fingerprints were migrated from verified prompt/checkpoint evidence.\n")
+			}
+			for _, change := range adoption.PolicyHashChanges {
+				if change.Retained {
+					fmt.Fprintf(&b, "  - `%s` role-policy fingerprint changed from `%s` to `%s`; completed work was retained.\n", change.PromptName, shortHash(change.PreviousHash), shortHash(change.CurrentHash))
+				} else {
+					fmt.Fprintf(&b, "  - `%s` role-policy fingerprint changed from `%s` to `%s`; the remaining slice was revalidated.\n", change.PromptName, shortHash(change.PreviousHash), shortHash(change.CurrentHash))
+				}
+			}
+		}
+	}
 	fmt.Fprintf(&b, "\n## Executive Summary\n\n%s\n", valueOrDefault(s.ExecutiveSummary, "No prompt results have been recorded yet."))
 	return b.String()
+}
+
+func shortHash(value string) string {
+	if len(value) <= 12 {
+		return valueOrDefault(value, "none")
+	}
+	return value[:12]
 }
 
 func totalTokenUsage(items []SequenceItem) TokenUsage {
@@ -1731,28 +1809,32 @@ func (s sequenceStore) list() ([]SequenceState, error) {
 	return out, nil
 }
 
-func (s sequenceStore) loadOrCreate(folder, repoRoot string, prompts []Prompt, options Options) (SequenceState, bool, error) {
+func (s sequenceStore) loadOrCreate(folder, repoRoot string, prompts []Prompt, options Options) (SequenceState, bool, *SequenceAdoption, error) {
+	if options.ResumeSequence != "" {
+		sequence, adoption, err := s.validateExplicitAdoption(folder, repoRoot, prompts, options.ResumeSequence)
+		return sequence, err == nil, adoption, err
+	}
 	base, err := buildSequence(folder, repoRoot, prompts, options)
 	if err != nil {
-		return SequenceState{}, false, err
+		return SequenceState{}, false, nil, err
 	}
 	if !options.Restart && !options.NoResume && !options.Fresh {
 		existing, err := s.load(base.SequenceID)
 		if err == nil {
-			return existing, true, nil
+			return existing, true, nil, nil
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return SequenceState{}, false, err
+			return SequenceState{}, false, nil, err
 		}
 		compatible, found, err := s.findCompatibleResume(folder, repoRoot, prompts)
 		if err != nil {
-			return SequenceState{}, false, err
+			return SequenceState{}, false, nil, err
 		}
 		if found {
-			return compatible, true, nil
+			return compatible, true, nil, nil
 		}
 	}
-	return base, false, nil
+	return base, false, nil, nil
 }
 
 // findCompatibleResume adopts only an unfinished sequence whose completed
@@ -1785,9 +1867,11 @@ func (s sequenceStore) findCompatibleResume(folder, repoRoot string, prompts []P
 				compatible = false
 				break
 			}
-			effectiveHash, hashErr := promptContentHash(prompts[index].Path, prompts[index].RolePolicy)
 			rawHash, rawErr := fileHash(prompts[index].Path)
-			if hashErr != nil || rawErr != nil || (item.ContentHash != effectiveHash && item.ContentHash != rawHash) {
+			effectiveHash, hashErr := promptContentHash(prompts[index].Path, prompts[index].RolePolicy)
+			contentMatches := item.PromptHash != "" && item.PromptHash == rawHash
+			legacyMatches := item.PromptHash == "" && (item.ContentHash == effectiveHash || item.ContentHash == rawHash)
+			if hashErr != nil || rawErr != nil || (!contentMatches && !legacyMatches) {
 				compatible = false
 				break
 			}
@@ -1816,6 +1900,14 @@ func compatibleResumePlan(sequence SequenceState, requestedSequenceID string, ad
 		break
 	}
 	return fmt.Sprintf("Compatible sequence %s adopted automatically: retaining %d successful slice(s); restarting at %s. Use --fresh to rerun all slices.", sequence.SequenceID, retained, restartAt)
+}
+
+func explicitAdoptionPlan(adoption SequenceAdoption) string {
+	policyNote := ""
+	if len(adoption.PolicyHashChanges) > 0 {
+		policyNote = fmt.Sprintf(" %d role-policy fingerprint change(s) recorded; completed slices remain retained.", len(adoption.PolicyHashChanges))
+	}
+	return fmt.Sprintf("Sequence %s explicitly adopted: retaining %d succeeded/skipped slice(s); restarting at %s.%s", adoption.SequenceID, len(adoption.RetainedPrompts), adoption.RestartAt, policyNote)
 }
 
 func (s sequenceStore) load(sequenceID string) (SequenceState, error) {
@@ -1874,7 +1966,15 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 		if err != nil {
 			return SequenceState{}, err
 		}
-		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, ContentHash: hash, Status: "pending"})
+		rawHash, err := fileHash(prompt.Path)
+		if err != nil {
+			return SequenceState{}, err
+		}
+		policyHash, err := promptPolicyHash(repoRoot, prompt)
+		if err != nil {
+			return SequenceState{}, err
+		}
+		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
 		engineName, taskEngine, err := effectivePromptEngine(prompt.Path, cfg, options.EngineOverride)
 		if err != nil {
 			return SequenceState{}, err
@@ -1890,7 +1990,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 	}
 	sum := sha256.Sum256([]byte(strings.Join(hashInput, "\n")))
 	id := "seq_" + hex.EncodeToString(sum[:])[:16]
-	return SequenceState{SequenceID: id, Folder: folder, RepositoryPath: repoRoot, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
+	return SequenceState{StateVersion: sequenceStateVersion, SequenceID: id, Folder: folder, RepositoryPath: repoRoot, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
 }
 
 func sequenceConfig(repoRoot string, options Options) (config.Config, error) {

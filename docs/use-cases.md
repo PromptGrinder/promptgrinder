@@ -215,6 +215,27 @@ failed or changed slice. A changed completed slice is never adopted. Use
 sequence from the beginning, `--fresh` to create a new sequence, or
 `--no-resume` to avoid existing resume state.
 
+When several interrupted records exist, use
+`promptgrinder run-folder <folder> --resume-sequence <sequence-id>` to adopt exactly one named unfinished
+sequence. PromptGrinder does not recalculate, copy, or silently rewrite the
+requested identity. It requires an exact canonical repository and folder match,
+the same prompt names and order, and the same task IDs and dependency graph. A
+completed or cancelled sequence, unknown ID, reordered folder, or changed
+completed prompt is rejected. The flag is mutually exclusive with `--resume`,
+`--fresh`, `--restart`, and `--no-resume`.
+
+Explicit adoption retains the contiguous succeeded/skipped prefix and restarts
+at the first failed, interrupted, running, or pending slice. All remaining
+slices are revalidated against current role files, model availability, path
+policy, engine configuration, and Git-baseline requirements before a worker
+launches. Role-policy changes for completed slices are recorded as policy-hash
+changes but do not invalidate their unchanged prompt content or cause them to
+rerun. The adoption is recorded in the sequence event log and Markdown summary.
+Legacy sequence records are accepted when their combined hashes or retained Git
+checkpoint/commit evidence prove the same content and dependency identity. If
+that proof is unavailable, PromptGrinder fails with a migration message and
+leaves the original state untouched.
+
 ### UC-20: Keep reviewable Git checkpoints
 
 Use `--checkpoint` and `--commit-each` to retain prompt-level Git evidence.

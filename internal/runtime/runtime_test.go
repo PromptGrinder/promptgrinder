@@ -31,6 +31,19 @@ type synchronousTerminal struct {
 	launched  []string
 }
 
+type failingFolderLauncher struct {
+	failName string
+}
+
+func (f failingFolderLauncher) LaunchPrompt(path, content, sessionID string) (state.Worker, error) {
+	if filepath.Base(path) == f.failName {
+		return state.Worker{ID: "wrk_failed", Status: state.StatusFailed}, errors.New("test folder failure")
+	}
+	zero := 0
+	nextSafe := true
+	return state.Worker{ID: "wrk_" + filepath.Base(path), Status: state.StatusSucceeded, ExitCode: &zero, EngineResult: &state.EngineResult{Summary: "done\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: &nextSafe}}, nil
+}
+
 func (t *synchronousTerminal) Name() string                     { return t.name }
 func (t *synchronousTerminal) Command(scriptPath string) string { return scriptPath }
 func (t *synchronousTerminal) Launch(scriptPath string) error {
@@ -116,6 +129,49 @@ func TestPreflightRunFolderStopsUnavailableModelBeforeSequenceState(t *testing.T
 	}
 	if entries, readErr := os.ReadDir(filepath.Join(home, "state", "sequences")); readErr == nil && len(entries) != 0 {
 		t.Fatalf("model preflight created sequence state: %#v", entries)
+	}
+}
+
+func TestPreflightResumeSequenceSkipsChangedCompletedRoleModelAndValidatesRemaining(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	roleDir := filepath.Join(repo, ".promptgrinder", "roles")
+	if err := os.MkdirAll(roleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, roleDir, "completed.yaml", "id: completed\ndescription: initial\nallowed_paths: ['**']\n")
+	writeFile(t, repo, "10-implement-a.md", "---\nrole: completed\n---\n# A\n")
+	writeFile(t, repo, "20-test-b.md", "# B\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial")
+	home := t.TempDir()
+
+	first, err := runfolder.Run(repo, runfolder.Options{HomeDir: home, RepoPath: repo}, failingFolderLauncher{failName: "20-test-b.md"})
+	if err == nil {
+		t.Fatal("expected first run to fail")
+	}
+	if first.Sequence == nil || len(first.Sequence.Items) != 2 || first.Sequence.Items[0].Status != "succeeded" {
+		t.Fatalf("first sequence = %#v, err = %v", first.Sequence, err)
+	}
+	writeFile(t, roleDir, "completed.yaml", "id: completed\ndescription: changed after completion\nallowed_paths: ['**']\nruntime:\n  model: not-selectable\n")
+	domainPreflight, err := runfolder.Preflight(repo, runfolder.Options{HomeDir: home, RepoPath: repo, ResumeSequence: first.Sequence.SequenceID})
+	if err != nil || domainPreflight.ResumeIndex != 1 {
+		t.Fatalf("domain preflight = %#v, err = %v", domainPreflight, err)
+	}
+
+	store := state.NewStore(filepath.Join(home, "runtime-state"))
+	service := Service{Store: store, Worker: worker.Manager{
+		Store:      store,
+		Engine:     codex.Engine{},
+		EngineName: "codex",
+		BaseConfig: config.Config{Engine: "codex", CodexExecutable: testsupport.FakeCodex(t), HomeDir: home},
+	}}
+	preflight, err := service.PreflightRunFolder(repo, RunFolderOptions{HomeDir: home, RepoPath: repo, ResumeSequence: first.Sequence.SequenceID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.ResumeIndex != 1 || preflight.Adoption == nil || preflight.Adoption.RestartAt != "20-test-b.md" {
+		t.Fatalf("preflight = %#v", preflight)
 	}
 }
 

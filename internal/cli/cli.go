@@ -1007,6 +1007,7 @@ Examples:
 	root.AddCommand(validateCmd)
 
 	var runFolderResume bool
+	var runFolderResumeSequence string
 	var runFolderFresh bool
 	var runFolderCheckpoint bool
 	var runFolderCommitEach bool
@@ -1065,6 +1066,7 @@ Examples:
 		}
 		return pgruntime.RunFolderOptions{
 			Resume:                  runFolderResume,
+			ResumeSequence:          runFolderResumeSequence,
 			Fresh:                   runFolderFresh,
 			Restart:                 runFolderRestart,
 			NoResume:                runFolderNoResume,
@@ -1083,6 +1085,7 @@ Examples:
 	}
 	bindRunFolderFlags := func(cmd *cobra.Command, includeDetach bool) {
 		cmd.Flags().BoolVar(&runFolderResume, "resume", false, "resume an unfinished folder run")
+		cmd.Flags().StringVar(&runFolderResumeSequence, "resume-sequence", "", "safely adopt one named unfinished sequence")
 		cmd.Flags().BoolVar(&runFolderFresh, "fresh", false, "start a new folder run and ignore previous state")
 		cmd.Flags().BoolVar(&runFolderRestart, "restart", false, "restart this exact sequence from the beginning")
 		cmd.Flags().BoolVar(&runFolderNoResume, "no-resume", false, "do not use existing sequence resume state")
@@ -1113,6 +1116,9 @@ Examples:
 			}
 			if runFolderRestart && runFolderNoResume {
 				return fmt.Errorf("--restart and --no-resume are mutually exclusive")
+			}
+			if runFolderResumeSequence != "" && (runFolderResume || runFolderFresh || runFolderRestart || runFolderNoResume) {
+				return fmt.Errorf("--resume-sequence is mutually exclusive with --resume, --fresh, --restart, and --no-resume")
 			}
 			return nil
 		},
@@ -3366,6 +3372,9 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 		"--supervisor-id", supervisorID,
 		"--supervisor-log", logPath,
 	)
+	if options.ResumeSequence != "" {
+		args = append(args, "--resume-sequence", options.ResumeSequence)
+	}
 	if options.EngineOverride != "" {
 		args = append(args, "--engine", options.EngineOverride)
 	}
@@ -3623,6 +3632,12 @@ func printRunFolderSummary(stdout io.Writer, folder string, summary pgruntime.Ru
 func printRunFolderAggregate(stdout io.Writer, summary pgruntime.RunFolderSummary) {
 	for _, warning := range summary.Warnings {
 		fmt.Fprintf(stdout, "Warning: %s\n", warning)
+	}
+	if summary.Adoption != nil {
+		fmt.Fprintf(stdout, "Adopted sequence: %s; retained: %d; restart: %s\n", summary.Adoption.SequenceID, len(summary.Adoption.RetainedPrompts), summary.Adoption.RestartAt)
+		if len(summary.Adoption.PolicyHashChanges) > 0 {
+			fmt.Fprintf(stdout, "Role-policy fingerprint changes recorded: %d\n", len(summary.Adoption.PolicyHashChanges))
+		}
 	}
 	if summary.Run.Status != "completed" || summary.Sequence == nil {
 		return

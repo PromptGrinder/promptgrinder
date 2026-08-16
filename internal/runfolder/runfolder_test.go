@@ -866,6 +866,310 @@ func TestExplicitResumeRejectsChangedCompletedPrefix(t *testing.T) {
 	}
 }
 
+func TestResumeSequenceRetainsCompletedPrefixAcrossRolePolicyChange(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	writeRolePolicy(t, repo, "backend-feature", "Initial completed-slice policy.", []string{"backend/**"}, nil)
+	writePromptFile(t, repo, "10-implement-a.md", "---\nrole: backend-feature\n---\na")
+	writePromptFile(t, repo, "20-test-b.md", "b")
+
+	firstSummary, err := Run(repo, Options{HomeDir: home, RepoPath: repo}, &fakeLauncher{failName: "20-test-b.md"})
+	if err == nil {
+		t.Fatal("expected first run to fail")
+	}
+	sequenceID := firstSummary.Sequence.SequenceID
+	previousPolicyHash := firstSummary.Sequence.Items[0].PolicyHash
+	writeRolePolicy(t, repo, "backend-feature", "Changed policy for already completed work.", []string{"backend/**"}, []string{"go test ./..."})
+
+	resume := &fakeLauncher{}
+	summary, err := Run(repo, Options{HomeDir: home, RepoPath: repo, ResumeSequence: sequenceID}, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(namesFromCalls(resume.calls), ","), "20-test-b.md"; got != want {
+		t.Fatalf("resume calls = %s, want %s", got, want)
+	}
+	if summary.Adoption == nil || !summary.Adoption.Explicit || summary.Adoption.RestartAt != "20-test-b.md" || strings.Join(summary.Adoption.RetainedPrompts, ",") != "10-implement-a.md" {
+		t.Fatalf("adoption = %#v", summary.Adoption)
+	}
+	if len(summary.Adoption.PolicyHashChanges) != 1 || summary.Adoption.PolicyHashChanges[0].PromptName != "10-implement-a.md" || summary.Adoption.PolicyHashChanges[0].PreviousHash != previousPolicyHash || summary.Adoption.PolicyHashChanges[0].CurrentHash == previousPolicyHash {
+		t.Fatalf("policy changes = %#v", summary.Adoption.PolicyHashChanges)
+	}
+
+	events, err := os.ReadFile(filepath.Join(home, "events", "sequences", sequenceID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type":"sequence.adopted"`, `"explicit":true`, `"policy_hash_changes"`, `"restart_at":"20-test-b.md"`} {
+		if !strings.Contains(string(events), want) {
+			t.Fatalf("events = %s, missing %s", events, want)
+		}
+	}
+	sequenceSummary, err := os.ReadFile(filepath.Join(home, "summaries", sequenceID+".md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Sequence Adoption", "explicitly adopted", "role-policy fingerprint changed", "completed work was retained"} {
+		if !strings.Contains(string(sequenceSummary), want) {
+			t.Fatalf("summary = %s, missing %s", sequenceSummary, want)
+		}
+	}
+}
+
+func TestResumeSequenceRejectsUnsafeIdentityAndTerminalState(t *testing.T) {
+	t.Run("unknown id", func(t *testing.T) {
+		dir := initGitRepo(t)
+		writePromptFile(t, dir, "10-implement-a.md", "a")
+		_, err := Preflight(dir, Options{HomeDir: t.TempDir(), RepoPath: dir, ResumeSequence: "seq_0000000000000000"})
+		if err == nil || !strings.Contains(err.Error(), "was not found") || !strings.Contains(err.Error(), "no run state was created or changed") {
+			t.Fatalf("err = %v", err)
+		}
+		_, err = Preflight(dir, Options{HomeDir: t.TempDir(), RepoPath: dir, ResumeSequence: "../../sequence"})
+		if err == nil || !strings.Contains(err.Error(), "invalid sequence id") {
+			t.Fatalf("invalid id err = %v", err)
+		}
+	})
+
+	t.Run("completed sequence", func(t *testing.T) {
+		dir := initGitRepo(t)
+		home := t.TempDir()
+		writePromptFile(t, dir, "10-implement-a.md", "a")
+		summary, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Preflight(dir, Options{HomeDir: home, RepoPath: dir, ResumeSequence: summary.Sequence.SequenceID})
+		if err == nil || !strings.Contains(err.Error(), "is completed and cannot be adopted") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("changed completed content", func(t *testing.T) {
+		dir := initGitRepo(t)
+		home := t.TempDir()
+		writePromptFile(t, dir, "10-implement-a.md", "a")
+		writePromptFile(t, dir, "20-test-b.md", "b")
+		summary, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{failName: "20-test-b.md"})
+		if err == nil {
+			t.Fatal("expected first run to fail")
+		}
+		writePromptFile(t, dir, "10-implement-a.md", "changed")
+		_, err = Preflight(dir, Options{HomeDir: home, RepoPath: dir, ResumeSequence: summary.Sequence.SequenceID})
+		if err == nil || !strings.Contains(err.Error(), "completed prompt content changed") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("repository mismatch", func(t *testing.T) {
+		dir := initGitRepo(t)
+		otherRepo := initGitRepo(t)
+		home := t.TempDir()
+		writePromptFile(t, dir, "10-implement-a.md", "a")
+		writePromptFile(t, dir, "20-test-b.md", "b")
+		summary, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{failName: "20-test-b.md"})
+		if err == nil {
+			t.Fatal("expected first run to fail")
+		}
+		_, err = Preflight(dir, Options{HomeDir: home, RepoPath: otherRepo, ResumeSequence: summary.Sequence.SequenceID})
+		if err == nil || !strings.Contains(err.Error(), "belongs to repository") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("folder mismatch", func(t *testing.T) {
+		dir := initGitRepo(t)
+		otherFolder := t.TempDir()
+		home := t.TempDir()
+		writePromptFile(t, dir, "10-implement-a.md", "a")
+		writePromptFile(t, dir, "20-test-b.md", "b")
+		writePromptFile(t, otherFolder, "10-implement-a.md", "a")
+		writePromptFile(t, otherFolder, "20-test-b.md", "b")
+		summary, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{failName: "20-test-b.md"})
+		if err == nil {
+			t.Fatal("expected first run to fail")
+		}
+		_, err = Preflight(otherFolder, Options{HomeDir: home, RepoPath: dir, ResumeSequence: summary.Sequence.SequenceID})
+		if err == nil || !strings.Contains(err.Error(), "belongs to folder") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("reordered prompts", func(t *testing.T) {
+		dir := initGitRepo(t)
+		home := t.TempDir()
+		writePromptFile(t, dir, "10-implement-a.md", "a")
+		writePromptFile(t, dir, "20-test-b.md", "b")
+		summary, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{failName: "20-test-b.md"})
+		if err == nil {
+			t.Fatal("expected first run to fail")
+		}
+		if err := os.Rename(filepath.Join(dir, "10-implement-a.md"), filepath.Join(dir, "15-implement-a.md")); err != nil {
+			t.Fatal(err)
+		}
+		_, err = Preflight(dir, Options{HomeDir: home, RepoPath: dir, ResumeSequence: summary.Sequence.SequenceID})
+		if err == nil || !strings.Contains(err.Error(), "prompt order mismatch") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("cancelled sequence", func(t *testing.T) {
+		dir := initGitRepo(t)
+		home := t.TempDir()
+		writePromptFile(t, dir, "10-implement-a.md", "a")
+		writePromptFile(t, dir, "20-test-b.md", "b")
+		summary, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{failName: "20-test-b.md"})
+		if err == nil {
+			t.Fatal("expected first run to fail")
+		}
+		cancelled := *summary.Sequence
+		cancelled.Status = "cancelled"
+		if err := newSequenceStore(home).save(cancelled); err != nil {
+			t.Fatal(err)
+		}
+		_, err = Preflight(dir, Options{HomeDir: home, RepoPath: dir, ResumeSequence: cancelled.SequenceID})
+		if err == nil || !strings.Contains(err.Error(), "is cancelled and cannot be adopted") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestResumeSequenceRejectsDependencyChanges(t *testing.T) {
+	dir := initGitRepo(t)
+	home := t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nid: a\n---\na")
+	writePromptFile(t, dir, "20-test-b.md", "---\nid: b\ndepends_on: [a]\n---\nb")
+	summary, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{failName: "20-test-b.md"})
+	if err == nil {
+		t.Fatal("expected first run to fail")
+	}
+	writePromptFile(t, dir, "20-test-b.md", "---\nid: b\n---\nrepaired b")
+	_, err = Preflight(dir, Options{HomeDir: home, RepoPath: dir, ResumeSequence: summary.Sequence.SequenceID})
+	if err == nil || !strings.Contains(err.Error(), "dependency mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResumeSequenceRefreshesFingerprintsForNewlyCompletedSlices(t *testing.T) {
+	dir := initGitRepo(t)
+	home := t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	writePromptFile(t, dir, "20-implement-b.md", "b")
+	writePromptFile(t, dir, "30-test-c.md", "c")
+	first, err := Run(dir, Options{HomeDir: home, RepoPath: dir}, &fakeLauncher{failName: "20-implement-b.md"})
+	if err == nil {
+		t.Fatal("expected first run to fail")
+	}
+	writePromptFile(t, dir, "20-implement-b.md", "repaired b")
+	second, err := Run(dir, Options{HomeDir: home, RepoPath: dir, ResumeSequence: first.Sequence.SequenceID}, &fakeLauncher{failName: "30-test-c.md"})
+	if err == nil {
+		t.Fatal("expected adopted run to fail at the next slice")
+	}
+	if second.Sequence.Items[1].Status != "succeeded" {
+		t.Fatalf("second sequence = %#v", second.Sequence)
+	}
+
+	finalLauncher := &fakeLauncher{}
+	final, err := Run(dir, Options{HomeDir: home, RepoPath: dir, ResumeSequence: first.Sequence.SequenceID}, finalLauncher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(namesFromCalls(finalLauncher.calls), ","); got != "30-test-c.md" {
+		t.Fatalf("final resume calls = %s", got)
+	}
+	if final.Sequence.Status != "completed" || len(final.Sequence.Adoptions) != 2 {
+		t.Fatalf("final sequence = %#v", final.Sequence)
+	}
+}
+
+func TestResumeSequenceLegacyPolicyChangeUsesCheckpointEvidence(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	writeRolePolicy(t, repo, "backend-feature", "Initial policy.", []string{"backend/**"}, nil)
+	writePromptFile(t, repo, "10-implement-a.md", "---\nrole: backend-feature\n---\na")
+	writePromptFile(t, repo, "20-test-b.md", "b")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "add prompts")
+
+	summary, err := Run(repo, Options{HomeDir: home, RepoPath: repo, Checkpoint: true}, &fakeLauncher{failName: "20-test-b.md"})
+	if err == nil {
+		t.Fatal("expected first run to fail")
+	}
+	legacy := *summary.Sequence
+	legacy.StateVersion = 0
+	legacy.RepositoryPath = ""
+	legacy.Folder = ""
+	for index := range legacy.Items {
+		legacy.Items[index].PromptID = ""
+		legacy.Items[index].DependsOn = nil
+		legacy.Items[index].PromptHash = ""
+		legacy.Items[index].PolicyHash = ""
+	}
+	if err := newSequenceStore(home).save(legacy); err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, repo, "backend-feature", "Changed policy.", []string{"backend/**"}, nil)
+
+	resume := &fakeLauncher{}
+	adopted, err := Run(repo, Options{HomeDir: home, RepoPath: repo, Checkpoint: true, ResumeSequence: legacy.SequenceID}, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(namesFromCalls(resume.calls), ","); got != "20-test-b.md" {
+		t.Fatalf("resume calls = %s", got)
+	}
+	if adopted.Sequence.StateVersion != sequenceStateVersion || adopted.Adoption == nil || !adopted.Adoption.MigratedLegacyState {
+		t.Fatalf("adopted legacy sequence = %#v", adopted.Sequence)
+	}
+	summaryData, err := os.ReadFile(filepath.Join(home, "summaries", legacy.SequenceID+".md"))
+	if err != nil || !strings.Contains(string(summaryData), "Legacy state fingerprints were migrated") {
+		t.Fatalf("summary=%q err=%v", summaryData, err)
+	}
+}
+
+func TestResumeSequenceLegacyPolicyChangeWithoutEvidenceFailsMigration(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	writeRolePolicy(t, repo, "backend-feature", "Initial policy.", []string{"backend/**"}, nil)
+	writePromptFile(t, repo, "10-implement-a.md", "---\nrole: backend-feature\n---\na")
+	writePromptFile(t, repo, "20-test-b.md", "b")
+	summary, err := Run(repo, Options{HomeDir: home, RepoPath: repo}, &fakeLauncher{failName: "20-test-b.md"})
+	if err == nil {
+		t.Fatal("expected first run to fail")
+	}
+	legacy := *summary.Sequence
+	legacy.StateVersion = 0
+	for index := range legacy.Items {
+		legacy.Items[index].PromptID = ""
+		legacy.Items[index].DependsOn = nil
+		legacy.Items[index].PromptHash = ""
+		legacy.Items[index].PolicyHash = ""
+	}
+	if err := newSequenceStore(home).save(legacy); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(newSequenceStore(home).Root, legacy.SequenceID+".json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRolePolicy(t, repo, "backend-feature", "Changed policy.", []string{"backend/**"}, nil)
+
+	_, err = Preflight(repo, Options{HomeDir: home, RepoPath: repo, ResumeSequence: legacy.SequenceID})
+	for _, want := range []string{"cannot safely adopt legacy sequence", "checkpoint/commit", "did not modify or clone"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, missing %q", err, want)
+		}
+	}
+	after, readErr := os.ReadFile(statePath)
+	if readErr != nil || string(after) != string(before) {
+		t.Fatalf("rejected adoption modified sequence state: err=%v", readErr)
+	}
+	entries, readErr := os.ReadDir(newSequenceStore(home).Root)
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("rejected adoption cloned sequence state: entries=%v err=%v", entries, readErr)
+	}
+}
+
 func TestChangingPromptContentCreatesDifferentSequence(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
@@ -994,6 +1298,20 @@ func TestResumeFreshMutuallyExclusive(t *testing.T) {
 	_, err := Run(t.TempDir(), Options{Resume: true, Fresh: true}, &fakeLauncher{})
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResumeSequenceMutuallyExclusiveWithOtherResumeModes(t *testing.T) {
+	for _, options := range []Options{
+		{ResumeSequence: "seq_named", Resume: true},
+		{ResumeSequence: "seq_named", Fresh: true},
+		{ResumeSequence: "seq_named", Restart: true},
+		{ResumeSequence: "seq_named", NoResume: true},
+	} {
+		_, err := Preflight(t.TempDir(), options)
+		if err == nil || !strings.Contains(err.Error(), "--resume-sequence is mutually exclusive") {
+			t.Fatalf("options = %#v, err = %v", options, err)
+		}
 	}
 }
 

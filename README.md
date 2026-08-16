@@ -539,7 +539,18 @@ files. It prints the retained prefix and restart point, then reruns only the
 first failed or changed slice onward. A changed completed slice is never
 silently adopted. Use `--fresh`, `--restart`, or `--no-resume` to intentionally
 discard previous sequence state; `--resume` remains available as an explicit
-request to reuse it.
+request to reuse it. To select one exact unfinished record instead of searching
+for a compatible sequence, run
+`promptgrinder run-folder <folder> --resume-sequence <sequence-id>`. Explicit adoption requires the same canonical
+repository and folder, prompt names and order, and dependency graph. It retains
+only the contiguous succeeded/skipped prefix, proves that completed prompt
+content is unchanged, revalidates every remaining slice against current role,
+model, path, and configuration policy, and records the adoption plus role-policy
+fingerprint changes in sequence events and summaries. Completed role-policy
+changes do not rerun completed work. Legacy records without separate prompt and
+dependency fingerprints require matching Git checkpoint or commit evidence;
+otherwise adoption fails with migration guidance and does not edit or clone the
+stored sequence.
 
 For now, task bodies must contain the actual instructions to execute. Custom
 YAML fields are not an instruction language and unsupported frontmatter keys

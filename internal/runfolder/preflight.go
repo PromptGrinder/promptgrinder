@@ -20,10 +20,12 @@ import (
 )
 
 type PreflightResult struct {
-	Folder     string
-	Repository string
-	Inspection FolderInspection
-	SequenceID string
+	Folder      string
+	Repository  string
+	Inspection  FolderInspection
+	SequenceID  string
+	ResumeIndex int
+	Adoption    *SequenceAdoption
 }
 
 // Preflight validates everything that can fail without launching a worker or
@@ -37,6 +39,9 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	}
 	if options.Restart && options.NoResume {
 		return PreflightResult{}, fmt.Errorf("--restart and --no-resume are mutually exclusive")
+	}
+	if options.ResumeSequence != "" && (options.Resume || options.Fresh || options.Restart || options.NoResume) {
+		return PreflightResult{}, fmt.Errorf("--resume-sequence is mutually exclusive with --resume, --fresh, --restart, and --no-resume")
 	}
 	if options.Template == "" {
 		options.Template = "codex"
@@ -67,11 +72,22 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 		return PreflightResult{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
 	}
 	result := PreflightResult{Folder: absFolder, Repository: repoRoot, Inspection: inspection}
+	remaining := inspection.Prompts
+	if options.ResumeSequence != "" {
+		sequence, adoption, err := newSequenceStore(options.HomeDir).validateExplicitAdoption(absFolder, repoRoot, inspection.Prompts, options.ResumeSequence)
+		if err != nil {
+			return result, err
+		}
+		result.SequenceID = sequence.SequenceID
+		result.ResumeIndex = len(adoption.RetainedPrompts)
+		result.Adoption = adoption
+		remaining = inspection.Prompts[result.ResumeIndex:]
+	}
 	issues := []error{}
-	if err := applyRolePolicies(repoRoot, inspection.Prompts); err != nil {
+	if err := applyRolePolicies(repoRoot, remaining); err != nil {
 		issues = append(issues, err)
 	}
-	if err := validatePrompts(inspection.Prompts); err != nil {
+	if err := validatePrompts(remaining); err != nil {
 		issues = append(issues, err)
 	}
 	if options.CommitEach || options.RequireCleanGit {
@@ -81,6 +97,12 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	}
 	if len(issues) > 0 {
 		return result, preflightIssues(issues)
+	}
+	if options.ResumeSequence != "" {
+		if err := validateRemainingConfiguration(repoRoot, remaining, options); err != nil {
+			return result, fmt.Errorf("run-folder preflight: %w", err)
+		}
+		return result, nil
 	}
 	sequence, err := buildSequence(absFolder, repoRoot, inspection.Prompts, options)
 	if err != nil {
