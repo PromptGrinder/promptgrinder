@@ -261,15 +261,15 @@ type PromptState struct {
 func Classify(filename string) PromptType {
 	name := filepath.Base(filename)
 	switch {
-	case matches(name, `^00(?:[A-Z]+)?-specification.*\.md$`):
+	case matches(name, `^00(?:[A-Z]+)?-specification.*\.(?:md|pg)$`):
 		return TypeSpecification
-	case matches(name, `^\d\d(?:[A-Z]+)?-implement-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-implement-.+\.(?:md|pg)$`):
 		return TypeImplement
-	case matches(name, `^\d\d(?:[A-Z]+)?-test-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-test-.+\.(?:md|pg)$`):
 		return TypeTest
-	case matches(name, `^\d\d(?:[A-Z]+)?-verify-.+\.md$`), matches(name, `^\d\d(?:[A-Z]+)?-final-verify.*\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-verify-.+\.(?:md|pg)$`), matches(name, `^\d\d(?:[A-Z]+)?-final-verify.*\.(?:md|pg)$`):
 		return TypeVerify
-	case matches(name, `^\d\d(?:[A-Z]+)?-review-.+\.md$`):
+	case matches(name, `^\d\d(?:[A-Z]+)?-review-.+\.(?:md|pg)$`):
 		return TypeReview
 	default:
 		return TypeUnknown
@@ -299,11 +299,11 @@ func Inspect(folder string) (FolderInspection, error) {
 	inspection := FolderInspection{}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, ".") || entry.IsDir() || !strings.EqualFold(filepath.Ext(name), ".md") {
+		if strings.HasPrefix(name, ".") || entry.IsDir() || !isPromptFile(name) {
 			continue
 		}
 		inspection.MarkdownTotal++
-		if !matches(name, `^\d\d(?:[A-Z]+)?-.+\.md$`) {
+		if !matches(name, `^\d\d(?:[A-Z]+)?-.+\.(?:md|pg)$`) {
 			inspection.Ignored = append(inspection.Ignored, name)
 			continue
 		}
@@ -343,7 +343,7 @@ func inspectPrompt(promptPath, name string) (Prompt, error) {
 	filenameType := Classify(name)
 	declaredType := promptTypeValue(task.Metadata["type"])
 	if filenameType != TypeUnknown && filenameType != TypeSpecification && declaredType != TypeUnknown && filenameType != declaredType {
-		return Prompt{}, fmt.Errorf("run-folder preflight: %s starts with the %q slice naming convention (type %q), but its frontmatter says type: %q; rename it to NN-%s-...md or change frontmatter type to %q", name, filenameType, filenameType, declaredType, declaredType, filenameType)
+		return Prompt{}, fmt.Errorf("run-folder preflight: %s starts with the %q slice naming convention (type %q), but its frontmatter says type: %q; rename it to NN-%s-...{.md|.pg} or change frontmatter type to %q", name, filenameType, filenameType, declaredType, declaredType, filenameType)
 	}
 	promptType := filenameType
 	if promptType == TypeUnknown {
@@ -404,7 +404,12 @@ func validatePromptDependencies(prompts []Prompt) error {
 }
 
 func invalidPromptNamesError(inspection FolderInspection) error {
-	return fmt.Errorf("run-folder preflight: %d of %d Markdown files included; unsupported numbered prompt name(s): %s; use a typed filename or declare id and type in frontmatter", len(inspection.Prompts), inspection.MarkdownTotal, strings.Join(inspection.Invalid, ", "))
+	return fmt.Errorf("run-folder preflight: %d of %d prompt files included; unsupported numbered prompt name(s): %s; use a typed filename or declare id and type in frontmatter", len(inspection.Prompts), inspection.MarkdownTotal, strings.Join(inspection.Invalid, ", "))
+}
+
+func isPromptFile(name string) bool {
+	extension := filepath.Ext(name)
+	return strings.EqualFold(extension, ".md") || strings.EqualFold(extension, ".pg")
 }
 
 // ResolveSequenceID computes the stable identity used by Run without creating

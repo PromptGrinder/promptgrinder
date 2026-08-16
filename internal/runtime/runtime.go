@@ -159,8 +159,8 @@ func (s Service) RunPathWithOptions(path string, options RunOptions) (RunSummary
 	if info.IsDir() {
 		return s.runFolder(path, manager)
 	}
-	if filepath.Ext(path) != ".md" {
-		return RunSummary{}, fmt.Errorf("task file must be Markdown (*.md): %s", path)
+	if !scheduler.IsPromptFile(path) {
+		return RunSummary{}, fmt.Errorf("task file must use .md or .pg: %s", path)
 	}
 	result := manager.Launch(path)
 	if result.Err != nil {
@@ -268,8 +268,8 @@ func resolveRunFiles(paths []string) ([]string, error) {
 			}
 		}
 		for _, candidate := range candidates {
-			if filepath.Ext(candidate) != ".md" {
-				return nil, fmt.Errorf("task file must be Markdown (*.md): %s", candidate)
+			if !scheduler.IsPromptFile(candidate) {
+				return nil, fmt.Errorf("task file must use .md or .pg: %s", candidate)
 			}
 			absolute, err := filepath.Abs(candidate)
 			if err != nil {

@@ -1439,16 +1439,68 @@ func TestCLIValidateFolderRunsPreflightWithoutLaunchingWorkers(t *testing.T) {
 	}
 }
 
+func TestCLIValidateDirectoryUsesCompletePreflight(t *testing.T) {
+	folder := t.TempDir()
+	service := &fakeService{
+		sequence:       pgruntime.SequenceState{SequenceID: "seq_validate"},
+		defaultsReport: config.DefaultsReport{Config: config.Config{RunFolderCommitEach: true, RunFolderRequireCleanGit: true}},
+	}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", folder, "--repo", "/repo", "--commit-each=false", "--require-clean-git=false"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if service.runFolderOptions.RepoPath != "/repo" || service.runFolderOptions.CommitEach || service.runFolderOptions.RequireCleanGit {
+		t.Fatalf("preflight repo = %q", service.runFolderOptions.RepoPath)
+	}
+	for _, want := range []string{"Preflight: PASSED", "Validation scope: complete ordered prompt-folder preflight; no workers will launch", "Sequence ID: seq_validate", "Result: PASSED — no workers launched."} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("validate folder output missing %q: %q", want, out.String())
+		}
+	}
+}
+
+func TestCLIValidateDirectoryReturnsFailureWhenPromptValidationFails(t *testing.T) {
+	folder := t.TempDir()
+	service := &fakeService{
+		folderPreflight: pgruntime.RunFolderPreflight{
+			SequenceID: "seq_invalid",
+			Inspection: runfolder.FolderInspection{Prompts: []runfolder.Prompt{{
+				Name: "10-implement-api.pg",
+				Path: filepath.Join(folder, "10-implement-api.pg"),
+				Type: runfolder.TypeImplement,
+			}}},
+		},
+		validatePlan: worker.ValidationPlan{Valid: false, Engine: "codex", ExecutionPlan: map[string]any{}},
+		validateErr:  errors.New("model is unavailable"),
+	}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", folder})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "work-order validation failed for: 10-implement-api.pg") {
+		t.Fatalf("validate folder error = %v", err)
+	}
+	for _, want := range []string{"Preflight: FAILED", "[✗] 10-implement-api.pg", "model is unavailable", "Result: FAILED — no workers launched."} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("validate folder output missing %q: %q", want, out.String())
+		}
+	}
+}
+
 func TestPrintFolderValidationPlanLabelsUnscopedPrompts(t *testing.T) {
 	var out bytes.Buffer
 	printFolderValidationPlan(&out, folderValidationPlan{
 		Valid:          true,
 		ValidationMode: "full run-folder preflight; no workers will launch",
-		Preflight: pgruntime.RunFolderPreflight{Inspection: runfolder.FolderInspection{
+		Preflight: pgruntime.RunFolderPreflight{SequenceID: "seq_checklist", Inspection: runfolder.FolderInspection{
 			Prompts: []runfolder.Prompt{{Name: "99-final-verify.md", Type: runfolder.TypeVerify}},
 		}},
-	})
-	if got := out.String(); !strings.Contains(got, "Role: unscoped (99-final-verify.md) — no role boundary or role model policy applies") {
+	}, false)
+	if got := out.String(); !strings.Contains(got, "[✓] 99-final-verify.md") || !strings.Contains(got, "[✓] Ordered sequence: seq_checklist") || !strings.Contains(got, "Role: unscoped (99-final-verify.md) — no role boundary or role model policy applies") {
 		t.Fatalf("unscoped role label missing: %q", got)
 	}
 }
@@ -2734,6 +2786,7 @@ type fakeService struct {
 	runPaths          []string
 	runFolderSummary  pgruntime.RunFolderSummary
 	runFolderErr      error
+	folderPreflight   pgruntime.RunFolderPreflight
 	runFolderOptions  pgruntime.RunFolderOptions
 	runFolderProgress []pgruntime.RunFolderProgressEvent
 	defaultsReport    config.DefaultsReport
@@ -2800,11 +2853,17 @@ func (f *fakeService) PreflightRunFolder(path string, options pgruntime.RunFolde
 	if f.runFolderErr != nil {
 		return pgruntime.RunFolderPreflight{}, f.runFolderErr
 	}
-	sequenceID := f.sequence.SequenceID
-	if sequenceID == "" {
-		sequenceID = "seq_test"
+	preflight := f.folderPreflight
+	if preflight.Folder == "" {
+		preflight.Folder = path
 	}
-	return pgruntime.RunFolderPreflight{Folder: path, SequenceID: sequenceID}, nil
+	if preflight.SequenceID == "" {
+		preflight.SequenceID = f.sequence.SequenceID
+		if preflight.SequenceID == "" {
+			preflight.SequenceID = "seq_test"
+		}
+	}
+	return preflight, nil
 }
 
 func (f *fakeService) Engines() []engine.Descriptor {

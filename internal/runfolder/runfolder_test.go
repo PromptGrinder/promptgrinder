@@ -449,6 +449,21 @@ func TestClassifyPromptTypes(t *testing.T) {
 	}
 }
 
+func TestInspectIncludesPGPromptFiles(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "10-implement-api.pg", "implement")
+	writePromptFile(t, dir, "20-test-api.pg", "test")
+	writePromptFile(t, dir, "30-verify-api.md", "verify")
+
+	inspection, err := Inspect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(inspection.Prompts); strings.Join(got, ",") != "10-implement-api.pg,20-test-api.pg,30-verify-api.md" {
+		t.Fatalf("prompt files = %v", got)
+	}
+}
+
 func TestInspectExplainsTypedFilenameAndFrontmatterMismatch(t *testing.T) {
 	dir := t.TempDir()
 	writePromptFile(t, dir, "40-test-and-final-verify-ranking-rivals.md", "---\ntype: verify\n---\nverify")
@@ -460,7 +475,7 @@ func TestInspectExplainsTypedFilenameAndFrontmatterMismatch(t *testing.T) {
 	for _, want := range []string{
 		"starts with the \"test\" slice naming convention",
 		"frontmatter says type: \"verify\"",
-		"rename it to NN-verify-...md",
+		"rename it to NN-verify-...{.md|.pg}",
 		"change frontmatter type to \"test\"",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -486,7 +501,7 @@ func TestDiscoverIncludesOnlyRecognizedNumberedPrompts(t *testing.T) {
 	if inspection.MarkdownTotal != 4 || strings.Join(inspection.Ignored, ",") != "README.md,notes.md" || strings.Join(inspection.Invalid, ",") != "10-custom-task.md" {
 		t.Fatalf("inspection = %#v", inspection)
 	}
-	if _, err := Discover(dir); err == nil || !strings.Contains(err.Error(), "1 of 4 Markdown files included") || !strings.Contains(err.Error(), "10-custom-task.md") {
+	if _, err := Discover(dir); err == nil || !strings.Contains(err.Error(), "1 of 4 prompt files included") || !strings.Contains(err.Error(), "10-custom-task.md") {
 		t.Fatalf("Discover error = %v", err)
 	}
 }

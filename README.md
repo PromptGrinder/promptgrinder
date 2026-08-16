@@ -65,7 +65,8 @@ Running discovery again never overwrites different existing configuration. If
 repository analysis has changed, PromptGrinder reports the conflicting file
 and asks you to reconcile it or move `.promptgrinder/` aside first.
 
-Slices are numbered Markdown work orders in one folder. Use them when a feature
+Slices are numbered Markdown work orders in one folder. Work orders may use the
+explicit `.pg` extension or the conventional `.md` extension. Use them when a feature
 is too large for one safe prompt: separate the domain change, CLI integration,
 tests, and final verification so each worker receives a smaller context and
 produces a reviewable result.
@@ -140,18 +141,18 @@ Exercise the public behavior, fix only regressions caused by this feature, and
 run the declared validation. Report any residual risk.
 EOF
 
-promptgrinder validate-folder tasks/project-archive --repo .
+promptgrinder validate tasks/project-archive --repo .
 
 git add .promptgrinder tasks/project-archive
 git commit -m "Add PromptGrinder roles and project archive slices"
 ```
 
-Runnable slice names use `NN[A-Z]*-implement-*.md`, `NN[A-Z]*-test-*.md`,
-`NN[A-Z]*-verify-*.md`, or `NN[A-Z]*-review-*.md`; the letter suffix is
-optional, so both `10-implement-domain.md` and
+Runnable slice names use `NN[A-Z]*-implement-*.(pg|md)`, `NN[A-Z]*-test-*.(pg|md)`,
+`NN[A-Z]*-verify-*.(pg|md)`, or `NN[A-Z]*-review-*.(pg|md)`; the letter suffix is
+optional, so both `10-implement-domain.pg` and
 `08A-implement-ranking-history.md` are valid. An optional
-`00-specification*.md` supplies shared context. Existing descriptive filenames
-such as `01-snapshot-reliability.md` or `08A-ranking-history-semantics.md` are
+`00-specification*.(pg|md)` supplies shared context. Existing descriptive filenames
+such as `01-snapshot-reliability.pg` or `08A-ranking-history-semantics.md` are
 also safe when frontmatter declares a stable `id` and explicit `type`; `role`
 identifies the worker responsibility and `depends_on` names earlier task IDs.
 For a large SonarQube cleanup,
@@ -465,8 +466,8 @@ commits are intended.
 | `roles refine <id\|latest>` | Re-run deterministic refinement without AI |
 | `roles apply <id\|latest>` | Apply safe additions or explicitly selected stored items without AI |
 | `roles reject <id\|latest>` | Reject a stored review without writing role YAML |
-| `validate <task.md>` | Validate one work order without creating a worker; use `--repo` for an external task folder and `--render` to print the exact engine prompt |
-| `validate-folder <folder>` | Run the complete role, path, dependency, model, and Git preflight without launching workers |
+| `validate <task.md\|task.pg\|folder>` | Validate one work order or a complete ordered prompt folder without creating workers; folder output is a checked preflight list |
+| `validate-folder <folder>` | Backward-compatible alias for complete ordered-folder validation |
 | `doctor` | Inventory supported runtimes and terminals, then check platform, Git, configuration, state, and readiness |
 | `setup` | Run the read-only machine scan, then preview or create PromptGrinder-owned first-use files |
 | `list` | List workers |
@@ -485,14 +486,13 @@ output.
 
 ### Ordered folder completion contract
 
-`run-folder` discovers recognized typed Markdown names:
-`00[A-Z]*-specification*.md`, `NN[A-Z]*-implement-*.md`,
-`NN[A-Z]*-test-*.md`, `NN[A-Z]*-verify-*.md`,
-`NN[A-Z]*-final-verify*.md`, and `NN[A-Z]*-review-*.md`. The letter suffix is
-optional. It also accepts generic `NN[A-Z]*-*.md` names when they declare valid
+`run-folder` discovers recognized typed work-order names using `.pg` or `.md`:
+`00[A-Z]*-specification*`, `NN[A-Z]*-implement-*`, `NN[A-Z]*-test-*`,
+`NN[A-Z]*-verify-*`, `NN[A-Z]*-final-verify*`, and `NN[A-Z]*-review-*`.
+The letter suffix is optional. It also accepts generic `NN[A-Z]*-*.(pg|md)` names when they declare valid
 `id` and `type` frontmatter.
 README files, notes, completion reports, and untyped numbered files are never runnable.
-Before detaching or creating sequence state, PromptGrinder classifies every visible Markdown
+Before detaching or creating sequence state, PromptGrinder classifies every visible work-order
 file, validates every included prompt and dependency, resolves roles, and checks
 the Git baseline. Numbered task-like files with an
 unsupported name fail preflight with included/total counts instead of being
@@ -649,7 +649,7 @@ lives outside the checkout it will modify. Validation prints the explicit or
 inferred repository, resolved role and outer role boundary, slice paths,
 effective-scope rule, selected model cost/capabilities, and sandbox level. An
 inferred non-Git task directory is prominently warned: it cannot provide a
-repository-backed role policy. `promptgrinder validate-folder <folder> --repo
+repository-backed role policy. `promptgrinder validate <folder> --repo
 <repository>` runs the complete ordered-folder preflight—including filenames,
 dependencies, role/slice paths, configured clean-baseline checks, and live
 model checks—without creating sequence or worker state.
@@ -790,7 +790,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.2.4` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.3.0` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -838,6 +838,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
+- [RC.3.0 qualification](docs/release/v1.0.0-rc.3.0-qualification.md)
+- [RC.3.0 final gate](docs/release/v1.0.0-rc.3.0-final-gate.md)
+- [RC.3.0 candidate notes](docs/release/v1.0.0-rc.3.0-release-notes.md)
 - [RC.2.4 qualification](docs/release/v1.0.0-rc.2.4-qualification.md)
 - [RC.2.4 final gate](docs/release/v1.0.0-rc.2.4-final-gate.md)
 - [RC.2.4 candidate notes](docs/release/v1.0.0-rc.2.4-release-notes.md)

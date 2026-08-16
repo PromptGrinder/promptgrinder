@@ -40,9 +40,9 @@ see registered execution engines and their capabilities before assigning work.
 
 ## Work-order authoring and validation
 
-### UC-05: Validate a Markdown work order safely
+### UC-05: Validate a work order safely
 
-Use `promptgrinder validate <task.md>` to check paths, strict frontmatter,
+Use `promptgrinder validate <task.pg>` to check paths, strict frontmatter,
 engine configuration, task semantics, and warnings without launching a worker
 or creating execution state. When a task file lives outside its target checkout,
 use `--repo <repository>` so validation resolves the repository role policy,
@@ -55,7 +55,7 @@ engine command preview.
 
 ### UC-05a: Fully preflight a folder without running it
 
-Use `promptgrinder validate-folder <folder> --repo <repository>` to run the
+Use `promptgrinder validate <folder> --repo <repository>` to run the
 same filename, dependency, role, slice-path, clean-baseline, and live-model
 preflight as `run-folder`, without creating a sequence or worker. Use it to
 review role boundaries and catch external prompt-folder configuration errors
@@ -65,11 +65,17 @@ unambiguous `Preflight: PASSED` / `FAILED` result. It labels prompts without a
 slice needs a role boundary or role model policy. Declared roles must appear in
 `.promptgrinder/project.yaml` and have a matching role file. Independent role,
 prompt, and dirty-baseline failures are reported together before any worker can
-launch.
+launch. A passed preflight includes a checked list for every runnable prompt
+with its resolved engine and model selection, plus the resolved ordered
+sequence. `validate-folder` remains available as a
+backward-compatible alias. Folder validation accepts the same preflight policy
+overrides as `validate-folder`; for example, use `--commit-each=false` when
+validating newly authored, uncommitted slices before an execution that will
+create per-slice commits.
 
 ### UC-06: Inspect the exact engine prompt
 
-Use `promptgrinder validate --render <task.md>` to inspect the task semantics
+Use `promptgrinder validate --render <task.pg>` to inspect the task semantics
 preamble and Markdown body exactly as the runtime will receive them. This makes
 discarded or unexpectedly small task instructions visible before execution.
 
@@ -80,6 +86,10 @@ paths, validation instructions, runtime options, environment values, labels,
 working directory, and timeout. Keep executable task instructions in the
 Markdown body. PromptGrinder rejects unsupported metadata instead of silently
 discarding it.
+
+Use `.pg` when you want to label a prompt as a PromptGrinder slice, or `.md`
+when Markdown preview is more useful. Both extensions use the same YAML
+frontmatter, safety checks, and ordered-folder behavior.
 
 ### UC-08: Produce automation-friendly validation results
 
@@ -128,10 +138,10 @@ the configured defaults.
 ### UC-15: Execute an implementation plan as numbered slices
 
 Use `promptgrinder run-folder <folder>` to execute recognized numbered
-Markdown tasks in order. A `00-specification*.md` file supplies shared context
+Markdown work-order slices in order. A `00-specification*.(pg|md)` file supplies shared context
 without running unless `--include-specification` is selected.
 Typed filenames remain supported. A numeric order token may include an optional
-uppercase letter suffix, so `08A-ranking-history.md` and
+uppercase letter suffix, so `08A-ranking-history.pg` and
 `08A-implement-ranking-history.md` are valid. A generic ordered filename is
 runnable when frontmatter supplies a stable `id` and explicit `type`; optional
 `role` becomes the displayed execution identity, and `depends_on` references
@@ -142,7 +152,7 @@ When a slice declares a role, the role description and allowed paths are also
 injected as an outer boundary: changed and expected paths must satisfy both the
 role and slice policies. Role quality gates are visible readiness guidance, not
 additional validation commands for an intermediate slice.
-Before sequence creation, PromptGrinder reports how many Markdown files are
+Before sequence creation, PromptGrinder reports how many slice files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
 The invoking process also resolves roles and dependencies and checks Git

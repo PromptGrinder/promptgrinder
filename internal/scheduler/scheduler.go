@@ -14,7 +14,7 @@ func DiscoverMarkdown(root string) ([]string, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
-		if isMarkdown(root) && !isHidden(filepath.Base(root)) {
+		if IsPromptFile(root) && !isHidden(filepath.Base(root)) {
 			abs, err := filepath.Abs(root)
 			if err != nil {
 				return nil, err
@@ -43,7 +43,7 @@ func DiscoverMarkdown(root string) ([]string, error) {
 		if entry.IsDir() {
 			return nil
 		}
-		if isMarkdown(name) {
+		if IsPromptFile(name) {
 			files = append(files, path)
 		}
 		return nil
@@ -62,8 +62,11 @@ func DiscoverMarkdown(root string) ([]string, error) {
 	return files, nil
 }
 
-func isMarkdown(path string) bool {
-	return strings.EqualFold(filepath.Ext(path), ".md")
+// IsPromptFile reports whether path uses a supported runnable-prompt extension.
+// Prompt bodies remain Markdown regardless of whether they use .md or .pg.
+func IsPromptFile(path string) bool {
+	extension := filepath.Ext(path)
+	return strings.EqualFold(extension, ".md") || strings.EqualFold(extension, ".pg")
 }
 
 func isHidden(name string) bool {

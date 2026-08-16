@@ -4,42 +4,44 @@ This reference defines the Markdown work-order format accepted by
 `promptgrinder validate` and `promptgrinder run-folder`.
 
 Each runnable slice has YAML frontmatter followed by Markdown instructions.
+Use `.pg` to label PromptGrinder slices or `.md` for conventional Markdown;
+both extensions have identical semantics.
 Frontmatter declares machine-checked metadata and constraints; the Markdown
 body tells the worker what to do. Frontmatter is not an instruction language.
 
 ## Runnable filenames and order
 
-`run-folder` reads visible, top-level Markdown files only. It runs recognized
+`run-folder` reads visible, top-level `.pg` and `.md` slice files. It runs recognized
 slices in lexicographic filename order. `depends_on` validates that a
 prerequisite is earlier in that order; it never changes the order.
 
 Use one of these typed names when possible:
 
 ```text
-10-implement-ranking-history.md
-20-test-ranking-history.md
-30-verify-ranking-history.md
-40-review-ranking-history.md
+10-implement-ranking-history.pg
+20-test-ranking-history.pg
+30-verify-ranking-history.pg
+40-review-ranking-history.pg
 ```
 
 The supported typed patterns are:
 
 ```text
-NN[A-Z]*-implement-*.md
-NN[A-Z]*-test-*.md
-NN[A-Z]*-verify-*.md
-NN[A-Z]*-final-verify*.md
-NN[A-Z]*-review-*.md
+NN[A-Z]*-implement-*.(pg|md)
+NN[A-Z]*-test-*.(pg|md)
+NN[A-Z]*-verify-*.(pg|md)
+NN[A-Z]*-final-verify*.(pg|md)
+NN[A-Z]*-review-*.(pg|md)
 ```
 
 `NN` is exactly two digits and `[A-Z]*` is an optional uppercase letter suffix.
-For example, both `10-implement-ranking-history.md` and
-`08A-implement-ranking-history.md` are typed slices.
-`00[A-Z]*-specification*.md` is shared context and is not run unless
+For example, both `10-implement-ranking-history.pg` and
+`08A-implement-ranking-history.pg` are typed slices.
+`00[A-Z]*-specification*.pg` is shared context and is not run unless
 `--include-specification` is set.
 
-Generic names in the form `NN[A-Z]*-*.md`, such as
-`10-ranking-history-semantics.md` or `08A-ranking-history-semantics.md`, are
+Generic names in the form `NN[A-Z]*-*.(pg|md)`, such as
+`10-ranking-history-semantics.pg` or `08A-ranking-history-semantics.md`, are
 runnable only when frontmatter declares both `id` and `type`.
 
 ## Complete slice
@@ -87,7 +89,7 @@ available DSL; it is not a requirement to set every optional field.
 
 | Field | Purpose | Rules |
 | --- | --- | --- |
-| `id` | Stable task identity | Lowercase, hyphen-separated slug. Required for generic `NN[A-Z]*-*.md` names and recommended for every dependency-aware sequence. |
+| `id` | Stable task identity | Lowercase, hyphen-separated slug. Required for generic `NN[A-Z]*-*.(pg|md)` names and recommended for every dependency-aware sequence. |
 | `type` | Slice kind | One of `implement`, `test`, `verify`, or `review`. Required for generic names; must agree with a typed filename. |
 | `role` | Declared execution responsibility | Lowercase, hyphen-separated slug. PromptGrinder loads its description and allowed paths as an outer boundary; the slice policy can only narrow that scope. |
 | `depends_on` | Earlier prerequisite task IDs | List of `id` values. Every referenced ID must exist and occur earlier in filename order. |
@@ -175,8 +177,8 @@ Validate every slice, then inspect the final engine prompt when metadata or
 scope is important:
 
 ```sh
-promptgrinder validate tasks/ranking-v4/10-implement-ranking-history.md
-promptgrinder validate --render tasks/ranking-v4/10-implement-ranking-history.md
+promptgrinder validate tasks/ranking-v4/10-implement-ranking-history.pg
+promptgrinder validate --render tasks/ranking-v4/10-implement-ranking-history.pg
 promptgrinder run-folder tasks/ranking-v4 --repo . --commit-each --require-clean-git --detach=false
 ```
 

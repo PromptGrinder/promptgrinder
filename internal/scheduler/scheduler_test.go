@@ -20,6 +20,7 @@ func TestDiscoverMarkdownFiltersAndSorts(t *testing.T) {
 	}
 	write("b-task.md")
 	write("a-task.md")
+	write("c-task.pg")
 	write("notes.txt")
 	write(".hidden.md")
 	write(".hidden-dir/c-task.md")
@@ -32,6 +33,7 @@ func TestDiscoverMarkdownFiltersAndSorts(t *testing.T) {
 	want := []string{
 		filepath.Join(root, "a-task.md"),
 		filepath.Join(root, "b-task.md"),
+		filepath.Join(root, "c-task.pg"),
 		filepath.Join(root, "nested", "d-task.md"),
 	}
 	if len(files) != len(want) {

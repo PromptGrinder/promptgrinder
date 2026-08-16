@@ -196,11 +196,20 @@ type defaultsJSONOutput struct {
 }
 
 type folderValidationPlan struct {
-	Valid            bool                         `json:"valid"`
-	ValidationMode   string                       `json:"validation_mode"`
-	Preflight        pgruntime.RunFolderPreflight `json:"preflight"`
-	WorkerWouldStart bool                         `json:"worker_would_start"`
-	Error            string                       `json:"error,omitempty"`
+	Valid             bool                         `json:"valid"`
+	ValidationMode    string                       `json:"validation_mode"`
+	Preflight         pgruntime.RunFolderPreflight `json:"preflight"`
+	PromptValidations []folderPromptValidation     `json:"prompt_validations,omitempty"`
+	WorkerWouldStart  bool                         `json:"worker_would_start"`
+	Error             string                       `json:"error,omitempty"`
+}
+
+type folderPromptValidation struct {
+	Name  string `json:"name"`
+	Valid bool   `json:"valid"`
+	Tool  string `json:"tool,omitempty"`
+	Model string `json:"model,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 type runWorkerJSON struct {
@@ -889,13 +898,80 @@ Examples:
 	var validateEngine string
 	var validateRender bool
 	var validateRepo string
+	var validateTemplate string
+	var validateCheckpoint bool
+	var validateCommitEach bool
+	var validateRequireCleanGit bool
+	var validateRecoveryAttempts int
 	validateCmd := &cobra.Command{
-		Use:   "validate <task.md>",
-		Short: "Validate a Markdown task without launching a worker.",
+		Use:   "validate <task.md|task.pg|folder>",
+		Short: "Validate a work order or complete prompt folder without launching workers.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if validateRender && validateJSON {
 				return StructuredError{Err: fmt.Errorf("--render cannot be combined with --json"), Code: ExitInvalidInput}
+			}
+			info, statErr := os.Stat(args[0])
+			if statErr == nil && info.IsDir() {
+				if validateRender {
+					return StructuredError{Err: fmt.Errorf("--render is only supported for one work order"), Code: ExitInvalidInput}
+				}
+				defaults := service.Defaults().Config
+				repoPath := validateRepo
+				if repoPath == "" {
+					repoPath = defaults.RunFolderRepo
+				}
+				template := validateTemplate
+				if !cmd.Flags().Changed("template") {
+					template = defaults.RunFolderTemplate
+				}
+				checkpoint := validateCheckpoint
+				if !cmd.Flags().Changed("checkpoint") {
+					checkpoint = defaults.RunFolderCheckpoint
+				}
+				commitEach := validateCommitEach
+				if !cmd.Flags().Changed("commit-each") {
+					commitEach = defaults.RunFolderCommitEach
+				}
+				requireCleanGit := validateRequireCleanGit
+				if !cmd.Flags().Changed("require-clean-git") {
+					requireCleanGit = defaults.RunFolderRequireCleanGit
+				}
+				recoveryAttempts := validateRecoveryAttempts
+				if !cmd.Flags().Changed("recovery-attempts") {
+					recoveryAttempts = defaults.RunFolderRecoveryAttempts
+				}
+				preflight, err := service.PreflightRunFolder(args[0], pgruntime.RunFolderOptions{
+					RepoPath:         repoPath,
+					Template:         template,
+					EngineOverride:   firstNonEmpty(validateEngine, defaults.RunFolderEngine),
+					Checkpoint:       checkpoint,
+					CommitEach:       commitEach,
+					RequireCleanGit:  requireCleanGit,
+					RecoveryAttempts: recoveryAttempts,
+				})
+				promptValidations := validateFolderPrompts(service, preflight, validateEngine, firstNonEmpty(preflight.Repository, repoPath))
+				promptErr := folderPromptValidationsError(promptValidations)
+				plan := folderValidationPlan{Valid: err == nil && promptErr == nil, ValidationMode: "complete ordered prompt-folder preflight; no workers will launch", Preflight: preflight, PromptValidations: promptValidations, WorkerWouldStart: false}
+				if err != nil {
+					plan.Error = err.Error()
+				} else if promptErr != nil {
+					plan.Error = promptErr.Error()
+				}
+				if validateJSON {
+					if writeErr := writeJSON(stdout, plan, compactJSON); writeErr != nil {
+						return writeErr
+					}
+				} else {
+					printFolderValidationPlan(stdout, plan, shouldRenderInteractive(stdout, false, false) && !plainOutput && !ui.PlainFromEnv())
+				}
+				if err != nil {
+					return StructuredError{Err: err, Code: ExitInvalidInput}
+				}
+				if promptErr != nil {
+					return StructuredError{Err: promptErr, Code: ExitInvalidInput}
+				}
+				return nil
 			}
 			plan, err := service.Validate(args[0], validateEngine, validateRepo)
 			if validateJSON {
@@ -923,6 +999,11 @@ Examples:
 	validateCmd.Flags().BoolVar(&validateRender, "render", false, "print the exact prompt bytes the engine would receive")
 	validateCmd.Flags().StringVar(&validateEngine, "engine", "", "override the task engine for validation")
 	validateCmd.Flags().StringVar(&validateRepo, "repo", "", "repository path used to resolve roles, model policy, and the working directory")
+	validateCmd.Flags().StringVar(&validateTemplate, "template", "codex", "execution template for folder preflight")
+	validateCmd.Flags().BoolVar(&validateCheckpoint, "checkpoint", false, "validate checkpoint configuration for a folder")
+	validateCmd.Flags().BoolVar(&validateCommitEach, "commit-each", false, "require a clean baseline for focused commits in a folder")
+	validateCmd.Flags().BoolVar(&validateRequireCleanGit, "require-clean-git", false, "require a clean repository baseline for a folder")
+	validateCmd.Flags().IntVar(&validateRecoveryAttempts, "recovery-attempts", 0, "validate bounded same-slice recovery attempts for a folder (0-3)")
 	root.AddCommand(validateCmd)
 
 	var runFolderResume bool
@@ -1113,19 +1194,26 @@ Examples:
 				RecoveryAttempts: validateFolderRecoveryAttempts,
 			}
 			preflight, err := service.PreflightRunFolder(args[0], options)
-			plan := folderValidationPlan{Valid: err == nil, ValidationMode: "full run-folder preflight; no workers will launch", Preflight: preflight, WorkerWouldStart: false}
+			promptValidations := validateFolderPrompts(service, preflight, validateFolderEngine, firstNonEmpty(preflight.Repository, validateFolderRepo))
+			promptErr := folderPromptValidationsError(promptValidations)
+			plan := folderValidationPlan{Valid: err == nil && promptErr == nil, ValidationMode: "full run-folder preflight; no workers will launch", Preflight: preflight, PromptValidations: promptValidations, WorkerWouldStart: false}
 			if err != nil {
 				plan.Error = err.Error()
+			} else if promptErr != nil {
+				plan.Error = promptErr.Error()
 			}
 			if validateFolderJSON {
 				if writeErr := writeJSON(stdout, plan, compactJSON); writeErr != nil {
 					return writeErr
 				}
 			} else {
-				printFolderValidationPlan(stdout, plan)
+				printFolderValidationPlan(stdout, plan, shouldRenderInteractive(stdout, false, false) && !plainOutput && !ui.PlainFromEnv())
 			}
 			if err != nil {
 				return StructuredError{Err: err, Code: ExitInvalidInput}
+			}
+			if promptErr != nil {
+				return StructuredError{Err: promptErr, Code: ExitInvalidInput}
 			}
 			return nil
 		},
@@ -2907,7 +2995,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan) {
+func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan, color bool) {
 	result := "FAILED"
 	if plan.Valid {
 		result = "PASSED"
@@ -2925,7 +3013,7 @@ func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan) {
 		fmt.Fprintf(stdout, "Sequence ID: %s\n", plan.Preflight.SequenceID)
 	}
 	if plan.Preflight.Inspection.MarkdownTotal != 0 {
-		fmt.Fprintf(stdout, "Prompts: %d of %d Markdown files included\n", len(plan.Preflight.Inspection.Prompts), plan.Preflight.Inspection.MarkdownTotal)
+		fmt.Fprintf(stdout, "Slices: %d of %d slice files included\n", len(plan.Preflight.Inspection.Prompts), plan.Preflight.Inspection.MarkdownTotal)
 	}
 	for _, prompt := range plan.Preflight.Inspection.Prompts {
 		if prompt.Role == "" {
@@ -2939,13 +3027,99 @@ func printFolderValidationPlan(stdout io.Writer, plan folderValidationPlan) {
 			printValidationPaths(stdout, "  Role boundary", prompt.RolePolicy.AllowedPaths)
 		}
 	}
+	if len(plan.Preflight.Inspection.Prompts) > 0 {
+		fmt.Fprintln(stdout)
+		ui.Banner(stdout, ui.Options{Theme: ui.ThemeDefault, Plain: !color})
+		fmt.Fprintln(stdout, "Checklist:")
+		for _, validation := range plan.PromptValidations {
+			fmt.Fprintf(stdout, "  [%s] %s — tool: %s; model: %s\n", validationTick(validation.Valid, color), validation.Name, valueOrDash(validation.Tool), valueOrDash(validation.Model))
+			if validation.Error != "" {
+				fmt.Fprintf(stdout, "      %s\n", validation.Error)
+			}
+		}
+		if len(plan.PromptValidations) == 0 {
+			for _, prompt := range plan.Preflight.Inspection.Prompts {
+				fmt.Fprintf(stdout, "  [%s] %s\n", validationTick(plan.Valid, color), prompt.Name)
+			}
+		}
+		sequenceLabel := plan.Preflight.SequenceID
+		if sequenceLabel == "" {
+			sequenceLabel = "not resolved"
+		}
+		fmt.Fprintf(stdout, "  [%s] Ordered sequence: %s\n", validationTick(plan.Valid, color), sequenceLabel)
+		if plan.Error != "" {
+			fmt.Fprintln(stdout)
+		}
+	}
 	if plan.Error != "" {
 		fmt.Fprintf(stdout, "Error: %s\n", plan.Error)
 	}
 	fmt.Fprintf(stdout, "Worker launch: %t\n", plan.WorkerWouldStart)
 	if plan.Valid {
 		fmt.Fprintln(stdout, "Result: PASSED — no workers launched.")
+	} else {
+		fmt.Fprintln(stdout, "Result: FAILED — no workers launched.")
 	}
+}
+
+func validateFolderPrompts(service Service, preflight pgruntime.RunFolderPreflight, engineOverride, repoPath string) []folderPromptValidation {
+	validations := make([]folderPromptValidation, 0, len(preflight.Inspection.Prompts))
+	for _, prompt := range preflight.Inspection.Prompts {
+		plan, err := service.Validate(prompt.Path, engineOverride, repoPath)
+		validation := folderPromptValidation{Name: prompt.Name, Valid: err == nil && plan.Valid, Tool: plan.Engine, Model: validationPlanModel(plan)}
+		if err != nil {
+			validation.Error = err.Error()
+		}
+		validations = append(validations, validation)
+	}
+	return validations
+}
+
+func folderPromptValidationsError(validations []folderPromptValidation) error {
+	failed := make([]string, 0)
+	for _, validation := range validations {
+		if !validation.Valid {
+			failed = append(failed, validation.Name)
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	return fmt.Errorf("work-order validation failed for: %s", strings.Join(failed, ", "))
+}
+
+func validationPlanModel(plan worker.ValidationPlan) string {
+	metadata, _ := plan.ExecutionPlan["metadata"].(map[string]any)
+	selection, _ := metadata["model_selection"].(map[string]any)
+	model, _ := selection["model"].(string)
+	if model == "" && plan.Engine != "" {
+		return plan.Engine + " default"
+	}
+	return model
+}
+
+func validationTick(valid, color bool) string {
+	icon := "✗"
+	if valid {
+		icon = "✓"
+	}
+	if !color {
+		return icon
+	}
+	code := "31"
+	if valid {
+		code = "32"
+	}
+	return "\033[" + code + "m" + icon + "\033[0m"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func printDefaults(stdout io.Writer, report config.DefaultsReport) {
