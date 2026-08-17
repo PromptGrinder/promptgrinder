@@ -2421,7 +2421,7 @@ func TestCLIRunFolderPrintsAggregateSummary(t *testing.T) {
 			ExecutiveSummary: "- 10-implement-a.md succeeded.",
 			Items:            []runfolder.SequenceItem{{PromptName: "10-implement-a.md", Status: "succeeded"}},
 		},
-		Prompts: []runfolder.Prompt{{Name: "10-implement-a.md", Type: runfolder.TypeImplement}},
+		Prompts:  []runfolder.Prompt{{Name: "10-implement-a.md", Type: runfolder.TypeImplement}},
 		Adoption: &runfolder.SequenceAdoption{SequenceID: "seq_test", Explicit: true, RetainedPrompts: []string{"00-spec.md"}, RestartAt: "10-implement-a.md", PolicyHashChanges: []runfolder.PolicyHashChange{{PromptName: "00-spec.md", Retained: true}}},
 	}}
 	out := &bytes.Buffer{}
