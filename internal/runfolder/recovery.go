@@ -69,7 +69,7 @@ func validationRepairEligibility(repo, home string, prompt Prompt, failed Prompt
 }
 
 func noOtherActiveWorker(home, repo, workerID string) bool {
-	workers, err := state.NewStore(home).List()
+	workers, err := state.NewStore(resolvedRunFolderHome(home)).List()
 	if err != nil {
 		return false
 	}
@@ -367,7 +367,7 @@ func failedWorkerEvidence(home string, item SequenceItem, failed PromptState) st
 		workerID = item.WorkerID
 	}
 	if workerID != "" {
-		if worker, err := state.NewStore(home).Load(workerID); err == nil {
+		if worker, err := state.NewStore(resolvedRunFolderHome(home)).Load(workerID); err == nil {
 			return worker
 		}
 	}
@@ -375,6 +375,14 @@ func failedWorkerEvidence(home string, item SequenceItem, failed PromptState) st
 		ID: workerID, Status: state.StatusFailed, LogPath: item.LogPath,
 		EngineResult: &state.EngineResult{SessionID: failed.EngineSessionID, CompletionStatus: failed.CompletionStatus, NextPromptSafe: failed.NextPromptSafe, CompletionReason: failed.CompletionReason},
 	}
+}
+
+// State stores resolve an empty home directory to the user's PromptGrinder
+// home. Keep worker recovery on that same resolved root; otherwise foreground
+// CLI runs look for a relative ./workers directory and lose durable evidence.
+func resolvedRunFolderHome(home string) string {
+	sequenceRoot := newSequenceStore(home).Root
+	return filepath.Dir(filepath.Dir(sequenceRoot))
 }
 
 // prepareResumedRecovery performs the actual isolation after preflight has
