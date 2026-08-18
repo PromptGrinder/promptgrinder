@@ -1363,8 +1363,14 @@ func engineResultEventData(result state.EngineResult) map[string]any {
 	if result.TokensInput != nil {
 		fields = append(fields, "tokens_input")
 	}
+	if result.TokensCachedInput != nil {
+		fields = append(fields, "tokens_cached_input")
+	}
 	if result.TokensOutput != nil {
 		fields = append(fields, "tokens_output")
+	}
+	if result.TokensReasoningOutput != nil {
+		fields = append(fields, "tokens_reasoning_output")
 	}
 	if result.TokensTotal != nil {
 		fields = append(fields, "tokens_total")

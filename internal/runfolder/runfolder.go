@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -265,11 +264,23 @@ type SequenceItem struct {
 	NextPromptSafe   *bool       `json:"next_prompt_safe,omitempty"`
 	CompletionReason string      `json:"completion_reason,omitempty"`
 	RecoveryAttempts int         `json:"recovery_attempts,omitempty"`
+	TokenUsage       *TokenUsage `json:"token_usage,omitempty"`
 }
 
 type TokenUsage struct {
-	Available bool `json:"available"`
-	Total     int  `json:"total"`
+	Available       bool  `json:"available"`
+	Input           int64 `json:"input"`
+	CachedInput     int64 `json:"cached_input"`
+	Output          int64 `json:"output"`
+	ReasoningOutput int64 `json:"reasoning_output"`
+	Total           int64 `json:"total"`
+}
+
+func (u TokenUsage) String() string {
+	if !u.Available {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%d (input: %d; cached input: %d; output: %d; reasoning output: %d)", u.Total, u.Input, u.CachedInput, u.Output, u.ReasoningOutput)
 }
 
 type PromptState struct {
@@ -1347,6 +1358,7 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 			item.CompletionStatus = worker.EngineResult.CompletionStatus
 			item.NextPromptSafe = worker.EngineResult.NextPromptSafe
 			item.CompletionReason = worker.EngineResult.CompletionReason
+			item.TokenUsage = addTokenUsage(item.TokenUsage, tokenUsageFromEngineResult(worker.EngineResult))
 		}
 		if errorMessage != "" && item.CompletionReason == "" {
 			item.CompletionReason = errorMessage
@@ -1493,10 +1505,19 @@ func (s SequenceState) SummaryMarkdown() string {
 	fmt.Fprintf(&b, "- Sequence: `%s`\n", s.SequenceID)
 	fmt.Fprintf(&b, "- Status: `%s`\n", s.Status)
 	fmt.Fprintf(&b, "- Prompts: %d total, %d succeeded, %d failed, %d pending\n", progress.Total, progress.Succeeded, progress.Failed, progress.Pending)
-	if s.TokenUsage.Available {
-		fmt.Fprintf(&b, "- Total tokens used: %d\n", s.TokenUsage.Total)
-	} else {
-		fmt.Fprintf(&b, "- Total tokens used: not reported by worker logs\n")
+	fmt.Fprintf(&b, "- Reported token usage: %s\n", s.TokenUsage)
+	if len(s.Items) > 0 {
+		fmt.Fprintln(&b, "\n## Token Usage by Slice")
+		for _, item := range s.Items {
+			if item.Status == "skipped" {
+				continue
+			}
+			if item.TokenUsage == nil {
+				fmt.Fprintf(&b, "- `%s`: unavailable\n", item.PromptName)
+				continue
+			}
+			fmt.Fprintf(&b, "- `%s`: %s\n", item.PromptName, *item.TokenUsage)
+		}
 	}
 	if len(s.Adoptions) > 0 {
 		fmt.Fprintf(&b, "\n## Sequence Adoption\n")
@@ -1526,47 +1547,57 @@ func shortHash(value string) string {
 }
 
 func totalTokenUsage(items []SequenceItem) TokenUsage {
-	total := 0
-	available := false
+	total := TokenUsage{}
 	for _, item := range items {
-		if item.LogPath == "" {
+		if item.TokenUsage == nil {
 			continue
 		}
-		data, err := os.ReadFile(item.LogPath)
-		if err != nil {
-			continue
-		}
-		usage := parseTokenUsage(string(data))
-		if usage.Available {
-			available = true
-			total += usage.Total
-		}
+		total.Available = true
+		total.Input += item.TokenUsage.Input
+		total.CachedInput += item.TokenUsage.CachedInput
+		total.Output += item.TokenUsage.Output
+		total.ReasoningOutput += item.TokenUsage.ReasoningOutput
+		total.Total += item.TokenUsage.Total
 	}
-	return TokenUsage{Available: available, Total: total}
+	return total
 }
 
-func parseTokenUsage(text string) TokenUsage {
-	total := 0
-	available := false
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\btotal[_ ]tokens\b[^0-9]*([0-9][0-9,]*)`),
-		regexp.MustCompile(`(?i)\btokens[_ ]used\b[^0-9]*([0-9][0-9,]*)`),
-		regexp.MustCompile(`(?i)\bused\b[^0-9]*([0-9][0-9,]*)[^0-9]*\btokens\b`),
+func tokenUsageFromEngineResult(result *state.EngineResult) *TokenUsage {
+	if result == nil || result.TokensTotal == nil {
+		return nil
 	}
-	for _, pattern := range patterns {
-		for _, match := range pattern.FindAllStringSubmatch(text, -1) {
-			if len(match) < 2 {
-				continue
-			}
-			value, err := strconv.Atoi(strings.ReplaceAll(match[1], ",", ""))
-			if err != nil {
-				continue
-			}
-			total += value
-			available = true
-		}
+	usage := TokenUsage{Available: true, Total: *result.TokensTotal}
+	if result.TokensInput != nil {
+		usage.Input = *result.TokensInput
 	}
-	return TokenUsage{Available: available, Total: total}
+	if result.TokensCachedInput != nil {
+		usage.CachedInput = *result.TokensCachedInput
+	}
+	if result.TokensOutput != nil {
+		usage.Output = *result.TokensOutput
+	}
+	if result.TokensReasoningOutput != nil {
+		usage.ReasoningOutput = *result.TokensReasoningOutput
+	}
+	return &usage
+}
+
+func addTokenUsage(existing, reported *TokenUsage) *TokenUsage {
+	if reported == nil {
+		return existing
+	}
+	if existing == nil {
+		copy := *reported
+		return &copy
+	}
+	return &TokenUsage{
+		Available:       true,
+		Input:           existing.Input + reported.Input,
+		CachedInput:     existing.CachedInput + reported.CachedInput,
+		Output:          existing.Output + reported.Output,
+		ReasoningOutput: existing.ReasoningOutput + reported.ReasoningOutput,
+		Total:           existing.Total + reported.Total,
+	}
 }
 
 func buildExecutiveSummary(items []SequenceItem) string {

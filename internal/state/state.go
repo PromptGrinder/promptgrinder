@@ -59,18 +59,20 @@ type Worker struct {
 }
 
 type EngineResult struct {
-	Summary          string         `json:"summary,omitempty"`
-	SessionID        string         `json:"session_id,omitempty"`
-	CompletionStatus string         `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool          `json:"next_prompt_safe,omitempty"`
-	CompletionReason string         `json:"completion_reason,omitempty"`
-	EngineExitCode   *int           `json:"engine_exit_code,omitempty"`
-	TokensInput      *int64         `json:"tokens_input,omitempty"`
-	TokensOutput     *int64         `json:"tokens_output,omitempty"`
-	TokensTotal      *int64         `json:"tokens_total,omitempty"`
-	Cost             *float64       `json:"cost,omitempty"`
-	CostCurrency     string         `json:"cost_currency,omitempty"`
-	Diagnostics      map[string]any `json:"diagnostics,omitempty"`
+	Summary               string         `json:"summary,omitempty"`
+	SessionID             string         `json:"session_id,omitempty"`
+	CompletionStatus      string         `json:"completion_status,omitempty"`
+	NextPromptSafe        *bool          `json:"next_prompt_safe,omitempty"`
+	CompletionReason      string         `json:"completion_reason,omitempty"`
+	EngineExitCode        *int           `json:"engine_exit_code,omitempty"`
+	TokensInput           *int64         `json:"tokens_input,omitempty"`
+	TokensCachedInput     *int64         `json:"tokens_cached_input,omitempty"`
+	TokensOutput          *int64         `json:"tokens_output,omitempty"`
+	TokensReasoningOutput *int64         `json:"tokens_reasoning_output,omitempty"`
+	TokensTotal           *int64         `json:"tokens_total,omitempty"`
+	Cost                  *float64       `json:"cost,omitempty"`
+	CostCurrency          string         `json:"cost_currency,omitempty"`
+	Diagnostics           map[string]any `json:"diagnostics,omitempty"`
 }
 
 func (r EngineResult) Empty() bool {
@@ -81,7 +83,9 @@ func (r EngineResult) Empty() bool {
 		r.CompletionReason == "" &&
 		r.EngineExitCode == nil &&
 		r.TokensInput == nil &&
+		r.TokensCachedInput == nil &&
 		r.TokensOutput == nil &&
+		r.TokensReasoningOutput == nil &&
 		r.TokensTotal == nil &&
 		r.Cost == nil &&
 		r.CostCurrency == "" &&

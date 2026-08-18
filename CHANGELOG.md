@@ -4,6 +4,19 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.4.1 candidate
+
+- Added structured, reported Codex token usage to run-folder summaries and
+  status output. Per-slice input, cached-input, output, reasoning-output, and
+  total values are retained when the runtime reports them; unavailable values
+  remain explicitly unavailable rather than being inferred from worker logs.
+- Recovery attempts now accumulate reported usage once per attempt, so the
+  sequence total represents the observed cost of the complete run rather than
+  only the final retry.
+
+RC.4.1 is a compatible observability candidate. It is not tagged or published
+by merging this branch.
+
 ### v1.0.0-rc.2.4 candidate
 
 - Added repository-owned model policy with explicit low, medium, and high cost

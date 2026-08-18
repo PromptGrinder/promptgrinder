@@ -442,6 +442,14 @@ func TestParseResultDoesNotInventUsageOrCost(t *testing.T) {
 	}
 }
 
+func TestParseResultCapturesStructuredTurnUsage(t *testing.T) {
+	log := []byte(`{"type":"turn.completed","usage":{"input_tokens":16818,"cached_input_tokens":11008,"output_tokens":91,"reasoning_output_tokens":39}}` + "\n")
+	result := Engine{}.ParseResult(execution.Context{}, log)
+	if result.TokensInput == nil || *result.TokensInput != 16818 || result.TokensCachedInput == nil || *result.TokensCachedInput != 11008 || result.TokensOutput == nil || *result.TokensOutput != 91 || result.TokensReasoningOutput == nil || *result.TokensReasoningOutput != 39 || result.TokensTotal == nil || *result.TokensTotal != 16909 {
+		t.Fatalf("usage = %#v", result)
+	}
+}
+
 func TestParseResultCapturesRuntimeReportedModel(t *testing.T) {
 	log := []byte("OpenAI Codex v1\n--------\nmodel: gpt-5.6-sol\nprovider: openai\n--------\n")
 	result := Engine{}.ParseResult(execution.Context{}, log)

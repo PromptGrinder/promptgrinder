@@ -3617,11 +3617,7 @@ func printRunFolderSummary(stdout io.Writer, folder string, summary pgruntime.Ru
 		if summary.Sequence != nil {
 			fmt.Fprintln(stdout)
 			fmt.Fprintln(stdout, "Summary:")
-			if summary.Sequence.TokenUsage.Available {
-				fmt.Fprintf(stdout, "Total tokens used: %d\n", summary.Sequence.TokenUsage.Total)
-			} else {
-				fmt.Fprintln(stdout, "Total tokens used: not reported by worker logs")
-			}
+			printRunFolderTokenUsage(stdout, summary.Sequence)
 			fmt.Fprintln(stdout, "Executive summary:")
 			fmt.Fprintln(stdout, valueOrDash(summary.Sequence.ExecutiveSummary))
 		}
@@ -3643,13 +3639,23 @@ func printRunFolderAggregate(stdout io.Writer, summary pgruntime.RunFolderSummar
 		return
 	}
 	fmt.Fprintln(stdout, "Summary:")
-	if summary.Sequence.TokenUsage.Available {
-		fmt.Fprintf(stdout, "Total tokens used: %d\n", summary.Sequence.TokenUsage.Total)
-	} else {
-		fmt.Fprintln(stdout, "Total tokens used: not reported by worker logs")
-	}
+	printRunFolderTokenUsage(stdout, summary.Sequence)
 	fmt.Fprintln(stdout, "Executive summary:")
 	fmt.Fprintln(stdout, valueOrDash(summary.Sequence.ExecutiveSummary))
+}
+
+func printRunFolderTokenUsage(stdout io.Writer, sequence *runfolder.SequenceState) {
+	fmt.Fprintf(stdout, "Reported token usage: %s\n", sequence.TokenUsage)
+	for _, item := range sequence.Items {
+		if item.Status == "skipped" {
+			continue
+		}
+		if item.TokenUsage == nil {
+			fmt.Fprintf(stdout, "- %s: unavailable\n", item.PromptName)
+			continue
+		}
+		fmt.Fprintf(stdout, "- %s: %s\n", item.PromptName, *item.TokenUsage)
+	}
 }
 
 func printTerminalCandidates(stdout io.Writer, candidates []pgruntime.TerminalCandidate) error {

@@ -171,6 +171,13 @@ responsibility, runtime, and path restrictions for named workers. These
 controls reduce risk, but they do not replace reviewing the generated changes
 and test evidence.
 
+When a runtime reports structured token usage, PromptGrinder persists the
+input, cached-input, output, and reasoning-output counts for each worker and
+shows per-slice and sequence totals. Counts are reported usage, not estimated
+currency cost: subscriptions, cached-input pricing, and organization pricing
+policies vary. Runtimes that do not report usage remain explicitly
+`unavailable`; PromptGrinder never estimates or scrapes token counts from prose.
+
 When a slice declares `role`, PromptGrinder loads that role's description and
 path boundary into the worker prompt. Role paths are an outer boundary: a slice
 can narrow them with its own path policy but cannot escape them. Role quality
@@ -810,7 +817,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.4.0` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.4.1` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -858,6 +865,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
+- [RC.4.1 qualification](docs/release/v1.0.0-rc.4.1-qualification.md)
+- [RC.4.1 final gate](docs/release/v1.0.0-rc.4.1-final-gate.md)
+- [RC.4.1 candidate notes](docs/release/v1.0.0-rc.4.1-release-notes.md)
 - [RC.4.0 qualification](docs/release/v1.0.0-rc.4.0-qualification.md)
 - [RC.4.0 final gate](docs/release/v1.0.0-rc.4.0-final-gate.md)
 - [RC.4.0 candidate notes](docs/release/v1.0.0-rc.4.0-release-notes.md)

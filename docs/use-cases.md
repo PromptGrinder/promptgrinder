@@ -241,6 +241,15 @@ checkpoint/commit evidence prove the same content and dependency identity. If
 that proof is unavailable, PromptGrinder fails with a migration message and
 leaves the original state untouched.
 
+### UC-19a: Inspect reported run-folder token usage
+
+When a runtime reports structured token usage, `run-folder` stores and displays
+the input, cached input, output, reasoning output, and total for each executed
+slice, plus the sequence aggregate. These are observed runtime counts, not
+currency estimates. A missing runtime usage event is displayed as `unavailable`;
+PromptGrinder does not infer token counts from worker prose or logs. Usage from
+each recorded recovery attempt is included in that slice's total.
+
 ### UC-20: Keep reviewable Git checkpoints
 
 Use `--checkpoint` and `--commit-each` to retain prompt-level Git evidence.

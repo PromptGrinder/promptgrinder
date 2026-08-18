@@ -1594,19 +1594,19 @@ func TestDetachedNotificationsReportSuccessAndFailure(t *testing.T) {
 func TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
-	logDir := t.TempDir()
 	writePromptFile(t, dir, "00-specification.md", "spec context")
 	writePromptFile(t, dir, "10-implement-a.md", "a")
 	writePromptFile(t, dir, "20-implement-b.md", "b")
+	input, cached, output, reasoning, total := int64(1_000), int64(800), int64(234), int64(111), int64(1_234)
 
-	summary, err := Run(dir, Options{HomeDir: home}, &fakeLauncher{logDir: logDir, logText: "total tokens: 1,234\n"})
+	summary, err := Run(dir, Options{HomeDir: home}, &fakeLauncher{result: &state.EngineResult{Summary: "done\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: boolPtr(true), TokensInput: &input, TokensCachedInput: &cached, TokensOutput: &output, TokensReasoningOutput: &reasoning, TokensTotal: &total}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if summary.Sequence == nil {
 		t.Fatal("missing sequence")
 	}
-	if !summary.Sequence.TokenUsage.Available || summary.Sequence.TokenUsage.Total != 2468 {
+	if !summary.Sequence.TokenUsage.Available || summary.Sequence.TokenUsage.Total != 2468 || summary.Sequence.TokenUsage.Input != 2000 || summary.Sequence.TokenUsage.CachedInput != 1600 || summary.Sequence.TokenUsage.Output != 468 || summary.Sequence.TokenUsage.ReasoningOutput != 222 {
 		t.Fatalf("token usage = %#v", summary.Sequence.TokenUsage)
 	}
 	if !strings.Contains(summary.Sequence.ExecutiveSummary, "10-implement-a.md succeeded") || !strings.Contains(summary.Sequence.ExecutiveSummary, "00-specification.md was used as shared context") {
@@ -1616,21 +1616,35 @@ func TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "Total tokens used: 2468") || !strings.Contains(string(data), "Executive Summary") {
+	if !strings.Contains(string(data), "Reported token usage: 2468 (input: 2000; cached input: 1600; output: 468; reasoning output: 222)") || !strings.Contains(string(data), "`10-implement-a.md`: 1234 (input: 1000; cached input: 800; output: 234; reasoning output: 111)") || !strings.Contains(string(data), "Executive Summary") {
 		t.Fatalf("summary.md = %q", string(data))
 	}
 	globalData, err := os.ReadFile(filepath.Join(home, "summaries", summary.Sequence.SequenceID+".md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(globalData), "Total tokens used: 2468") {
+	if !strings.Contains(string(globalData), "Reported token usage: 2468") {
 		t.Fatalf("global summary = %q", string(globalData))
 	}
 }
 
-func TestParseTokenUsage(t *testing.T) {
-	usage := parseTokenUsage("total_tokens: 100\nTokens used: 25\nused 5 tokens\n")
-	if !usage.Available || usage.Total != 130 {
+func TestSequenceSummaryMarksMissingStructuredUsageUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	summary, err := Run(dir, Options{HomeDir: t.TempDir()}, &fakeLauncher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Sequence.TokenUsage.Available || !strings.Contains(summary.Sequence.SummaryMarkdown(), "Reported token usage: unavailable") || !strings.Contains(summary.Sequence.SummaryMarkdown(), "`10-implement-a.md`: unavailable") {
+		t.Fatalf("summary = %s", summary.Sequence.SummaryMarkdown())
+	}
+}
+
+func TestTokenUsageAccumulatesReportedRecoveryAttempts(t *testing.T) {
+	first := &TokenUsage{Available: true, Input: 100, CachedInput: 80, Output: 20, ReasoningOutput: 10, Total: 120}
+	second := &TokenUsage{Available: true, Input: 200, CachedInput: 170, Output: 30, ReasoningOutput: 15, Total: 230}
+	usage := addTokenUsage(first, second)
+	if usage.Input != 300 || usage.CachedInput != 250 || usage.Output != 50 || usage.ReasoningOutput != 25 || usage.Total != 350 {
 		t.Fatalf("usage = %#v", usage)
 	}
 }
