@@ -573,3 +573,21 @@ auto-commits partial output. A test assertion, compiler error, malformed
 completion report, explicit cancellation, timeout, changed Git history, or
 ambiguous path is not a recoverable client disconnect and stops with retained
 evidence instead.
+
+## UC-19c — repair one declared validation failure in the same worker session
+
+When an implementation worker returns `STATUS: PARTIAL` and
+`NEXT_PROMPT_SAFE: no`, PromptGrinder may use one configured recovery attempt
+to continue the same runtime session only when the worker log proves that a
+command declared in the slice's `validation` list failed and the pre-slice
+baseline proves the current diff is exclusively within the slice's allowed,
+non-forbidden paths. The repair context names that command and requires the
+worker to inspect the retained delta, fix it within scope, rerun validation,
+and return `PASS`/`yes` before normal checkpointing can occur.
+
+This is distinct from client-disconnect recovery: validation repair keeps the
+scoped delta in place, while a runtime interruption uses a preservation
+artifact and a clean retry baseline. Cancellation, timeout, `BLOCKED`, missing
+or malformed completion evidence, an unrelated/forbidden path, no reusable
+runtime session, another active worker, or a repeated partial result stops
+without source cleanup or automatic commit.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"promptgrinder/internal/markdown"
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/workerpathpolicy"
 )
@@ -26,6 +27,86 @@ func runtimeClientDisconnected(logPath string) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(string(data)), "client disconnection detected")
+}
+
+type validationRepairEvidence struct {
+	Command string
+	Reason  string
+}
+
+// validationRepairEligibility recognizes only a worker-declared PARTIAL/no
+// result whose durable worker log records a failed command declared by the
+// slice. It deliberately does not inspect arbitrary prose for test-like words.
+func validationRepairEligibility(repo, home string, prompt Prompt, failed PromptState) (validationRepairEvidence, bool) {
+	if failed.CompletionStatus != "PARTIAL" || failed.NextPromptSafe == nil || *failed.NextPromptSafe || failed.Worker.EngineResult == nil || failed.Worker.EngineResult.SessionID == "" {
+		return validationRepairEvidence{}, false
+	}
+	changes, err := recoveryIsolationEligibility(repo, prompt, failed)
+	if err != nil || len(changes) == 0 || runtimeClientDisconnected(failed.Worker.LogPath) {
+		return validationRepairEvidence{}, false
+	}
+	if !noOtherActiveWorker(home, repo, failed.WorkerID) {
+		return validationRepairEvidence{}, false
+	}
+	commands, err := declaredValidationCommands(prompt.Path)
+	if err != nil || len(commands) == 0 {
+		return validationRepairEvidence{}, false
+	}
+	log, err := os.ReadFile(failed.Worker.LogPath)
+	if err != nil {
+		return validationRepairEvidence{}, false
+	}
+	for _, command := range commands {
+		if declaredCommandFailed(string(log), command) {
+			return validationRepairEvidence{Command: command, Reason: "declared validation command failed with retained slice-only changes"}, true
+		}
+	}
+	return validationRepairEvidence{}, false
+}
+
+func noOtherActiveWorker(home, repo, workerID string) bool {
+	workers, err := state.NewStore(home).List()
+	if err != nil {
+		return false
+	}
+	for _, worker := range workers {
+		if worker.ID != workerID && worker.RepositoryPath == repo && !state.IsTerminalStatus(worker.Status) {
+			return false
+		}
+	}
+	return true
+}
+
+func declaredValidationCommands(taskPath string) ([]string, error) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return nil, err
+	}
+	task, err := markdown.Parse(string(data))
+	if err != nil {
+		return nil, err
+	}
+	return metadataStrings(task.Metadata, "validation"), nil
+}
+
+func declaredCommandFailed(log, command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+	index := strings.Index(log, command)
+	if index < 0 {
+		return false
+	}
+	// The command must appear before a concrete terminal command/build failure
+	// in the same durable worker record. This is intentionally narrow enough to
+	// avoid treating a worker's explanatory prose as validation evidence.
+	after := strings.ToLower(log[index:])
+	return strings.Contains(after, "build failed") ||
+		strings.Contains(after, "execution failed") ||
+		strings.Contains(after, "exit_code\":1") ||
+		strings.Contains(after, "exit status 1") ||
+		strings.Contains(after, "tests failed")
 }
 
 type recoveryManifest struct {

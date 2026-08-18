@@ -3267,6 +3267,9 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 		if item.RecoveryAttempts > 0 {
 			fmt.Fprintf(stdout, "     Recovery attempts: %d\n", item.RecoveryAttempts)
 		}
+		if item.RecoveryMode != "" {
+			fmt.Fprintf(stdout, "     Recovery mode: %s\n", item.RecoveryMode)
+		}
 	}
 }
 

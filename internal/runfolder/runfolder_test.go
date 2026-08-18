@@ -175,6 +175,49 @@ func TestRunFolderRecoversOnlyTheFailedSlice(t *testing.T) {
 	}
 }
 
+func TestRunFolderRepairsDeclaredValidationInSameSession(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\nvalidation: [./verify-home]\n---\na")
+	writePromptFile(t, dir, "20-test-b.md", "b")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	partial := &state.EngineResult{Summary: "validation failed\nSTATUS: PARTIAL\nNEXT_PROMPT_SAFE: no", SessionID: "thread_repair", CompletionStatus: "PARTIAL", NextPromptSafe: boolPtr(false)}
+	launcher := &fakeLauncher{resultOnce: partial, logDir: t.TempDir(), logText: "./verify-home\nBUILD FAILED"}
+	launches := 0
+	launcher.onLaunch = func(path string) {
+		if filepath.Base(path) != "10-implement-a.md" || launches > 0 {
+			launches++
+			return
+		}
+		launches++
+		if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writePromptFile(t, filepath.Join(dir, "src"), "repaired.txt", "repaired")
+	}
+
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, CommitEach: true, RequireCleanGit: true, RecoveryAttempts: 1}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 3 || launcher.calls[1].SessionID != "thread_repair" {
+		t.Fatalf("calls=%#v", launcher.calls)
+	}
+	if !strings.Contains(launcher.calls[1].Content, "# Validation Repair Attempt") || !strings.Contains(launcher.calls[1].Content, "./verify-home") {
+		t.Fatalf("repair prompt = %q", launcher.calls[1].Content)
+	}
+	item := summary.Sequence.Items[0]
+	if item.RecoveryAttempts != 1 || item.RecoveryMode != "validation-repair" || item.Status != "succeeded" {
+		t.Fatalf("item=%#v", item)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "repaired.txt")); err != nil {
+		t.Fatalf("repaired file missing after checkpoint: %v", err)
+	}
+	if commits := strings.TrimSpace(string(gitOutput(t, dir, "rev-list", "--count", "HEAD"))); commits != "2" {
+		t.Fatalf("repair was not checkpointed exactly once: commits=%s", commits)
+	}
+}
+
 func TestRunFolderRetriesClientDisconnectAfterIsolatingScopedChanges(t *testing.T) {
 	dir, home := initGitRepo(t), t.TempDir()
 	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")

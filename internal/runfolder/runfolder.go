@@ -148,6 +148,7 @@ type ProgressEvent struct {
 	NextPromptSafe   *bool             `json:"next_prompt_safe,omitempty"`
 	Reason           string            `json:"reason,omitempty"`
 	RecoveryAttempt  int               `json:"recovery_attempt,omitempty"`
+	RecoveryMode     string            `json:"recovery_mode,omitempty"`
 	RecoveryArtifact string            `json:"recovery_artifact,omitempty"`
 	Inventory        []ProgressPrompt  `json:"inventory,omitempty"`
 	MarkdownTotal    int               `json:"markdown_total,omitempty"`
@@ -268,6 +269,7 @@ type SequenceItem struct {
 	NextPromptSafe   *bool       `json:"next_prompt_safe,omitempty"`
 	CompletionReason string      `json:"completion_reason,omitempty"`
 	RecoveryAttempts int         `json:"recovery_attempts,omitempty"`
+	RecoveryMode     string      `json:"recovery_mode,omitempty"`
 	RecoveryArtifact string      `json:"recovery_artifact,omitempty"`
 	TokenUsage       *TokenUsage `json:"token_usage,omitempty"`
 }
@@ -305,6 +307,7 @@ type PromptState struct {
 	NextPromptSafe   *bool                      `json:"next_prompt_safe,omitempty"`
 	CompletionReason string                     `json:"completion_reason,omitempty"`
 	RecoveryAttempts int                        `json:"recovery_attempts,omitempty"`
+	RecoveryMode     string                     `json:"recovery_mode,omitempty"`
 	RecoveryArtifact string                     `json:"recovery_artifact,omitempty"`
 	GitBaseline      *workerpathpolicy.Snapshot `json:"git_baseline,omitempty"`
 	Worker           state.Worker               `json:"-"`
@@ -688,12 +691,52 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		}
 		recoveryAttempt := 0
 		recoveryContext := ""
+		recoveryMode := ""
+		validationRepairUsed := false
+		var repairBaseline *workerpathpolicy.Snapshot
+		repairSessionID := ""
 		var promptState PromptState
 		var err error
 		for {
-			promptState, err = runPrompt(repoRoot, prompt, specContext, sessionForPrompt(prompt, sequence.SessionID), recoveryContext, options, launcher)
+			sessionID := sessionForPrompt(prompt, sequence.SessionID)
+			if repairBaseline != nil {
+				sessionID = repairSessionID
+			}
+			promptState, err = runPrompt(repoRoot, prompt, specContext, sessionID, recoveryContext, options, launcher, repairBaseline)
 			promptState.RecoveryAttempts = recoveryAttempt
-			if err == nil || recoveryAttempt >= options.RecoveryAttempts || !recoverableFailure(promptState, err) {
+			promptState.RecoveryMode = recoveryMode
+			if err == nil {
+				break
+			}
+			if validationRepairUsed || recoveryAttempt >= options.RecoveryAttempts {
+				break
+			}
+			if evidence, eligible := validationRepairEligibility(repoRoot, options.HomeDir, prompt, promptState); eligible {
+				recoveryAttempt++
+				validationRepairUsed = true
+				recoveryMode = "validation-repair"
+				promptState.RecoveryAttempts = recoveryAttempt
+				promptState.RecoveryMode = recoveryMode
+				baseline := *promptState.GitBaseline
+				repairBaseline = &baseline
+				repairSessionID = promptState.Worker.EngineResult.SessionID
+				promptState.Status = "repairing"
+				promptState.Error = evidence.Reason
+				if err := store.savePrompt(promptState); err != nil {
+					return summary, err
+				}
+				sequence.mark(prompt.Name, "running", promptState.Worker, nil, validationRepairMessage(recoveryAttempt, options.RecoveryAttempts, evidence))
+				sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+				sequence.setRecoveryMode(prompt.Name, recoveryMode)
+				sequence.refreshSummary()
+				_ = sequenceStore.save(sequence)
+				_ = store.saveSummary(sequence)
+				identity := workeridentity.FromWorker(promptState.Worker)
+				emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "repairing", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: validationRepairMessage(recoveryAttempt, options.RecoveryAttempts, evidence), RecoveryAttempt: recoveryAttempt, RecoveryMode: recoveryMode, Completed: len(runState.Completed), Total: len(prompts)})
+				recoveryContext = validationRepairPromptContext(recoveryAttempt, options.RecoveryAttempts, evidence)
+				continue
+			}
+			if !recoverableFailure(promptState, err) {
 				break
 			}
 			if artifact, isolateErr := isolateRecoveryChanges(repoRoot, options.HomeDir, sequence.SequenceID, prompt, promptState); isolateErr != nil {
@@ -704,8 +747,10 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 				promptState.RecoveryArtifact = artifact
 			}
 			recoveryAttempt++
+			recoveryMode = "runtime-recovery"
 			promptState.Status = "recovering"
 			promptState.Error = err.Error()
+			promptState.RecoveryMode = recoveryMode
 			if promptState.Worker.ID == "" {
 				promptState.Worker = state.Worker{ID: promptState.WorkerID, ExitCode: promptState.ExitCode}
 			}
@@ -714,12 +759,13 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			}
 			sequence.mark(prompt.Name, "running", promptState.Worker, nil, recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err))
 			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.setRecoveryMode(prompt.Name, recoveryMode)
 			sequence.setRecoveryArtifact(prompt.Name, promptState.RecoveryArtifact)
 			sequence.refreshSummary()
 			_ = sequenceStore.save(sequence)
 			_ = store.saveSummary(sequence)
 			identity := workeridentity.FromWorker(promptState.Worker)
-			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, RecoveryArtifact: promptState.RecoveryArtifact, Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, RecoveryMode: recoveryMode, RecoveryArtifact: promptState.RecoveryArtifact, Completed: len(runState.Completed), Total: len(prompts)})
 			recoveryContext = recoveryPromptContext(recoveryAttempt, options.RecoveryAttempts, err, promptState)
 		}
 		if err != nil {
@@ -730,6 +776,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			}
 			sequence.mark(prompt.Name, "failed", promptState.Worker, promptState.FinishedAt, err.Error())
 			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.setRecoveryMode(prompt.Name, recoveryMode)
 			sequence.setRecoveryArtifact(prompt.Name, promptState.RecoveryArtifact)
 			finished := time.Now().UTC()
 			sequence.FinishedAt = &finished
@@ -936,7 +983,7 @@ func startSupervisorHeartbeat(options Options, sequence *SequenceState) func(str
 	}
 }
 
-func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryContext string, options Options, launcher Launcher) (PromptState, error) {
+func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryContext string, options Options, launcher Launcher, repairBaseline *workerpathpolicy.Snapshot) (PromptState, error) {
 	started := time.Now().UTC()
 	promptState := PromptState{Prompt: prompt.Name, PromptType: prompt.Type, Status: "running", StartedAt: &started}
 	policy, err := taskPathPolicy(prompt.Path)
@@ -946,17 +993,21 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || options.RecoveryAttempts > 0 || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0 || roleHasPathPolicy(prompt.RolePolicy)
 	var baseline workerpathpolicy.Snapshot
 	if needsGitTracking {
-		baseline, err = workerpathpolicy.Capture(repoRoot)
-		if err != nil {
-			return promptState, fmt.Errorf("capture worker Git baseline: %w", err)
+		if repairBaseline != nil {
+			baseline = *repairBaseline
+		} else {
+			baseline, err = workerpathpolicy.Capture(repoRoot)
+			if err != nil {
+				return promptState, fmt.Errorf("capture worker Git baseline: %w", err)
+			}
+			baseline.Entries = withoutPromptGrinderPaths(baseline.Entries)
 		}
-		baseline.Entries = withoutPromptGrinderPaths(baseline.Entries)
 		promptState.GitBaseline = &baseline
 	}
 	// Focused automatic commits are only attributable from a clean baseline.
 	// --require-clean-git=false remains useful for non-committing runs, but is
 	// deliberately not an unsafe acknowledgement for automatic commits.
-	if (options.RequireCleanGit || options.CommitEach) && len(baseline.Entries) != 0 {
+	if repairBaseline == nil && (options.RequireCleanGit || options.CommitEach) && len(baseline.Entries) != 0 {
 		return promptState, fmt.Errorf("working tree is dirty; automatic commits require a clean baseline (use --commit-each=false to retain unrelated changes)")
 	}
 	if options.Checkpoint || options.CommitEach {
@@ -1427,6 +1478,18 @@ func (s *SequenceState) setRecoveryAttempts(promptName string, attempts int) {
 	}
 }
 
+func (s *SequenceState) setRecoveryMode(promptName, mode string) {
+	if mode == "" {
+		return
+	}
+	for i := range s.Items {
+		if s.Items[i].PromptName == promptName {
+			s.Items[i].RecoveryMode = mode
+			return
+		}
+	}
+}
+
 func (s *SequenceState) setRecoveryArtifact(promptName, artifact string) {
 	if artifact == "" {
 		return
@@ -1473,6 +1536,10 @@ func recoveryMessage(attempt, maximum int, err error) string {
 	return fmt.Sprintf("automatic recovery attempt %d of %d after: %s", attempt, maximum, err)
 }
 
+func validationRepairMessage(attempt, maximum int, evidence validationRepairEvidence) string {
+	return fmt.Sprintf("validation-repair attempt %d of %d: %s (%s)", attempt, maximum, evidence.Reason, evidence.Command)
+}
+
 func recoveryPromptContext(attempt, maximum int, err error, previous PromptState) string {
 	var b strings.Builder
 	b.WriteString("\n# Recovery Attempt\n\n")
@@ -1483,6 +1550,18 @@ func recoveryPromptContext(attempt, maximum int, err error, previous PromptState
 		fmt.Fprintf(&b, "Previous completion reason: %s\n", previous.CompletionReason)
 	}
 	return b.String()
+}
+
+func validationRepairPromptContext(attempt, maximum int, evidence validationRepairEvidence) string {
+	return fmt.Sprintf(`
+# Validation Repair Attempt
+
+PromptGrinder is continuing this same slice and runtime session for one bounded validation repair attempt (%d of %d). Your earlier declared validation command failed:
+
+    %s
+
+The current worktree contains only this slice's approved, uncommitted changes. Inspect and repair those changes only within the declared scope. Re-run the failed validation and every required check. Do not commit, stash, reset, discard, or broaden scope. Return STATUS: PASS and NEXT_PROMPT_SAFE: yes only after completed validation evidence.
+`, attempt, maximum, evidence.Command)
 }
 
 func sequenceStatus(items []SequenceItem) string {

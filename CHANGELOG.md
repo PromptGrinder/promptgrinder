@@ -16,6 +16,11 @@ All notable changes are recorded here. This project uses semantic versioning.
 - Recovery remains fail-closed for ordinary validation failures, completion
   contract failures, cancellation, timeouts, path-policy violations, changed
   Git history, and ambiguous changes.
+- Added one bounded same-session validation-repair pass for a worker-declared
+  `PARTIAL`/`no` result only when its durable log proves a declared validation
+  command failed and the retained diff is exclusively within that slice's path
+  policy. The repair keeps the scoped diff for the worker to correct; it never
+  checkpoints or advances until a later `PASS`/`yes` result succeeds.
 
 RC.4.2 is a compatible recovery-safety candidate. It is not tagged or
 published by merging this branch.
