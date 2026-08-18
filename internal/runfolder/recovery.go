@@ -90,23 +90,62 @@ func declaredValidationCommands(taskPath string) ([]string, error) {
 }
 
 func declaredCommandFailed(log, command string) bool {
-	command = strings.TrimSpace(command)
-	if command == "" {
+	commandTokens := validationCommandTokens(command)
+	if len(commandTokens) == 0 {
 		return false
 	}
-	index := strings.Index(log, command)
-	if index < 0 {
+	// Codex records shell commands inside a JSON event and commonly normalizes
+	// `cd module && command` to the command run in that module. Match the
+	// terminal command's ordered tokens rather than requiring byte-for-byte
+	// YAML quoting. This is still constrained to a declared validation command.
+	log = strings.ReplaceAll(log, `\\"`, `"`)
+	logTokens := strings.Fields(strings.NewReplacer(`"`, "", `'`, "", `\\`, "").Replace(log))
+	if !orderedTokensPresent(logTokens, commandTokens) {
 		return false
 	}
 	// The command must appear before a concrete terminal command/build failure
 	// in the same durable worker record. This is intentionally narrow enough to
 	// avoid treating a worker's explanatory prose as validation evidence.
-	after := strings.ToLower(log[index:])
+	after := strings.ToLower(log)
 	return strings.Contains(after, "build failed") ||
 		strings.Contains(after, "execution failed") ||
 		strings.Contains(after, "exit_code\":1") ||
 		strings.Contains(after, "exit status 1") ||
 		strings.Contains(after, "tests failed")
+}
+
+func validationCommandTokens(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if parts := strings.Split(value, "&&"); len(parts) > 1 {
+		value = parts[len(parts)-1]
+	}
+	value = strings.NewReplacer(`"`, "", `'`, "", `\\`, "").Replace(value)
+	return strings.Fields(value)
+}
+
+func orderedTokensPresent(haystack, needles []string) bool {
+	if len(needles) == 0 {
+		return false
+	}
+	start := 0
+	for _, needle := range needles {
+		found := false
+		for start < len(haystack) {
+			if haystack[start] == needle {
+				found = true
+				start++
+				break
+			}
+			start++
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 type recoveryManifest struct {
@@ -300,19 +339,38 @@ func resumedRecoveryCandidate(folder, repo string, prompts []Prompt, options Opt
 		if err != nil {
 			return SequenceState{}, Prompt{}, PromptState{}, false, fmt.Errorf("load failed slice recovery evidence: %w", err)
 		}
-		failed.Worker = state.Worker{ID: item.WorkerID, Status: state.StatusFailed, LogPath: item.LogPath}
+		failed.Worker = failedWorkerEvidence(options.HomeDir, item, failed)
 		if failed.WorkerID == "" {
 			failed.WorkerID = item.WorkerID
-		}
-		if !recoverableFailure(failed, errors.New(item.Error)) {
-			return SequenceState{}, Prompt{}, PromptState{}, false, nil
 		}
 		if _, err := recoveryIsolationEligibility(repo, prompts[index], failed); err != nil {
 			return sequence, prompts[index], failed, false, err
 		}
-		return sequence, prompts[index], failed, true, nil
+		if recoverableFailure(failed, errors.New(item.Error)) {
+			return sequence, prompts[index], failed, true, nil
+		}
+		if _, eligible := validationRepairEligibility(repo, options.HomeDir, prompts[index], failed); eligible && failed.RecoveryAttempts < options.RecoveryAttempts {
+			return sequence, prompts[index], failed, true, nil
+		}
+		return SequenceState{}, Prompt{}, PromptState{}, false, nil
 	}
 	return SequenceState{}, Prompt{}, PromptState{}, false, nil
+}
+
+func failedWorkerEvidence(home string, item SequenceItem, failed PromptState) state.Worker {
+	workerID := failed.WorkerID
+	if workerID == "" {
+		workerID = item.WorkerID
+	}
+	if workerID != "" {
+		if worker, err := state.NewStore(home).Load(workerID); err == nil {
+			return worker
+		}
+	}
+	return state.Worker{
+		ID: workerID, Status: state.StatusFailed, LogPath: item.LogPath,
+		EngineResult: &state.EngineResult{SessionID: failed.EngineSessionID, CompletionStatus: failed.CompletionStatus, NextPromptSafe: failed.NextPromptSafe, CompletionReason: failed.CompletionReason},
+	}
 }
 
 // prepareResumedRecovery performs the actual isolation after preflight has
@@ -324,6 +382,18 @@ func prepareResumedRecovery(repo, home string, sequence *SequenceState, prompts 
 		return err
 	}
 	if sequence.SequenceID == "" {
+		return nil
+	}
+	if evidence, eligible := validationRepairEligibility(repo, home, prompt, failed); eligible && failed.RecoveryAttempts < options.RecoveryAttempts {
+		failed.Status = "repairing"
+		failed.RecoveryAttempts++
+		failed.RecoveryMode = "validation-repair"
+		failed.Error = evidence.Reason
+		if err := store.savePrompt(failed); err != nil {
+			return err
+		}
+		sequence.setRecoveryAttempts(prompt.Name, failed.RecoveryAttempts)
+		sequence.setRecoveryMode(prompt.Name, failed.RecoveryMode)
 		return nil
 	}
 	artifact, err := isolateRecoveryChanges(repo, home, sequence.SequenceID, prompt, failed)

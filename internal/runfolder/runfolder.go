@@ -309,6 +309,7 @@ type PromptState struct {
 	RecoveryAttempts int                        `json:"recovery_attempts,omitempty"`
 	RecoveryMode     string                     `json:"recovery_mode,omitempty"`
 	RecoveryArtifact string                     `json:"recovery_artifact,omitempty"`
+	EngineSessionID  string                     `json:"engine_session_id,omitempty"`
 	GitBaseline      *workerpathpolicy.Snapshot `json:"git_baseline,omitempty"`
 	Worker           state.Worker               `json:"-"`
 }
@@ -684,6 +685,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			emitProgress(options, ProgressEvent{Type: "prompt.skipped", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "skipped", Completed: len(runState.Completed), Total: len(prompts)})
 			continue
 		}
+		resumingFailedItem := summary.Resumed && itemStatuses[prompt.Name] == "failed"
 		sequence.mark(prompt.Name, "running", state.Worker{}, nil, "")
 		sequence.refreshSummary()
 		if err := sequenceStore.save(sequence); err != nil {
@@ -697,6 +699,22 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		repairSessionID := ""
 		var promptState PromptState
 		var err error
+		if resumingFailedItem {
+			if failed, loadErr := newSequenceStore(options.HomeDir).loadPromptState(sequence.SequenceID, prompt.Name); loadErr == nil {
+				failed.Worker = failedWorkerEvidence(options.HomeDir, sequenceItem(sequence, prompt.Name), failed)
+				if evidence, eligible := validationRepairEligibility(repoRoot, options.HomeDir, prompt, failed); eligible && failed.RecoveryAttempts <= options.RecoveryAttempts && failed.GitBaseline != nil {
+					recoveryAttempt = failed.RecoveryAttempts
+					validationRepairUsed = true
+					recoveryMode = "validation-repair"
+					baseline := *failed.GitBaseline
+					repairBaseline = &baseline
+					repairSessionID = failed.Worker.EngineResult.SessionID
+					recoveryContext = validationRepairPromptContext(recoveryAttempt, options.RecoveryAttempts, evidence)
+					identity := workeridentity.FromWorker(failed.Worker)
+					emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "repairing", WorkerID: failed.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: failed.Worker.LogPath, Duration: promptDuration(failed), ExitCode: failed.ExitCode, CompletionStatus: failed.CompletionStatus, NextPromptSafe: failed.NextPromptSafe, Reason: validationRepairMessage(recoveryAttempt, options.RecoveryAttempts, evidence), RecoveryAttempt: recoveryAttempt, RecoveryMode: recoveryMode, Completed: len(runState.Completed), Total: len(prompts)})
+				}
+			}
+		}
 		for {
 			sessionID := sessionForPrompt(prompt, sequence.SessionID)
 			if repairBaseline != nil {
@@ -837,6 +855,15 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	summary.Sequence = &sequence
 	emitProgress(options, ProgressEvent{Type: "run.completed", SequenceID: sequence.SequenceID, Completed: len(runState.Completed), Total: len(prompts)})
 	return summary, nil
+}
+
+func sequenceItem(sequence SequenceState, promptName string) SequenceItem {
+	for _, item := range sequence.Items {
+		if item.PromptName == promptName {
+			return item
+		}
+	}
+	return SequenceItem{}
 }
 
 func sessionForPrompt(prompt Prompt, sessionID string) string {
@@ -1055,6 +1082,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 		promptState.ExitCode = &engineExitCode
 	}
 	if worker.EngineResult != nil {
+		promptState.EngineSessionID = worker.EngineResult.SessionID
 		promptState.CompletionStatus, promptState.NextPromptSafe, promptState.CompletionReason = state.ParseOrderedCompletionReport(worker.EngineResult.Summary)
 		promptState.Worker.EngineResult.CompletionStatus = promptState.CompletionStatus
 		promptState.Worker.EngineResult.NextPromptSafe = promptState.NextPromptSafe

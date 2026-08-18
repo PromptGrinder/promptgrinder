@@ -218,6 +218,18 @@ func TestRunFolderRepairsDeclaredValidationInSameSession(t *testing.T) {
 	}
 }
 
+func TestDeclaredValidationFailureRecognizesNormalizedShellCommand(t *testing.T) {
+	log := `/bin/zsh -lc './gradlew :app:testLocalDebugUnitTest --tests "*MatchDetail*"'
+BUILD FAILED
+Execution failed for task`
+	if !declaredCommandFailed(log, `cd mobile-android && ./gradlew :app:testLocalDebugUnitTest --tests "*MatchDetail*"`) {
+		t.Fatal("normalized declared Gradle command was not recognized")
+	}
+	if declaredCommandFailed(log, `cd mobile-android && ./gradlew :app:lintLocalDebug`) {
+		t.Fatal("unrelated declared command was recognized")
+	}
+}
+
 func TestRunFolderRetriesClientDisconnectAfterIsolatingScopedChanges(t *testing.T) {
 	dir, home := initGitRepo(t), t.TempDir()
 	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
