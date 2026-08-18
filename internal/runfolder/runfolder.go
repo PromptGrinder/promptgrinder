@@ -148,6 +148,7 @@ type ProgressEvent struct {
 	NextPromptSafe   *bool             `json:"next_prompt_safe,omitempty"`
 	Reason           string            `json:"reason,omitempty"`
 	RecoveryAttempt  int               `json:"recovery_attempt,omitempty"`
+	RecoveryArtifact string            `json:"recovery_artifact,omitempty"`
 	Inventory        []ProgressPrompt  `json:"inventory,omitempty"`
 	MarkdownTotal    int               `json:"markdown_total,omitempty"`
 	Ignored          []string          `json:"ignored,omitempty"`
@@ -255,6 +256,9 @@ type SequenceItem struct {
 	ContentHash      string      `json:"content_hash"`
 	Status           string      `json:"status"`
 	WorkerID         string      `json:"worker_id,omitempty"`
+	Scope            string      `json:"scope,omitempty"`
+	Engine           string      `json:"engine,omitempty"`
+	Model            string      `json:"model,omitempty"`
 	StartedAt        *time.Time  `json:"started_at,omitempty"`
 	FinishedAt       *time.Time  `json:"finished_at,omitempty"`
 	ExitCode         *int        `json:"exit_code,omitempty"`
@@ -264,6 +268,7 @@ type SequenceItem struct {
 	NextPromptSafe   *bool       `json:"next_prompt_safe,omitempty"`
 	CompletionReason string      `json:"completion_reason,omitempty"`
 	RecoveryAttempts int         `json:"recovery_attempts,omitempty"`
+	RecoveryArtifact string      `json:"recovery_artifact,omitempty"`
 	TokenUsage       *TokenUsage `json:"token_usage,omitempty"`
 }
 
@@ -300,7 +305,9 @@ type PromptState struct {
 	NextPromptSafe   *bool        `json:"next_prompt_safe,omitempty"`
 	CompletionReason string       `json:"completion_reason,omitempty"`
 	RecoveryAttempts int          `json:"recovery_attempts,omitempty"`
+	RecoveryArtifact string       `json:"recovery_artifact,omitempty"`
 	Worker           state.Worker `json:"-"`
+	baseline         workerpathpolicy.Snapshot
 }
 
 func Classify(filename string) PromptType {
@@ -672,6 +679,13 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			if err == nil || recoveryAttempt >= options.RecoveryAttempts || !recoverableFailure(promptState, err) {
 				break
 			}
+			if artifact, isolateErr := isolateRecoveryChanges(repoRoot, options.HomeDir, sequence.SequenceID, prompt, promptState); isolateErr != nil {
+				promptState.RecoveryArtifact = artifact
+				err = fmt.Errorf("automatic recovery blocked: %w", isolateErr)
+				break
+			} else {
+				promptState.RecoveryArtifact = artifact
+			}
 			recoveryAttempt++
 			promptState.Status = "recovering"
 			promptState.Error = err.Error()
@@ -683,11 +697,12 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			}
 			sequence.mark(prompt.Name, "running", promptState.Worker, nil, recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err))
 			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.setRecoveryArtifact(prompt.Name, promptState.RecoveryArtifact)
 			sequence.refreshSummary()
 			_ = sequenceStore.save(sequence)
 			_ = store.saveSummary(sequence)
 			identity := workeridentity.FromWorker(promptState.Worker)
-			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, RecoveryArtifact: promptState.RecoveryArtifact, Completed: len(runState.Completed), Total: len(prompts)})
 			recoveryContext = recoveryPromptContext(recoveryAttempt, options.RecoveryAttempts, err, promptState)
 		}
 		if err != nil {
@@ -698,6 +713,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			}
 			sequence.mark(prompt.Name, "failed", promptState.Worker, promptState.FinishedAt, err.Error())
 			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.setRecoveryArtifact(prompt.Name, promptState.RecoveryArtifact)
 			finished := time.Now().UTC()
 			sequence.FinishedAt = &finished
 			sequence.refreshSummary()
@@ -711,7 +727,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			summary.Run = runState
 			summary.Failed = err
 			identity := workeridentity.FromWorker(promptState.Worker)
-			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, RecoveryArtifact: promptState.RecoveryArtifact, Completed: len(runState.Completed), Total: len(prompts)})
 			return summary, err
 		}
 		if err := store.savePrompt(promptState); err != nil {
@@ -910,7 +926,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 	if err != nil {
 		return promptState, err
 	}
-	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0 || roleHasPathPolicy(prompt.RolePolicy)
+	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || options.RecoveryAttempts > 0 || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0 || roleHasPathPolicy(prompt.RolePolicy)
 	var baseline workerpathpolicy.Snapshot
 	if needsGitTracking {
 		baseline, err = workerpathpolicy.Capture(repoRoot)
@@ -918,6 +934,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 			return promptState, fmt.Errorf("capture worker Git baseline: %w", err)
 		}
 		baseline.Entries = withoutPromptGrinderPaths(baseline.Entries)
+		promptState.baseline = baseline
 	}
 	// Focused automatic commits are only attributable from a clean baseline.
 	// --require-clean-git=false remains useful for non-committing runs, but is
@@ -1347,9 +1364,24 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 		} else if status == "succeeded" || status == "failed" || status == "skipped" {
 			item.FinishedAt = &now
 		}
-		item.WorkerID = worker.ID
-		item.LogPath = worker.LogPath
-		item.ExitCode = worker.ExitCode
+		// A recovery preflight can fail before it launches a replacement worker.
+		// Keep the original worker evidence rather than replacing it with an
+		// empty/default identity in the final failed sequence row.
+		if worker.ID != "" {
+			item.WorkerID = worker.ID
+		}
+		if worker.LogPath != "" {
+			item.LogPath = worker.LogPath
+		}
+		if worker.ExitCode != nil {
+			item.ExitCode = worker.ExitCode
+		}
+		if worker.ID != "" {
+			identity := workeridentity.FromWorker(worker)
+			item.Scope = identity.Scope
+			item.Engine = identity.Engine
+			item.Model = identity.Model
+		}
 		item.Error = errorMessage
 		if worker.EngineResult != nil {
 			if worker.EngineResult.EngineExitCode != nil {
@@ -1378,6 +1410,18 @@ func (s *SequenceState) setRecoveryAttempts(promptName string, attempts int) {
 	}
 }
 
+func (s *SequenceState) setRecoveryArtifact(promptName, artifact string) {
+	if artifact == "" {
+		return
+	}
+	for i := range s.Items {
+		if s.Items[i].PromptName == promptName {
+			s.Items[i].RecoveryArtifact = artifact
+			return
+		}
+	}
+}
+
 func recoverableFailure(prompt PromptState, err error) bool {
 	if err == nil {
 		return false
@@ -1392,7 +1436,20 @@ func recoverableFailure(prompt PromptState, err error) bool {
 			return false
 		}
 	}
-	return true
+	if strings.Contains(text, "did not satisfy ordered completion contract") ||
+		strings.Contains(text, "path policy violation") ||
+		strings.Contains(text, "timeout") {
+		return false
+	}
+	// A launch failure has no completed worker command to preserve and remains
+	// safely retryable. Once a worker ran, retry only when its durable log
+	// contains the exact runtime-side client-disconnect evidence. This avoids
+	// treating compiler/test failures that happen to mention cancellation as
+	// infrastructure failures.
+	if prompt.WorkerID == "" || prompt.Worker.Status == state.StatusLaunchFailed || strings.Contains(text, "launch failed") {
+		return true
+	}
+	return runtimeClientDisconnected(prompt.Worker.LogPath)
 }
 
 func recoveryMessage(attempt, maximum int, err error) string {

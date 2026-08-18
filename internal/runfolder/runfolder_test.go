@@ -21,9 +21,12 @@ type fakeLauncher struct {
 	failName           string
 	failOnceName       string
 	failedOnce         bool
+	runtimeFailureOnce bool
+	runtimeFailed      bool
 	running            bool
 	logDir             string
 	logText            string
+	failureLogText     string
 	onLaunch           func(path string)
 	reportedSessionID  string
 	result             *state.EngineResult
@@ -50,11 +53,18 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 		f.onLaunch(path)
 	}
 	if filepath.Base(path) == f.failName {
-		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
+		return f.failedWorker(), fmt.Errorf("launch failed")
 	}
 	if filepath.Base(path) == f.failOnceName && !f.failedOnce {
 		f.failedOnce = true
-		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
+		return f.failedWorker(), fmt.Errorf("launch failed")
+	}
+	if f.runtimeFailureOnce && !f.runtimeFailed {
+		f.runtimeFailed = true
+		worker := f.failedWorker()
+		one := 1
+		worker.ExitCode = &one
+		return worker, nil
 	}
 	if f.running {
 		return state.Worker{ID: "wrk_running", Status: state.StatusRunning}, nil
@@ -80,6 +90,17 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 		}
 	}
 	return worker, nil
+}
+
+func (f *fakeLauncher) failedWorker() state.Worker {
+	worker := state.Worker{ID: "wrk_fail", Status: state.StatusFailed}
+	if f.logDir != "" {
+		worker.LogPath = filepath.Join(f.logDir, worker.ID+".log")
+		if err := os.WriteFile(worker.LogPath, []byte(f.failureLogText), 0o644); err != nil {
+			panic(err)
+		}
+	}
+	return worker
 }
 
 func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
@@ -154,20 +175,97 @@ func TestRunFolderRecoversOnlyTheFailedSlice(t *testing.T) {
 	}
 }
 
-func TestRunFolderRecoversBlockedCompletionInTheSameSlice(t *testing.T) {
+func TestRunFolderRetriesClientDisconnectAfterIsolatingScopedChanges(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{
+		runtimeFailureOnce: true,
+		logDir:             t.TempDir(),
+		failureLogText:     "client disconnection detected, canceling the build",
+	}
+	// The first launched worker creates only an allowed untracked file. The
+	// recovery path must move it to an artifact, retry, and leave no partial
+	// output for --require-clean-git to reject.
+	launches := 0
+	launcher.onLaunch = func(string) {
+		launches++
+		if launches == 1 {
+			if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writePromptFile(t, filepath.Join(dir, "src"), "retained.txt", "retain")
+		}
+	}
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, CommitEach: true, RequireCleanGit: true, RecoveryAttempts: 1}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 2 || summary.Sequence.Items[0].RecoveryArtifact == "" {
+		t.Fatalf("calls=%d item=%#v", len(launcher.calls), summary.Sequence.Items[0])
+	}
+	artifact := summary.Sequence.Items[0].RecoveryArtifact
+	if _, err := os.Stat(filepath.Join(artifact, "manifest.json")); err != nil {
+		t.Fatalf("recovery manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(artifact, "files", "src", "retained.txt")); err != nil {
+		t.Fatalf("retained file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "retained.txt")); !os.IsNotExist(err) {
+		t.Fatalf("worktree retained output = %v", err)
+	}
+	clean, err := gitClean(dir)
+	if err != nil || !clean {
+		t.Fatalf("retry worktree clean=%t err=%v", clean, err)
+	}
+}
+
+func TestRecoverableFailureRequiresClientDisconnectEvidenceForCompletedWorker(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "worker.log")
+	if err := os.WriteFile(log, []byte("client disconnection detected, canceling the build"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prompt := PromptState{WorkerID: "wrk_1", Worker: state.Worker{ID: "wrk_1", Status: state.StatusFailed, LogPath: log}}
+	if !recoverableFailure(prompt, errors.New("slice failed with worker status failed")) {
+		t.Fatal("client disconnect should be recoverable")
+	}
+	if recoverableFailure(PromptState{WorkerID: "wrk_2", Worker: state.Worker{ID: "wrk_2", Status: state.StatusFailed}}, errors.New("slice failed with worker status failed")) {
+		t.Fatal("ordinary worker failure must not be recoverable")
+	}
+}
+
+func TestRecoveryIsolationRefusesAmbiguousOrForbiddenChanges(t *testing.T) {
+	dir := initGitRepo(t)
+	promptPath := filepath.Join(dir, "10-implement-a.md")
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "outside.txt", "must remain")
+	artifact, err := isolateRecoveryChanges(dir, t.TempDir(), "seq_test", Prompt{Path: promptPath, Name: "10-implement-a.md"}, PromptState{WorkerID: "wrk_test", baseline: baseline})
+	if err == nil || !strings.Contains(err.Error(), "not provably slice-owned") {
+		t.Fatalf("artifact=%q err=%v", artifact, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "outside.txt")); err != nil {
+		t.Fatalf("ambiguous user change was modified: %v", err)
+	}
+}
+
+func TestRunFolderDoesNotRecoverBlockedCompletion(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
 	writePromptFile(t, dir, "10-implement-first.md", "first")
 	launcher := &fakeLauncher{resultOnce: completionResult("BLOCKED", false)}
 
 	summary, err := Run(dir, Options{HomeDir: home, RecoveryAttempts: 1}, launcher)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected blocked completion failure")
 	}
-	if len(launcher.calls) != 2 || summary.Sequence.Items[0].RecoveryAttempts != 1 {
+	if len(launcher.calls) != 1 || summary.Sequence.Items[0].RecoveryAttempts != 0 {
 		t.Fatalf("calls = %#v", launcher.calls)
-	}
-	if !strings.Contains(launcher.calls[1].Content, "Previous completion reason: STATUS is BLOCKED, not PASS") {
-		t.Fatalf("recovery prompt = %q", launcher.calls[1].Content)
 	}
 }
 

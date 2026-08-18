@@ -3248,6 +3248,9 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 	for i, item := range sequence.Items {
 		label := sequencePromptLabel(item)
 		fmt.Fprintf(stdout, "%-4d %-44s %-12s %-28s %s\n", i+1, truncate(label, 44), item.Status, valueOrDash(item.WorkerID), valueOrDash(item.LogPath))
+		if item.Scope != "" || item.Engine != "" || item.Model != "" {
+			fmt.Fprintf(stdout, "     Runtime: %s|%s/%s\n", valueOrDash(item.Scope), valueOrDash(item.Engine), valueOrDash(item.Model))
+		}
 		if item.CompletionStatus != "" || item.NextPromptSafe != nil || item.CompletionReason != "" {
 			fmt.Fprintf(stdout, "     Completion: STATUS=%s NEXT_PROMPT_SAFE=%s", valueOrDash(item.CompletionStatus), sequenceBool(item.NextPromptSafe))
 			if item.ExitCode != nil {
@@ -3257,6 +3260,9 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 				fmt.Fprintf(stdout, " reason=%s", item.CompletionReason)
 			}
 			fmt.Fprintln(stdout)
+		}
+		if item.RecoveryArtifact != "" {
+			fmt.Fprintf(stdout, "     Retained recovery artifact: %s\n", item.RecoveryArtifact)
 		}
 	}
 }

@@ -8,7 +8,7 @@ import (
 
 // Version is the application version reported by the CLI. Tagged release
 // builds inject the tag value to keep the artifact and source version aligned.
-var Version = "v1.0.0-rc.4.1"
+var Version = "v1.0.0-rc.4.2"
 
 // Revision and BuildDate are injected by the release build. Development builds
 // fall back to Go's VCS metadata.

@@ -375,6 +375,9 @@ func failureDetailLines(event runfolder.ProgressEvent) []string {
 	if event.Reason != "" {
 		lines = append(lines, "  Reason: "+event.Reason)
 	}
+	if event.RecoveryArtifact != "" {
+		lines = append(lines, "  Retained artifact: "+event.RecoveryArtifact)
+	}
 	if event.CompletionStatus != "" || event.NextPromptSafe != nil {
 		status, safe := "-", "-"
 		if event.CompletionStatus != "" {

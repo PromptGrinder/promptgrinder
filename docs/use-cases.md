@@ -555,3 +555,18 @@ PromptGrinder orchestrates engineering work; it does not provide a coding
 model, replace Git, silently merge or publish work, guarantee that AI-generated
 commands are safe, or turn discovered role proposals into active named workers
 without explicit project configuration.
+## UC-19b — recover safely from an interrupted worker runtime
+
+When a worker log contains the explicit runtime evidence `client disconnection
+detected`, `run-folder --recovery-attempts N` may retry only that slice. Before
+the retry, PromptGrinder attributes the changes against the slice baseline and
+enforces its allowed/forbidden path policy. Proven slice-owned untracked output
+is moved, and tracked output is represented by a binary patch, under
+`$PROMPTGRINDER_HOME/recovery-artifacts/`; the artifact manifest explains how
+to inspect and selectively restore it. The retry begins from a clean baseline.
+
+PromptGrinder never resets, cleans, stashes, broadly kills processes, or
+auto-commits partial output. A test assertion, compiler error, malformed
+completion report, explicit cancellation, timeout, changed Git history, or
+ambiguous path is not a recoverable client disconnect and stops with retained
+evidence instead.

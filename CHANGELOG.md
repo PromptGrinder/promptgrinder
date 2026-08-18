@@ -4,6 +4,22 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.4.2 candidate
+
+- Hardened run-folder recovery after a runtime client disconnect. Known worker
+  identity, log evidence, and completion details are retained rather than
+  being replaced by an unscoped/default failure.
+- Before retrying a failed slice with retained, path-policy-approved changes,
+  PromptGrinder moves untracked output and records a binary patch in a durable
+  recovery artifact, then restores the proven clean baseline without using a
+  reset, clean, stash, or automatic partial commit.
+- Recovery remains fail-closed for ordinary validation failures, completion
+  contract failures, cancellation, timeouts, path-policy violations, changed
+  Git history, and ambiguous changes.
+
+RC.4.2 is a compatible recovery-safety candidate. It is not tagged or
+published by merging this branch.
+
 ### v1.0.0-rc.4.1 candidate
 
 - Added structured, reported Codex token usage to run-folder summaries and
