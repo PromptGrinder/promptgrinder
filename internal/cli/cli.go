@@ -1015,6 +1015,7 @@ Examples:
 	var runFolderRepo string
 	var runFolderTemplate string
 	var runFolderEngine string
+	var runFolderSandbox string
 	var runFolderIncludeSpecification bool
 	var runFolderRestart bool
 	var runFolderNoResume bool
@@ -1077,6 +1078,7 @@ Examples:
 			RepoPath:                runFolderRepo,
 			Template:                runFolderTemplate,
 			EngineOverride:          runFolderEngine,
+			SandboxOverride:         runFolderSandbox,
 			IncludeSpecification:    runFolderIncludeSpecification,
 			RecoveryAttempts:        runFolderRecoveryAttempts,
 			SupervisorID:            runFolderSupervisorID,
@@ -1095,6 +1097,7 @@ Examples:
 		cmd.Flags().StringVar(&runFolderRepo, "repo", ".", "repository path where workers run and git operations apply")
 		cmd.Flags().StringVar(&runFolderTemplate, "template", "codex", "execution template")
 		cmd.Flags().StringVar(&runFolderEngine, "engine", "", "override every prompt engine for this run")
+		cmd.Flags().StringVar(&runFolderSandbox, "sandbox", "", "override Codex sandbox for every runnable slice (read-only, workspace-write, danger-full-access)")
 		cmd.Flags().BoolVar(&runFolderIncludeSpecification, "include-specification", false, "execute specification prompts instead of using them only as context")
 		cmd.Flags().IntVar(&runFolderRecoveryAttempts, "recovery-attempts", 0, "retry a recoverable failed slice this many times (0-3)")
 		cmd.Flags().BoolVar(&runFolderAllowConcurrentWorktree, "allow-concurrent-worktree", false, "allow another PromptGrinder batch to use the same git worktree")
@@ -3381,6 +3384,7 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 		"--repo", stringDefault(options.RepoPath, "."),
 		"--template", stringDefault(options.Template, "codex"),
 		fmt.Sprintf("--include-specification=%t", options.IncludeSpecification),
+		"--recovery-attempts", strconv.Itoa(options.RecoveryAttempts),
 		"--supervisor-id", supervisorID,
 		"--supervisor-log", logPath,
 	)
@@ -3389,6 +3393,9 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 	}
 	if options.EngineOverride != "" {
 		args = append(args, "--engine", options.EngineOverride)
+	}
+	if options.SandboxOverride != "" {
+		args = append(args, "--sandbox", options.SandboxOverride)
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout = logFile

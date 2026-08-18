@@ -148,6 +148,11 @@ runnable when frontmatter supplies a stable `id` and explicit `type`; optional
 must resolve to earlier task IDs before the sequence can start. Slice path
 metadata and declared role boundaries are the enforced ordinary run-folder file
 policy.
+
+`run-folder --sandbox danger-full-access` overrides the Codex sandbox for the
+current invocation only, including a resumed failed slice and later runnable
+slices. Completed checkpoints remain untouched. Omit the flag to preserve the
+task/default sandbox selection.
 When a slice declares a role, the role description and allowed paths are also
 injected as an outer boundary: changed and expected paths must satisfy both the
 role and slice policies. Role quality gates are visible readiness guidance, not

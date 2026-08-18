@@ -836,6 +836,7 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 	}
 	manager := s.Worker
 	manager.EngineOverride = options.EngineOverride
+	manager.SandboxOverride = options.SandboxOverride
 	manager.RepositoryOverride = repoRoot
 	switch options.ExecutionPolicy {
 	case runfolder.ExecutionConfigured:
@@ -860,6 +861,7 @@ func (s Service) PreflightRunFolder(path string, options RunFolderOptions) (RunF
 	}
 	manager := s.Worker
 	manager.EngineOverride = options.EngineOverride
+	manager.SandboxOverride = options.SandboxOverride
 	manager.RepositoryOverride = preflight.Repository
 	manager.SkipExecutorValidation = true
 	for index, prompt := range preflight.Inspection.Prompts {

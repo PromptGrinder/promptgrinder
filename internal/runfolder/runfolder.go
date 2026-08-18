@@ -56,6 +56,7 @@ type Options struct {
 	RepoPath                string
 	Template                string
 	EngineOverride          string
+	SandboxOverride         string
 	IncludeSpecification    bool
 	RecoveryAttempts        int
 	HomeDir                 string

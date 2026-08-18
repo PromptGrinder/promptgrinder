@@ -1171,6 +1171,19 @@ func TestCLIRunSandboxOverride(t *testing.T) {
 	}
 }
 
+func TestCLIRunFolderSandboxOverride(t *testing.T) {
+	service := &fakeService{}
+	cmd := NewRootCommand(service, &bytes.Buffer{}, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "tasks", "--sandbox", "danger-full-access", "--detach=false"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if service.runFolderOptions.SandboxOverride != "danger-full-access" {
+		t.Fatalf("runFolderOptions = %#v", service.runFolderOptions)
+	}
+}
+
 func TestCLIRunAcceptsMultipleFilesWithSharedContext(t *testing.T) {
 	service := &fakeService{}
 	cmd := NewRootCommand(service, &bytes.Buffer{}, &bytes.Buffer{})
