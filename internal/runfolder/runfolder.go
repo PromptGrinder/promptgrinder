@@ -29,13 +29,19 @@ import (
 
 type PromptType string
 
+// ContextMode controls whether a slice resumes the preceding runtime session.
+// Shared is the compatible default; Fresh establishes an explicit session boundary.
+type ContextMode string
+
 const (
-	TypeSpecification PromptType = "specification"
-	TypeImplement     PromptType = "implement"
-	TypeTest          PromptType = "test"
-	TypeVerify        PromptType = "verify"
-	TypeReview        PromptType = "review"
-	TypeUnknown       PromptType = "unknown"
+	TypeSpecification PromptType  = "specification"
+	TypeImplement     PromptType  = "implement"
+	TypeTest          PromptType  = "test"
+	TypeVerify        PromptType  = "verify"
+	TypeReview        PromptType  = "review"
+	TypeUnknown       PromptType  = "unknown"
+	ContextShared     ContextMode = "shared"
+	ContextFresh      ContextMode = "fresh"
 )
 
 type Options struct {
@@ -164,13 +170,14 @@ type persistedProgressEvent struct {
 }
 
 type Prompt struct {
-	Path       string
-	Name       string
-	ID         string
-	Type       PromptType
-	Role       string
-	RolePolicy *RolePolicy
-	DependsOn  []string
+	Path        string
+	Name        string
+	ID          string
+	Type        PromptType
+	Role        string
+	RolePolicy  *RolePolicy
+	DependsOn   []string
+	ContextMode ContextMode
 }
 
 type FolderInspection struct {
@@ -239,24 +246,25 @@ type Supervisor struct {
 }
 
 type SequenceItem struct {
-	PromptPath       string     `json:"prompt_path"`
-	PromptName       string     `json:"prompt_name"`
-	PromptID         string     `json:"prompt_id,omitempty"`
-	DependsOn        []string   `json:"depends_on,omitempty"`
-	PromptHash       string     `json:"prompt_hash,omitempty"`
-	PolicyHash       string     `json:"policy_hash,omitempty"`
-	ContentHash      string     `json:"content_hash"`
-	Status           string     `json:"status"`
-	WorkerID         string     `json:"worker_id,omitempty"`
-	StartedAt        *time.Time `json:"started_at,omitempty"`
-	FinishedAt       *time.Time `json:"finished_at,omitempty"`
-	ExitCode         *int       `json:"exit_code,omitempty"`
-	LogPath          string     `json:"log_path,omitempty"`
-	Error            string     `json:"error,omitempty"`
-	CompletionStatus string     `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool      `json:"next_prompt_safe,omitempty"`
-	CompletionReason string     `json:"completion_reason,omitempty"`
-	RecoveryAttempts int        `json:"recovery_attempts,omitempty"`
+	PromptPath       string      `json:"prompt_path"`
+	PromptName       string      `json:"prompt_name"`
+	PromptID         string      `json:"prompt_id,omitempty"`
+	DependsOn        []string    `json:"depends_on,omitempty"`
+	ContextMode      ContextMode `json:"context_mode,omitempty"`
+	PromptHash       string      `json:"prompt_hash,omitempty"`
+	PolicyHash       string      `json:"policy_hash,omitempty"`
+	ContentHash      string      `json:"content_hash"`
+	Status           string      `json:"status"`
+	WorkerID         string      `json:"worker_id,omitempty"`
+	StartedAt        *time.Time  `json:"started_at,omitempty"`
+	FinishedAt       *time.Time  `json:"finished_at,omitempty"`
+	ExitCode         *int        `json:"exit_code,omitempty"`
+	LogPath          string      `json:"log_path,omitempty"`
+	Error            string      `json:"error,omitempty"`
+	CompletionStatus string      `json:"completion_status,omitempty"`
+	NextPromptSafe   *bool       `json:"next_prompt_safe,omitempty"`
+	CompletionReason string      `json:"completion_reason,omitempty"`
+	RecoveryAttempts int         `json:"recovery_attempts,omitempty"`
 }
 
 type TokenUsage struct {
@@ -383,7 +391,14 @@ func inspectPrompt(promptPath, name string) (Prompt, error) {
 		id = strings.TrimSuffix(name, filepath.Ext(name))
 	}
 	role, _ := task.Metadata["role"].(string)
-	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"])}, nil
+	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"]), ContextMode: contextModeValue(task.Metadata["context_mode"])}, nil
+}
+
+func contextModeValue(value any) ContextMode {
+	if value == string(ContextFresh) {
+		return ContextFresh
+	}
+	return ContextShared
 }
 
 func promptTypeValue(value any) PromptType {
@@ -641,7 +656,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		var promptState PromptState
 		var err error
 		for {
-			promptState, err = runPrompt(repoRoot, prompt, specContext, sequence.SessionID, recoveryContext, options, launcher)
+			promptState, err = runPrompt(repoRoot, prompt, specContext, sessionForPrompt(prompt, sequence.SessionID), recoveryContext, options, launcher)
 			promptState.RecoveryAttempts = recoveryAttempt
 			if err == nil || recoveryAttempt >= options.RecoveryAttempts || !recoverableFailure(promptState, err) {
 				break
@@ -731,6 +746,13 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	summary.Sequence = &sequence
 	emitProgress(options, ProgressEvent{Type: "run.completed", SequenceID: sequence.SequenceID, Completed: len(runState.Completed), Total: len(prompts)})
 	return summary, nil
+}
+
+func sessionForPrompt(prompt Prompt, sessionID string) string {
+	if prompt.ContextMode == ContextFresh {
+		return ""
+	}
+	return sessionID
 }
 
 func validatePrompts(prompts []Prompt) error {
@@ -1974,7 +1996,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 		if err != nil {
 			return SequenceState{}, err
 		}
-		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
+		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), ContextMode: prompt.ContextMode, PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
 		engineName, taskEngine, err := effectivePromptEngine(prompt.Path, cfg, options.EngineOverride)
 		if err != nil {
 			return SequenceState{}, err

@@ -1295,7 +1295,7 @@ func TestCLIValidateJSON(t *testing.T) {
 }
 
 func TestCLIValidateRenderPrintsExactPromptBytes(t *testing.T) {
-	want := "# Task Semantics (v2)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
+	want := "# Task Semantics (v3)\n\n## Validation\n\n- printf '%s\\n' '$HOME; *'\n\nBody  with spaces\n"
 	service := &fakeService{validatePlan: worker.ValidationPlan{Valid: true, Engine: "codex", RenderedPrompt: want, ExecutionPlan: map[string]any{}}}
 	out := &bytes.Buffer{}
 	cmd := NewRootCommand(service, out, &bytes.Buffer{})

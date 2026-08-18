@@ -70,7 +70,7 @@ func TestLaunchCreatesAndPersistsWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPrompt := "# Task Semantics (v2)\n\n## Acceptance Criteria\n\n- exact output\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n- secrets/**\n\n## Validation\n\n- go test ./...\n\n# Task\n"
+	wantPrompt := "# Task Semantics (v3)\n\n## Acceptance Criteria\n\n- exact output\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n- secrets/**\n\n## Validation\n\n- go test ./...\n\n# Task\n"
 	if string(prompt) != wantPrompt {
 		t.Fatalf("prompt = %q", string(prompt))
 	}

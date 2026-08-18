@@ -68,7 +68,7 @@ func TestContractRendersSemanticsInStableOrderAndPreservesBody(t *testing.T) {
 	if err := Validate(task, "tasks/example.md"); err != nil {
 		t.Fatal(err)
 	}
-	want := "# Task Semantics (v2)\n\n## Acceptance Criteria\n\n- It works\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n\n## Validation\n\n- go test ./...\n\n" + body
+	want := "# Task Semantics (v3)\n\n## Acceptance Criteria\n\n- It works\n\n## Allowed Paths\n\n- internal/**\n\n## Forbidden Paths\n\n\n## Validation\n\n- go test ./...\n\n" + body
 	if got := string(Render(task)); got != want {
 		t.Fatalf("rendered prompt:\n%q\nwant:\n%q", got, want)
 	}
@@ -82,6 +82,7 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 		{"bad id", "id: Not_A_Slug", "id must be a lowercase"},
 		{"bad type", "type: deploy", "type must be one of"},
 		{"bad role", "role: Backend Feature", "role must be a lowercase"},
+		{"bad context mode", "context_mode: isolated", "context_mode must be one of shared or fresh"},
 		{"duplicate dependency", "depends_on: [task-a, task-a]", `depends_on contains duplicate "task-a"`},
 		{"criteria type", "acceptance_criteria: true", "must be a string or nonempty list"},
 		{"empty validation", "validation: []", "must be a string or nonempty list"},
@@ -141,7 +142,21 @@ func TestContractRendersExecutionIdentityAndDependencies(t *testing.T) {
 	if err := Validate(task, "task.md"); err != nil {
 		t.Fatal(err)
 	}
-	want := "# Task Semantics (v2)\n\n## Task ID\n\n- api-contract\n\n## Task Type\n\n- implement\n\n## Role\n\n- backend-feature\n\n## Dependencies\n\n- snapshot-reliability\n\nbody"
+	want := "# Task Semantics (v3)\n\n## Task ID\n\n- api-contract\n\n## Task Type\n\n- implement\n\n## Role\n\n- backend-feature\n\n## Dependencies\n\n- snapshot-reliability\n\nbody"
+	if got := string(Render(task)); got != want {
+		t.Fatalf("rendered = %q, want %q", got, want)
+	}
+}
+
+func TestContractRendersContextMode(t *testing.T) {
+	task, err := Parse("---\ncontext_mode: fresh\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "task.md"); err != nil {
+		t.Fatal(err)
+	}
+	want := "# Task Semantics (v3)\n\n## Context Mode\n\n- fresh\n\nbody"
 	if got := string(Render(task)); got != want {
 		t.Fatalf("rendered = %q, want %q", got, want)
 	}
