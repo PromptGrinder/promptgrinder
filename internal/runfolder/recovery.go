@@ -38,7 +38,11 @@ type validationRepairEvidence struct {
 // result whose durable worker log records a failed command declared by the
 // slice. It deliberately does not inspect arbitrary prose for test-like words.
 func validationRepairEligibility(repo, home string, prompt Prompt, failed PromptState) (validationRepairEvidence, bool) {
-	if failed.CompletionStatus != "PARTIAL" || failed.NextPromptSafe == nil || *failed.NextPromptSafe || failed.Worker.EngineResult == nil || failed.Worker.EngineResult.SessionID == "" {
+	completionStatus, nextPromptSafe := failed.CompletionStatus, failed.NextPromptSafe
+	if failed.Worker.EngineResult != nil && (completionStatus == "" || nextPromptSafe == nil) {
+		completionStatus, nextPromptSafe, _ = state.ParseOrderedCompletionReport(failed.Worker.EngineResult.Summary)
+	}
+	if completionStatus != "PARTIAL" || nextPromptSafe == nil || *nextPromptSafe || failed.Worker.EngineResult == nil || failed.Worker.EngineResult.SessionID == "" {
 		return validationRepairEvidence{}, false
 	}
 	changes, err := recoveryIsolationEligibility(repo, prompt, failed)

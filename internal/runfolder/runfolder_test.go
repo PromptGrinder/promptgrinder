@@ -230,6 +230,30 @@ Execution failed for task`
 	}
 }
 
+func TestValidationRepairUsesCompletionFromDurableWorkerEvidence(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\nvalidation: [./verify-home]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, filepath.Join(dir, "src"), "retained.txt", "retain")
+	log := filepath.Join(t.TempDir(), "worker.log")
+	if err := os.WriteFile(log, []byte("./verify-home\nBUILD FAILED"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next := false
+	failed := PromptState{WorkerID: "wrk_partial", GitBaseline: &baseline, Worker: state.Worker{ID: "wrk_partial", LogPath: log, EngineResult: &state.EngineResult{Summary: "STATUS: PARTIAL\nNEXT_PROMPT_SAFE: no", SessionID: "thread_partial", NextPromptSafe: &next}}}
+	if _, eligible := validationRepairEligibility(dir, home, Prompt{Path: filepath.Join(dir, "10-implement-a.md")}, failed); !eligible {
+		t.Fatal("durable worker completion evidence was not accepted")
+	}
+}
+
 func TestRunFolderRetriesClientDisconnectAfterIsolatingScopedChanges(t *testing.T) {
 	dir, home := initGitRepo(t), t.TempDir()
 	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
