@@ -305,7 +305,8 @@ the selected runtime performs the engineering work.
 ### Core capabilities
 
 - **Ordered execution:** run numbered work orders in a predictable sequence.
-- **Shared context:** continue sequential tasks in one resumed Codex session.
+- **Context boundaries:** continue sequential tasks in one resumed Codex session,
+  or declare clean session boundaries per slice.
 - **Reviewable Git history:** checkpoint successful tasks as focused commits.
 - **Worker lifecycle:** inspect status, logs, events, cancellation, and stale runs.
 - **Deterministic validation:** resolve and validate work orders before launch.
@@ -504,6 +505,10 @@ folder validation, meaning no role boundary or role-specific model policy
 applies. Independent role, prompt, and dirty-baseline problems are reported
 together before a worker can launch.
 Specifications are shared context unless `--include-specification` is set.
+Runnable slices default to `context_mode: shared`; set `context_mode: fresh` to
+start one slice in a clean runtime session while retaining its specification,
+repository state, and declared policy. The next shared slice resumes the fresh
+slice's resulting session.
 
 PromptGrinder appends one visible completion-report instruction to every
 runnable ordered prompt, including the first prompt, resumed prompts, prompts
@@ -613,7 +618,7 @@ PromptGrinder provides orchestration controls, not a security guarantee:
 - shared-context workflows require Git and a clean worktree by default;
 - no hosted PromptGrinder service is required.
 
-### Task frontmatter contract v2
+### Task frontmatter contract v3
 
 Frontmatter is a strict, versioned contract. Unknown top-level keys and unknown
 keys nested under `engine` are errors; YAML anchors and aliases are not
@@ -623,6 +628,10 @@ task instructions:
 - `id` provides stable task identity, `type` is `implement`, `test`, `verify`,
   or `review`, `role` identifies the declared execution responsibility, and
   `depends_on` lists stable IDs that must appear earlier in a serialized folder;
+
+- `context_mode` is `shared` by default; `fresh` deliberately starts that slice
+  without the preceding runtime session while preserving durable repository and
+  specification context;
 
 - `engine` (a name or mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`,
   `approval`, `web_search`, and `images`), plus the compatible top-level engine
@@ -645,8 +654,8 @@ suggestion. Newly discovered directory-backed roles are generated with `/**`.
 When `expected_paths` is supplied, preflight proves each expected path is
 allowed and not forbidden before launching a worker.
 
-The four semantic fields are rendered, in the order shown above, into a
-`# Task Semantics (v2)` preamble sent to the engine. The Markdown body following
+The declared semantic fields are rendered, in the order shown above, into a
+`# Task Semantics (v3)` preamble sent to the engine. The Markdown body following
 frontmatter is otherwise byte-for-byte unchanged. Validation entries are AI
 instructions only: PromptGrinder never executes them as shell commands.
 Absolute or repository-escaping path patterns, identical allowed/forbidden
@@ -801,7 +810,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.3.0` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.4.0` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -849,9 +858,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
-- [RC.3.0 qualification](docs/release/v1.0.0-rc.3.0-qualification.md)
-- [RC.3.0 final gate](docs/release/v1.0.0-rc.3.0-final-gate.md)
-- [RC.3.0 candidate notes](docs/release/v1.0.0-rc.3.0-release-notes.md)
+- [RC.4.0 qualification](docs/release/v1.0.0-rc.4.0-qualification.md)
+- [RC.4.0 final gate](docs/release/v1.0.0-rc.4.0-final-gate.md)
+- [RC.4.0 candidate notes](docs/release/v1.0.0-rc.4.0-release-notes.md)
 - [RC.2.4 qualification](docs/release/v1.0.0-rc.2.4-qualification.md)
 - [RC.2.4 final gate](docs/release/v1.0.0-rc.2.4-final-gate.md)
 - [RC.2.4 candidate notes](docs/release/v1.0.0-rc.2.4-release-notes.md)

@@ -53,6 +53,7 @@ type: implement
 role: backend-feature
 depends_on:
   - ranking-history-model
+context_mode: fresh
 engine:
   name: codex
   model: gpt-5.6-sol
@@ -93,6 +94,7 @@ available DSL; it is not a requirement to set every optional field.
 | `type` | Slice kind | One of `implement`, `test`, `verify`, or `review`. Required for generic names; must agree with a typed filename. |
 | `role` | Declared execution responsibility | Lowercase, hyphen-separated slug. PromptGrinder loads its description and allowed paths as an outer boundary; the slice policy can only narrow that scope. |
 | `depends_on` | Earlier prerequisite task IDs | List of `id` values. Every referenced ID must exist and occur earlier in filename order. |
+| `context_mode` | Runtime conversation continuity | `shared` (the default) resumes the preceding runtime session when the engine supports it. `fresh` starts this slice without the preceding session, establishing a deliberate clean-context boundary. The shared specification and current repository state remain available in both modes. |
 | `engine` | Runtime and model selection | A string engine name, or a mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`, `approval`, `web_search`, and `images`. `max_cost` is `low`, `medium`, or `high`; `capabilities` uses `text`, `image`, `code`, or `web-search`. |
 | `working_directory` | Worker directory relative to the repository | Optional. |
 | `timeout` | Worker timeout | Optional duration such as `45m`. |

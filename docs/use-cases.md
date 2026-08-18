@@ -158,6 +158,11 @@ numbered task-like filenames that would otherwise be silently omitted.
 The invoking process also resolves roles and dependencies and checks Git
 cleanliness before a detached supervisor is started. Preflight failures print
 the actionable reason synchronously and create no sequence state.
+Slices use `context_mode: shared` by default, continuing the preceding runtime
+session when supported. Set `context_mode: fresh` on a slice to start it without
+that session while retaining the specification, committed repository state, and
+its declared policy. A successful fresh slice becomes the context ancestor for
+later shared slices.
 See the [Slice DSL Reference](slice-dsl.md) for the full runnable filename,
 frontmatter, path-policy, and completion-report contract.
 

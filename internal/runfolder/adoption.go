@@ -305,6 +305,7 @@ func refreshAdoptedFingerprints(sequence *SequenceState, prompts []Prompt, repoR
 		item.PromptPath = prompt.Path
 		item.PromptID = prompt.ID
 		item.DependsOn = append([]string(nil), prompt.DependsOn...)
+		item.ContextMode = prompt.ContextMode
 		item.PromptHash = rawHash
 		item.PolicyHash = policyHash
 		if prompt.RolePolicy != nil || prompt.Role == "" {

@@ -412,6 +412,26 @@ func TestRunFolderReusesPersistedCodexSession(t *testing.T) {
 	}
 }
 
+func TestRunFolderFreshContextModeStartsNewSessionBoundary(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "first")
+	writePromptFile(t, dir, "20-implement-b.md", "---\ncontext_mode: fresh\n---\nsecond")
+	writePromptFile(t, dir, "30-verify-c.md", "third")
+	launcher := &fakeLauncher{reportedSessionID: "thread-123"}
+
+	summary, err := Run(dir, Options{HomeDir: home}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 3 || launcher.calls[0].SessionID != "" || launcher.calls[1].SessionID != "" || launcher.calls[2].SessionID != "thread-123" {
+		t.Fatalf("calls = %#v", launcher.calls)
+	}
+	if summary.Sequence.Items[1].ContextMode != ContextFresh {
+		t.Fatalf("fresh context mode was not persisted: %#v", summary.Sequence.Items[1])
+	}
+}
+
 func TestDiscoverSortsMarkdownAlphabetically(t *testing.T) {
 	dir := t.TempDir()
 	writePromptFile(t, dir, "20-implement-b.md", "b")
@@ -517,6 +537,20 @@ func TestDiscoverUsesExplicitMetadataForGenericNumberedPrompts(t *testing.T) {
 	}
 	if len(prompts) != 2 || prompts[0].ID != "snapshot-reliability" || prompts[0].Type != TypeImplement || prompts[0].Role != "backend-feature" || prompts[1].Type != TypeReview || strings.Join(prompts[1].DependsOn, ",") != "snapshot-reliability" {
 		t.Fatalf("prompts = %#v", prompts)
+	}
+}
+
+func TestDiscoverDefaultsContextModeToSharedAndAcceptsFresh(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "10-implement-default.md", "default")
+	writePromptFile(t, dir, "20-implement-fresh.md", "---\ncontext_mode: fresh\n---\nfresh")
+
+	prompts, err := Discover(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompts[0].ContextMode != ContextShared || prompts[1].ContextMode != ContextFresh {
+		t.Fatalf("context modes = %#v", prompts)
 	}
 }
 
