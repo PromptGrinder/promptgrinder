@@ -558,10 +558,13 @@ without explicit project configuration.
 ## UC-19b — recover safely from an interrupted worker runtime
 
 When a worker log contains the explicit runtime evidence `client disconnection
-detected`, `run-folder --recovery-attempts N` may retry only that slice. Before
-the retry, PromptGrinder attributes the changes against the slice baseline and
-enforces its allowed/forbidden path policy. Proven slice-owned untracked output
-is moved, and tracked output is represented by a binary patch, under
+detected`, `run-folder --recovery-attempts N` may retry only that slice. On a
+later `--resume` with `--commit-each` or `--require-clean-git`, PromptGrinder
+checks persisted failed-slice evidence before applying the ordinary clean-Git
+rejection. Before the retry, it attributes changes against the exact persisted
+pre-slice baseline and enforces the allowed/forbidden path policy. Proven
+slice-owned untracked output is moved, and tracked output is represented by a
+binary patch, under
 `$PROMPTGRINDER_HOME/recovery-artifacts/`; the artifact manifest explains how
 to inspect and selectively restore it. The retry begins from a clean baseline.
 

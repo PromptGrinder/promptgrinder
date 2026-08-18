@@ -289,25 +289,25 @@ func (u TokenUsage) String() string {
 }
 
 type PromptState struct {
-	Prompt           string       `json:"prompt"`
-	PromptType       PromptType   `json:"prompt_type"`
-	Status           string       `json:"status"`
-	StartedAt        *time.Time   `json:"started_at"`
-	FinishedAt       *time.Time   `json:"finished_at"`
-	ExitCode         *int         `json:"exit_code,omitempty"`
-	GitSHABefore     string       `json:"git_sha_before"`
-	GitSHAAfter      string       `json:"git_sha_after"`
-	CommitSHA        string       `json:"commit_sha"`
-	FilesChanged     []string     `json:"files_changed"`
-	WorkerID         string       `json:"worker_id,omitempty"`
-	Error            string       `json:"error,omitempty"`
-	CompletionStatus string       `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool        `json:"next_prompt_safe,omitempty"`
-	CompletionReason string       `json:"completion_reason,omitempty"`
-	RecoveryAttempts int          `json:"recovery_attempts,omitempty"`
-	RecoveryArtifact string       `json:"recovery_artifact,omitempty"`
-	Worker           state.Worker `json:"-"`
-	baseline         workerpathpolicy.Snapshot
+	Prompt           string                     `json:"prompt"`
+	PromptType       PromptType                 `json:"prompt_type"`
+	Status           string                     `json:"status"`
+	StartedAt        *time.Time                 `json:"started_at"`
+	FinishedAt       *time.Time                 `json:"finished_at"`
+	ExitCode         *int                       `json:"exit_code,omitempty"`
+	GitSHABefore     string                     `json:"git_sha_before"`
+	GitSHAAfter      string                     `json:"git_sha_after"`
+	CommitSHA        string                     `json:"commit_sha"`
+	FilesChanged     []string                   `json:"files_changed"`
+	WorkerID         string                     `json:"worker_id,omitempty"`
+	Error            string                     `json:"error,omitempty"`
+	CompletionStatus string                     `json:"completion_status,omitempty"`
+	NextPromptSafe   *bool                      `json:"next_prompt_safe,omitempty"`
+	CompletionReason string                     `json:"completion_reason,omitempty"`
+	RecoveryAttempts int                        `json:"recovery_attempts,omitempty"`
+	RecoveryArtifact string                     `json:"recovery_artifact,omitempty"`
+	GitBaseline      *workerpathpolicy.Snapshot `json:"git_baseline,omitempty"`
+	Worker           state.Worker               `json:"-"`
 }
 
 func Classify(filename string) PromptType {
@@ -619,6 +619,23 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, ResumePlan: resumePlan, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
 	if err := store.ensure(); err != nil {
 		return summary, err
+	}
+	if summary.Resumed && (options.CommitEach || options.RequireCleanGit) {
+		clean, cleanErr := gitClean(repoRoot)
+		if cleanErr != nil {
+			return summary, cleanErr
+		}
+		if !clean {
+			if err := prepareResumedRecovery(repoRoot, options.HomeDir, &sequence, prompts, options, store); err != nil {
+				return summary, err
+			}
+			if err := sequenceStore.save(sequence); err != nil {
+				return summary, err
+			}
+			if err := store.saveSummary(sequence); err != nil {
+				return summary, err
+			}
+		}
 	}
 	specContext, err := readSpecificationContext(prompts)
 	if err != nil {
@@ -934,7 +951,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 			return promptState, fmt.Errorf("capture worker Git baseline: %w", err)
 		}
 		baseline.Entries = withoutPromptGrinderPaths(baseline.Entries)
-		promptState.baseline = baseline
+		promptState.GitBaseline = &baseline
 	}
 	// Focused automatic commits are only attributable from a clean baseline.
 	// --require-clean-git=false remains useful for non-committing runs, but is

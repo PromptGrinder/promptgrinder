@@ -221,6 +221,81 @@ func TestRunFolderRetriesClientDisconnectAfterIsolatingScopedChanges(t *testing.
 	}
 }
 
+func TestResumeIsolatesRecoverableScopedOutputBeforeCleanGitPreflight(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{runtimeFailureOnce: true, logDir: t.TempDir(), failureLogText: "client disconnection detected, canceling the build"}
+	launches := 0
+	launcher.onLaunch = func(string) {
+		launches++
+		if launches != 1 {
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writePromptFile(t, filepath.Join(dir, "src"), "partial.txt", "partial")
+	}
+	first, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err == nil || len(launcher.calls) != 1 {
+		t.Fatalf("first err=%v calls=%d", err, len(launcher.calls))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "partial.txt")); err != nil {
+		t.Fatalf("partial output unexpectedly missing: %v", err)
+	}
+
+	resumed, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Resume: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumed.Resumed || resumed.Sequence.SequenceID != first.Sequence.SequenceID || len(launcher.calls) != 2 {
+		t.Fatalf("resume=%t sequence=%s calls=%d", resumed.Resumed, resumed.Sequence.SequenceID, len(launcher.calls))
+	}
+	item := resumed.Sequence.Items[0]
+	if item.RecoveryArtifact == "" {
+		t.Fatalf("item=%#v", item)
+	}
+	if commits := strings.TrimSpace(string(gitOutput(t, dir, "rev-list", "--count", "HEAD"))); commits != "1" {
+		t.Fatalf("partial output was committed before retry: commits=%s", commits)
+	}
+	if _, err := os.Stat(filepath.Join(item.RecoveryArtifact, "files", "src", "partial.txt")); err != nil {
+		t.Fatalf("isolated partial output missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "partial.txt")); !os.IsNotExist(err) {
+		t.Fatalf("partial output remained in worktree: %v", err)
+	}
+	clean, cleanErr := gitClean(dir)
+	if cleanErr != nil || !clean {
+		t.Fatalf("resume retry baseline clean=%t err=%v", clean, cleanErr)
+	}
+}
+
+func TestResumeRefusesAmbiguousRetainedChangesWithoutModifyingThem(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{runtimeFailureOnce: true, logDir: t.TempDir(), failureLogText: "client disconnection detected, canceling the build"}
+	launcher.onLaunch = func(string) {
+		writePromptFile(t, dir, "outside.txt", "unrelated")
+	}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher); err == nil {
+		t.Fatal("expected initial worker failure")
+	}
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Resume: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "Resume recovery cannot safely isolate") {
+		t.Fatalf("resume error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "outside.txt")); statErr != nil {
+		t.Fatalf("ambiguous retained change was modified: %v", statErr)
+	}
+	if len(launcher.calls) != 1 {
+		t.Fatalf("unsafe recovery launched another worker: %d", len(launcher.calls))
+	}
+}
+
 func TestRecoverableFailureRequiresClientDisconnectEvidenceForCompletedWorker(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "worker.log")
 	if err := os.WriteFile(log, []byte("client disconnection detected, canceling the build"), 0o644); err != nil {
@@ -246,7 +321,7 @@ func TestRecoveryIsolationRefusesAmbiguousOrForbiddenChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	writePromptFile(t, dir, "outside.txt", "must remain")
-	artifact, err := isolateRecoveryChanges(dir, t.TempDir(), "seq_test", Prompt{Path: promptPath, Name: "10-implement-a.md"}, PromptState{WorkerID: "wrk_test", baseline: baseline})
+	artifact, err := isolateRecoveryChanges(dir, t.TempDir(), "seq_test", Prompt{Path: promptPath, Name: "10-implement-a.md"}, PromptState{WorkerID: "wrk_test", GitBaseline: &baseline})
 	if err == nil || !strings.Contains(err.Error(), "not provably slice-owned") {
 		t.Fatalf("artifact=%q err=%v", artifact, err)
 	}

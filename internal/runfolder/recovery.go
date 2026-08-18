@@ -2,6 +2,7 @@ package runfolder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"promptgrinder/internal/state"
 	"promptgrinder/internal/workerpathpolicy"
 )
 
@@ -42,33 +44,12 @@ type recoveryManifest struct {
 // The artifact is inspectable and includes both a binary Git patch and moved
 // untracked files. No reset, git clean, stash, or automatic commit is used.
 func isolateRecoveryChanges(repo, home, sequenceID string, prompt Prompt, failed PromptState) (string, error) {
-	if !(failed.baseline.Head != "" && (failed.WorkerID != "" || failed.Worker.ID != "")) {
-		return "", nil
-	}
-	changes, err := attributedWorkerChanges(repo, failed.baseline)
+	changes, err := recoveryIsolationEligibility(repo, prompt, failed)
 	if err != nil {
-		return "", fmt.Errorf("attribute retained changes: %w", err)
+		return "", err
 	}
 	if len(changes) == 0 {
 		return "", nil
-	}
-	policy, err := taskPathPolicy(prompt.Path)
-	if err != nil {
-		return "", err
-	}
-	violations, err := promptPolicyViolations(prompt, policy, changes)
-	if err != nil {
-		return "", err
-	}
-	if len(violations) != 0 {
-		return "", fmt.Errorf("retained changes are not provably slice-owned: %s", formatViolations(violations))
-	}
-	current, err := workerpathpolicy.Capture(repo)
-	if err != nil {
-		return "", fmt.Errorf("capture recovery state: %w", err)
-	}
-	if current.Head != failed.baseline.Head {
-		return "", fmt.Errorf("failed slice changed Git HEAD; automatic isolation is unsafe")
 	}
 
 	workerID := failed.WorkerID
@@ -124,6 +105,38 @@ func isolateRecoveryChanges(repo, home, sequenceID string, prompt Prompt, failed
 	return artifact, nil
 }
 
+// recoveryIsolationEligibility is read-only. It lets resume preflight defer a
+// clean-baseline rejection only when the retained diff can subsequently be
+// isolated without guessing about ownership.
+func recoveryIsolationEligibility(repo string, prompt Prompt, failed PromptState) ([]string, error) {
+	if failed.GitBaseline == nil || failed.GitBaseline.Head == "" || (failed.WorkerID == "" && failed.Worker.ID == "") {
+		return nil, fmt.Errorf("failed slice has no persisted pre-slice Git baseline; inspect and resolve the worktree before resuming")
+	}
+	changes, err := attributedWorkerChanges(repo, *failed.GitBaseline)
+	if err != nil {
+		return nil, fmt.Errorf("attribute retained changes: %w", err)
+	}
+	policy, err := taskPathPolicy(prompt.Path)
+	if err != nil {
+		return nil, err
+	}
+	violations, err := promptPolicyViolations(prompt, policy, changes)
+	if err != nil {
+		return nil, err
+	}
+	if len(violations) != 0 {
+		return nil, fmt.Errorf("retained changes are not provably slice-owned: %s", formatViolations(violations))
+	}
+	current, err := workerpathpolicy.Capture(repo)
+	if err != nil {
+		return nil, fmt.Errorf("capture recovery state: %w", err)
+	}
+	if current.Head != failed.GitBaseline.Head {
+		return nil, fmt.Errorf("failed slice changed Git HEAD; automatic isolation is unsafe")
+	}
+	return changes, nil
+}
+
 func splitTrackedPaths(repo string, paths []string) (tracked, untracked []string, err error) {
 	for _, name := range paths {
 		if !safeRecoveryPath(name) {
@@ -164,4 +177,105 @@ func literalPathspecs(paths []string) []string {
 		result = append(result, ":(literal)"+name)
 	}
 	return result
+}
+
+// resumedRecoveryCandidate finds the first failed slice of the sequence that
+// this invocation would resume. It is read-only and intentionally refuses to
+// defer clean-Git enforcement unless the persisted worker evidence and exact
+// pre-slice baseline prove that recovery isolation is safe.
+func resumedRecoveryCandidate(folder, repo string, prompts []Prompt, options Options) (SequenceState, Prompt, PromptState, bool, error) {
+	if options.Fresh || options.Restart || options.NoResume {
+		return SequenceState{}, Prompt{}, PromptState{}, false, nil
+	}
+	store := newSequenceStore(options.HomeDir)
+	var sequence SequenceState
+	var err error
+	if options.ResumeSequence != "" {
+		sequence, _, err = store.validateExplicitAdoption(folder, repo, prompts, options.ResumeSequence)
+		if err != nil {
+			return SequenceState{}, Prompt{}, PromptState{}, false, err
+		}
+	} else {
+		base, buildErr := buildSequence(folder, repo, prompts, options)
+		if buildErr != nil {
+			return SequenceState{}, Prompt{}, PromptState{}, false, buildErr
+		}
+		sequence, err = store.load(base.SequenceID)
+		if os.IsNotExist(err) {
+			sequence, _, err = store.findCompatibleResume(folder, repo, prompts)
+		}
+		if err != nil {
+			return SequenceState{}, Prompt{}, PromptState{}, false, nil
+		}
+	}
+	for index, item := range sequence.Items {
+		if item.Status != "failed" {
+			continue
+		}
+		if index >= len(prompts) || prompts[index].Name != item.PromptName {
+			return SequenceState{}, Prompt{}, PromptState{}, false, fmt.Errorf("failed sequence item %q no longer matches the prompt folder", item.PromptName)
+		}
+		failed, err := store.loadPromptState(sequence.SequenceID, item.PromptName)
+		if err != nil {
+			return SequenceState{}, Prompt{}, PromptState{}, false, fmt.Errorf("load failed slice recovery evidence: %w", err)
+		}
+		failed.Worker = state.Worker{ID: item.WorkerID, Status: state.StatusFailed, LogPath: item.LogPath}
+		if failed.WorkerID == "" {
+			failed.WorkerID = item.WorkerID
+		}
+		if !recoverableFailure(failed, errors.New(item.Error)) {
+			return SequenceState{}, Prompt{}, PromptState{}, false, nil
+		}
+		if _, err := recoveryIsolationEligibility(repo, prompts[index], failed); err != nil {
+			return sequence, prompts[index], failed, false, err
+		}
+		return sequence, prompts[index], failed, true, nil
+	}
+	return SequenceState{}, Prompt{}, PromptState{}, false, nil
+}
+
+// prepareResumedRecovery performs the actual isolation after preflight has
+// selected the existing sequence but before a retry can reach runPrompt's
+// ordinary clean-baseline guard.
+func prepareResumedRecovery(repo, home string, sequence *SequenceState, prompts []Prompt, options Options, store folderStore) error {
+	_, prompt, failed, ok, err := resumedRecoveryCandidate(sequence.Folder, repo, prompts, options)
+	if err != nil || !ok || prompt.Name == "" || sequence.SequenceID == "" {
+		return err
+	}
+	if sequence.SequenceID == "" {
+		return nil
+	}
+	artifact, err := isolateRecoveryChanges(repo, home, sequence.SequenceID, prompt, failed)
+	if err != nil {
+		if artifact != "" {
+			failed.RecoveryArtifact = artifact
+			_ = store.savePrompt(failed)
+			sequence.setRecoveryArtifact(prompt.Name, artifact)
+		}
+		return fmt.Errorf("resume recovery blocked; inspect retained changes and resolve them before retrying%s: %w", recoveryArtifactSuffix(artifact), err)
+	}
+	if artifact == "" {
+		return nil
+	}
+	failed.RecoveryArtifact = artifact
+	failed.Error = "retained slice changes isolated before resume; retrying only this slice"
+	if err := store.savePrompt(failed); err != nil {
+		return err
+	}
+	sequence.setRecoveryArtifact(prompt.Name, artifact)
+	for i := range sequence.Items {
+		if sequence.Items[i].PromptName == prompt.Name {
+			sequence.Items[i].Error = failed.Error
+			break
+		}
+	}
+	sequence.touch()
+	return nil
+}
+
+func recoveryArtifactSuffix(artifact string) string {
+	if artifact == "" {
+		return ""
+	}
+	return "; recovery artifact: " + artifact
 }

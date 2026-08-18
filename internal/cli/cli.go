@@ -3264,6 +3264,9 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 		if item.RecoveryArtifact != "" {
 			fmt.Fprintf(stdout, "     Retained recovery artifact: %s\n", item.RecoveryArtifact)
 		}
+		if item.RecoveryAttempts > 0 {
+			fmt.Fprintf(stdout, "     Recovery attempts: %d\n", item.RecoveryAttempts)
+		}
 	}
 }
 

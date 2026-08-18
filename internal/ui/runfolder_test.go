@@ -59,6 +59,19 @@ func TestRunFolderRendererShowsAutomaticRecovery(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererRetainsKnownRecoveryIdentityAndArtifact(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: "10-test.md", Type: runfolder.TypeTest, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-test.md", PromptType: runfolder.TypeTest, Status: "failed", WorkerID: "wrk_known", Scope: "android-test", Engine: "codex", Model: "gpt-5.6-terra", LogPath: "/tmp/known.log", RecoveryAttempt: 1, RecoveryArtifact: "/tmp/artifact", Reason: "resume recovery blocked"})
+	r.Close()
+	for _, want := range []string{"10-test.md|android-test|codex/gpt-5.6-terra|<1s", "Retained artifact: /tmp/artifact", "Reason: resume recovery blocked"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q: %q", want, out.String())
+		}
+	}
+}
+
 func TestRunFolderRendererReportsIncludedAndIgnoredMarkdown(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
