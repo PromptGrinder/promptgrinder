@@ -4,6 +4,10 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.4.3 candidate
+
+- Show the exact `promptgrinder sequence cancel <sequence-id>` command whenever a run-folder sequence starts.
+
 ### v1.0.0-rc.4.2 candidate
 
 - Hardened run-folder recovery after a runtime client disconnect. Known worker

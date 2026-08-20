@@ -2568,7 +2568,7 @@ func TestCLIDetachedRunFolderPrintsSequenceInspectionCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Sequence: seq_detached", "Status: promptgrinder sequence seq_detached"} {
+	for _, want := range []string{"Sequence: seq_detached", "Status: promptgrinder sequence seq_detached", "Cancel: promptgrinder sequence cancel seq_detached"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output = %q, missing %q", out.String(), want)
 		}

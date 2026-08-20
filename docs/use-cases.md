@@ -153,6 +153,10 @@ policy.
 current invocation only, including a resumed failed slice and later runnable
 slices. Completed checkpoints remain untouched. Omit the flag to preserve the
 task/default sandbox selection.
+
+Every started sequence prints its copyable cancellation command,
+`promptgrinder sequence cancel <sequence-id>`. Cancellation preserves completed
+checkpoints and recorded worker evidence.
 When a slice declares a role, the role description and allowed paths are also
 injected as an outer boundary: changed and expected paths must satisfy both the
 role and slice policies. Role quality gates are visible readiness guidance, not

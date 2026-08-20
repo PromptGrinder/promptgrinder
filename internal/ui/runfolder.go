@@ -214,6 +214,7 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 	if r.sequenceID != "" {
 		fmt.Fprintln(r.w, "Sequence: "+r.sequenceID)
 		fmt.Fprintln(r.w, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
+		fmt.Fprintln(r.w, "Cancel: promptgrinder sequence cancel "+shellQuote(r.sequenceID))
 	}
 	if r.resumePlan != "" {
 		fmt.Fprintln(r.w, "Resume plan: "+r.resumePlan)
@@ -286,6 +287,7 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	if r.sequenceID != "" {
 		lines = append(lines, "Sequence: "+r.sequenceID)
 		lines = append(lines, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
+		lines = append(lines, "Cancel: promptgrinder sequence cancel "+shellQuote(r.sequenceID))
 	}
 	if r.resumePlan != "" {
 		lines = append(lines, "Resume plan: "+r.resumePlan)

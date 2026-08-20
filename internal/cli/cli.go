@@ -3410,6 +3410,7 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 	fmt.Fprintf(stdout, "Detached run-folder supervisor starting\n")
 	fmt.Fprintf(stdout, "Sequence: %s\n", sequenceID)
 	fmt.Fprintf(stdout, "Status: promptgrinder sequence %s\n", sequenceID)
+	fmt.Fprintf(stdout, "Cancel: promptgrinder sequence cancel %s\n", sequenceID)
 	fmt.Fprintf(stdout, "PID: %d\n", cmd.Process.Pid)
 	fmt.Fprintf(stdout, "Log: %s\n", logPath)
 	fmt.Fprintln(stdout, "Progress: promptgrinder sequences")
