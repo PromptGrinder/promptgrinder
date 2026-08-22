@@ -1154,7 +1154,8 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 			}
 		}
 	}
-	semanticFailure := exitCode == 0 && result.RejectsContinuation()
+	declaredCapabilityGate := isDeclaredCapabilityGateOutcome(worker, result, exitCode)
+	semanticFailure := exitCode == 0 && result.RejectsContinuation() && !declaredCapabilityGate
 	malformedSuccess := exitCode == 0 && worker.Engine == "codex" && strings.TrimSpace(result.Summary) == ""
 	if malformedSuccess {
 		result.CompletionReason = "empty final answer"
@@ -1219,6 +1220,19 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 		return fmt.Errorf("Codex exited successfully but produced no parseable final message; inspect with promptgrinder logs %s, then retry the task", worker.ID)
 	}
 	return nil
+}
+
+// isDeclaredCapabilityGateOutcome recognizes the only ordered-completion
+// exception permitted at the generic runtime boundary. The declaration is
+// persisted from run-folder frontmatter in worker metadata, so no engine- or
+// Codex-specific state is required. Every other non-continuable completion
+// remains a failed worker result.
+func isDeclaredCapabilityGateOutcome(worker state.Worker, result state.EngineResult, exitCode int) bool {
+	if exitCode != 0 || result.CompletionReason != "" {
+		return false
+	}
+	declared, _ := worker.Metadata["gate_outcome"].(string)
+	return declared == "BLOCKED" && result.CompletionStatus == "BLOCKED" && result.NextPromptSafe != nil && !*result.NextPromptSafe
 }
 
 func enforceOrdinaryWorkerPathPolicy(worker state.Worker) error {

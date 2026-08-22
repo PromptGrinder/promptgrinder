@@ -192,6 +192,11 @@ scoped findings, records the completed slice as `gate-blocked`, and ends the
 sequence as `product-blocked`; dependent implementation slices remain pending
 and are never launched.
 
+PromptGrinder carries this declared outcome through the worker completion
+handoff. The sole exception is exactly `STATUS: BLOCKED` with
+`NEXT_PROMPT_SAFE: no`; an undeclared `BLOCKED`, malformed completion, or any
+other status/safety combination remains a failed worker result.
+
 ```yaml
 id: authoritative-data-gate
 type: implement

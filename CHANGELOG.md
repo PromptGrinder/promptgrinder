@@ -12,6 +12,10 @@ All notable changes are recorded here. This project uses semantic versioning.
   unusable resume recommendation.
 - Ordinary failed or interrupted run-folder executions with valid persisted
   run state keep their existing `--resume` guidance.
+- Completed `gate_outcome: BLOCKED` audits now retain their exact
+  `BLOCKED`/`no` completion through the runtime handoff, so permitted evidence
+  checkpoints and the sequence ends as `product-blocked`. Ordinary `BLOCKED`
+  completions remain failed workers.
 
 ### v1.0.0-rc.5.0 candidate
 
