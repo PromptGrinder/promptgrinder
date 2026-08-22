@@ -19,14 +19,15 @@ limit.
 
 ## Resolve hard gates before a commit-each train
 
-- Do not place a capability audit that may legitimately return a product `BLOCKED` outcome before runnable implementation slices in the same `run-folder` sequence. `STATUS: BLOCKED` / `NEXT_PROMPT_SAFE: no` correctly stops the runner, but also makes `--commit-each` unable to commit the blocker report automatically.
-- Run such an audit as its own sequence, review and commit its evidence, then author or enable the implementation train only when the gate is ready. If a user explicitly requires a complete runnable future graph up front, retain its dependent `.pg` files at the top level, make the hard dependency explicit, and state that the run is expected to stop before unsafe implementation. Do not move or hide those slices: that changes the requested execution graph.
+- A capability audit that may successfully prove a product blocker must declare `gate_outcome: BLOCKED` in frontmatter. If its completed evidence proves the prerequisite unavailable, require exactly `STATUS: BLOCKED` and `NEXT_PROMPT_SAFE: no`. PromptGrinder then checkpoints only permitted audit evidence with `--commit-each`, records the sequence as product-blocked, and does not launch dependents.
+- Reserve this declared gate contract for a completed audit with a known product/prerequisite outcome. An undeclared `STATUS: BLOCKED`, or a declared gate whose worker cannot actually perform the audit, remains an ordinary worker failure: it must retain evidence and must not masquerade as a completed product decision.
+- If a user explicitly requires a complete runnable future graph up front, retain its dependent `.pg` files at the top level, make the hard dependency explicit, and state that the run is expected to product-block before unsafe implementation. Do not move or hide those slices: that changes the requested execution graph.
 - Do not disguise a product blocker as `STATUS: PASS` merely to continue into implementation. A successful report and a safe next no-op are different from permission to implement.
 
 ## Write safe prompts
 
 - Put executable task instructions in the Markdown body.
-- Use only supported frontmatter keys. Declare `id`, `type`, `role`, and `depends_on` for descriptive filenames and dependency-aware trains. Semantic keys include `acceptance_criteria`, `allowed_paths`, `forbidden_paths`, and `validation`; validate the prompt before running it.
+- Use only supported frontmatter keys. Declare `id`, `type`, `role`, and `depends_on` for descriptive filenames and dependency-aware trains. Semantic keys include `acceptance_criteria`, `allowed_paths`, `forbidden_paths`, `validation`, and the hard-gate-only `gate_outcome: BLOCKED`; validate the prompt before running it.
 - Treat `role` as declared execution identity for ordinary folder runs; the slice's `allowed_paths` and `forbidden_paths` remain its enforced path policy. Do not claim that generated role YAML permissions are automatically merged.
 - Keep paths repository-relative. Make forbidden paths override allowed paths.
 - State concrete behavior, tests, compatibility expectations, and non-goals. Avoid vague requests such as “finish the feature.”
