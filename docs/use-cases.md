@@ -229,6 +229,14 @@ failed or changed slice. A changed completed slice is never adopted. Use
 sequence from the beginning, `--fresh` to create a new sequence, or
 `--no-resume` to avoid existing resume state.
 
+An explicit `--resume` can sometimes select a validation-only preflight record
+after a changed completed prefix. That record deliberately has no persisted
+`run.json` and is not resumable. PromptGrinder keeps the command failed, names
+validation-only preflight as a possible cause, and prints a copyable
+`--fresh` command; it never silently starts fresh. Ordinary failed or
+interrupted runs that retain valid run state continue to show their normal
+`--resume` guidance.
+
 When several interrupted records exist, use
 `promptgrinder run-folder <folder> --resume-sequence <sequence-id>` to adopt exactly one named unfinished
 sequence. PromptGrinder does not recalculate, copy, or silently rewrite the

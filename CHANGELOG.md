@@ -4,6 +4,15 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.5.1 candidate
+
+- When an explicit `run-folder --resume` selects a validation-only preflight
+  record without persisted execution state, the failure now explains the
+  possible cause and provides a copyable `--fresh` command instead of an
+  unusable resume recommendation.
+- Ordinary failed or interrupted run-folder executions with valid persisted
+  run state keep their existing `--resume` guidance.
+
 ### v1.0.0-rc.5.0 candidate
 
 - Added explicit `gate_outcome: BLOCKED` for hard-gate audit slices. A declared

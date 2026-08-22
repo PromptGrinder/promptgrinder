@@ -153,6 +153,26 @@ func TestCLIRunFolderPreflightFailurePrintsReason(t *testing.T) {
 	}
 }
 
+func TestCLIRunFolderResumeWithoutStateRecommendsFresh(t *testing.T) {
+	folder := "tasks/validation only"
+	service := &fakeService{runFolderErr: errTest("No resumable run state was found in /tmp/state; this can happen when --resume selected a validation-only preflight record.\nStart fresh: promptgrinder run-folder 'tasks/validation only' --fresh")}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"--plain", "run-folder", folder, "--resume", "--detach=false"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected resume failure")
+	}
+	got := out.String()
+	for _, want := range []string{"No resumable run state was found", "validation-only preflight", "Start fresh: promptgrinder run-folder 'tasks/validation only' --fresh", "Result: failed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Resume: promptgrinder run-folder") {
+		t.Fatalf("validation-only resume error repeated the unusable resume hint: %q", got)
+	}
+}
+
 func TestNamedWorkerLaunchersRegisterRuntimeAdapters(t *testing.T) {
 	launchers := namedWorkerLaunchers(pgruntime.Service{})
 	for _, name := range []string{"codex", "antigravity"} {

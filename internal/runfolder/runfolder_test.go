@@ -1211,7 +1211,7 @@ func TestExplicitResumeRejectsChangedCompletedPrefix(t *testing.T) {
 	}
 	writePromptFile(t, dir, "10-implement-a.md", "changed")
 	_, err := Run(dir, Options{HomeDir: home, Resume: true}, &fakeLauncher{})
-	if err == nil || !strings.Contains(err.Error(), "no run state found") {
+	if err == nil || !strings.Contains(err.Error(), "No resumable run state was found") || !strings.Contains(err.Error(), "validation-only preflight") || !strings.Contains(err.Error(), "--fresh") {
 		t.Fatalf("err = %v", err)
 	}
 }

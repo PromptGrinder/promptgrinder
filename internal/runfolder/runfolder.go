@@ -1407,6 +1407,26 @@ type folderStore struct {
 	LegacyRoot string
 }
 
+// noResumableRunStateError identifies an explicit --resume request that chose
+// a sequence identity without a persisted execution run state. This can occur
+// after validation-only preflight selected a new identity; it is not safe to
+// treat that record as resumable.
+type noResumableRunStateError struct {
+	Root   string
+	Folder string
+}
+
+func (e noResumableRunStateError) Error() string {
+	return fmt.Sprintf("No resumable run state was found in %s; this can happen when --resume selected a validation-only preflight record.\nStart fresh: promptgrinder run-folder %s --fresh", e.Root, shellQuoteRunFolder(e.Folder))
+}
+
+func shellQuoteRunFolder(value string) string {
+	if value != "" && !strings.ContainsAny(value, " \t\n'\"\\$`!&;|<>()[]{}*?") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
 func folderStateRoot(homeDir, sequenceID string) string {
 	sequenceRoot := newSequenceStore(homeDir).Root
 	resolvedHome := filepath.Dir(filepath.Dir(sequenceRoot))
@@ -1430,7 +1450,7 @@ func (s folderStore) loadOrCreate(folder string, options Options) (RunState, boo
 				return RunState{}, false, fmt.Errorf("no unfinished run found in %s", s.Root)
 			}
 			if errors.Is(err, os.ErrNotExist) {
-				return RunState{}, false, fmt.Errorf("no run state found in %s", s.Root)
+				return RunState{}, false, noResumableRunStateError{Root: s.Root, Folder: folder}
 			}
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
