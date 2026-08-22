@@ -600,3 +600,20 @@ artifact and a clean retry baseline. Cancellation, timeout, `BLOCKED`, missing
 or malformed completion evidence, an unrelated/forbidden path, no reusable
 runtime session, another active worker, or a repeated partial result stops
 without source cleanup or automatic commit.
+
+## UC-19d — finish a capability audit that product-blocks implementation
+
+A hard-gate audit may complete successfully by proving that an authoritative
+data source or prerequisite is unavailable. Such a slice explicitly declares
+`gate_outcome: BLOCKED` and returns `STATUS: BLOCKED` with
+`NEXT_PROMPT_SAFE: no`. PromptGrinder still enforces its exact baseline and
+allowed/forbidden path policy; with `--commit-each`, it checkpoints only the
+scoped audit report. It then records the slice as `gate-blocked`, records the
+sequence as `product-blocked`, and does not launch dependent implementation
+slices.
+
+This is distinct from an execution failure: the terminal summary identifies a
+completed capability gate and its product outcome, while an undeclared
+`STATUS: BLOCKED` continues to be a failed worker. A product-blocked sequence
+cannot auto-recover or resume. Resolve the prerequisite and deliberately start
+a new compatible or fresh sequence.

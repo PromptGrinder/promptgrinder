@@ -271,6 +271,18 @@ same slice, but no later slice starts until it produces `PASS` and
 inspect the retained worker log and use `--resume` after a human repair when a
 failure is not recoverable.
 
+### Record a successful capability gate that blocks product work
+
+An ordinary `STATUS: BLOCKED` remains a failed worker result. For a hard-gate
+audit that can successfully prove an authoritative-data or prerequisite
+blocker, declare `gate_outcome: BLOCKED` in that slice's frontmatter. When the
+worker returns `STATUS: BLOCKED` and `NEXT_PROMPT_SAFE: no`, PromptGrinder
+checks the normal path policy, commits its scoped audit report with
+`--commit-each`, and marks the sequence `product-blocked`. Later slices do not
+launch, and the CLI reports this separately from an execution failure. A
+product-blocked sequence cannot be resumed until the prerequisite is resolved
+and a new compatible sequence is deliberately started.
+
 See [Slice DSL Reference](docs/slice-dsl.md) for the complete filename,
 frontmatter, path-policy, ordering, and completion-report contract.
 

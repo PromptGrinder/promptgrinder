@@ -423,6 +423,70 @@ func TestRunFolderDoesNotRecoverBlockedCompletion(t *testing.T) {
 	}
 }
 
+func TestCapabilityGateCheckpointsReportAndProductBlocksSequence(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-capability-gate.md", "---\nid: authoritative-data-gate\ntype: implement\ngate_outcome: BLOCKED\nallowed_paths: [reports/**]\n---\nAudit the authoritative data prerequisite.")
+	writePromptFile(t, dir, "20-implement-dependent.md", "---\nid: dependent-feature\ntype: implement\ndepends_on: [authoritative-data-gate]\n---\nThis must not launch after a blocked gate.")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+
+	launcher := &fakeLauncher{result: completionResult("BLOCKED", false)}
+	launcher.onLaunch = func(path string) {
+		if filepath.Base(path) != "10-implement-capability-gate.md" {
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "reports"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writePromptFile(t, filepath.Join(dir, "reports"), "authoritative-data.md", "The prerequisite is unavailable.\n")
+	}
+	events := []ProgressEvent{}
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true, Progress: func(event ProgressEvent) {
+		events = append(events, event)
+	}}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := namesFromCalls(launcher.calls); strings.Join(got, ",") != "10-implement-capability-gate.md" {
+		t.Fatalf("launched = %v", got)
+	}
+	if !strings.Contains(launcher.calls[0].Content, "# Capability-Gate Outcome") || !strings.Contains(launcher.calls[0].Content, "STATUS: BLOCKED") {
+		t.Fatalf("gate worker instructions = %q", launcher.calls[0].Content)
+	}
+	if summary.Run.Status != "product-blocked" || summary.Sequence.Status != "product-blocked" {
+		t.Fatalf("summary = %#v", summary)
+	}
+	gate, dependent := summary.Sequence.Items[0], summary.Sequence.Items[1]
+	if gate.Status != "gate-blocked" || gate.GateOutcome != "BLOCKED" || gate.CompletionStatus != "BLOCKED" || gate.NextPromptSafe == nil || *gate.NextPromptSafe {
+		t.Fatalf("gate = %#v", gate)
+	}
+	if dependent.Status != "pending" {
+		t.Fatalf("dependent = %#v", dependent)
+	}
+	if summary.Failed != nil {
+		t.Fatalf("completed gate reported as failure: %v", summary.Failed)
+	}
+	if commits := strings.TrimSpace(string(gitOutput(t, dir, "rev-list", "--count", "HEAD"))); commits != "2" {
+		t.Fatalf("gate report was not checkpointed exactly once: commits=%s", commits)
+	}
+	if names := strings.TrimSpace(string(gitOutput(t, dir, "show", "--format=", "--name-only", "HEAD"))); names != "reports/authoritative-data.md" {
+		t.Fatalf("gate commit files = %q", names)
+	}
+	foundGate, foundFailure := false, false
+	for _, event := range events {
+		foundGate = foundGate || event.Type == "prompt.gate-blocked"
+		foundFailure = foundFailure || event.Type == "prompt.failed"
+	}
+	if !foundGate || foundFailure {
+		t.Fatalf("events = %#v", events)
+	}
+
+	_, err = Run(dir, Options{RepoPath: dir, HomeDir: home, Resume: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "product-blocked") {
+		t.Fatalf("resume err = %v", err)
+	}
+}
+
 func TestRecoveryNeverBypassesSafetyFailures(t *testing.T) {
 	for _, message := range []string{
 		"path policy violation at completion: outside.txt (outside allowed paths)",

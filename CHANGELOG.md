@@ -4,6 +4,19 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.5.0 candidate
+
+- Added explicit `gate_outcome: BLOCKED` for hard-gate audit slices. A declared
+  gate can checkpoint its path-policy-approved report with `--commit-each`,
+  then ends the sequence as `product-blocked` without launching dependent
+  implementation slices.
+- Kept ordinary `STATUS: BLOCKED` as a failed worker result. Terminal and
+  sequence output now distinguish a completed product-blocking capability gate
+  from an execution failure and from a completed sequence.
+- Product-blocked sequences retain their audit evidence but cannot auto-retry
+  or resume until the prerequisite is resolved and a new compatible sequence
+  is deliberately started.
+
 ### v1.0.0-rc.4.3 candidate
 
 - Show the exact `promptgrinder sequence cancel <sequence-id>` command whenever a run-folder sequence starts.

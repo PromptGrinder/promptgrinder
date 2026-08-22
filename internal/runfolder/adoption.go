@@ -35,7 +35,7 @@ func (s sequenceStore) validateExplicitAdoption(folder, repoRoot string, prompts
 	if sequence.StateVersion > sequenceStateVersion {
 		return SequenceState{}, nil, fmt.Errorf("sequence %s uses unsupported state version %d; this PromptGrinder supports up to version %d", sequenceID, sequence.StateVersion, sequenceStateVersion)
 	}
-	if sequence.Status == "completed" || sequence.Status == "cancelled" {
+	if sequence.Status == "completed" || sequence.Status == "cancelled" || sequence.Status == "product-blocked" {
 		return SequenceState{}, nil, fmt.Errorf("sequence %s is %s and cannot be adopted; only unfinished sequences are eligible", sequenceID, sequence.Status)
 	}
 	if err := s.validateAdoptionLocation(sequence, folder, repoRoot); err != nil {

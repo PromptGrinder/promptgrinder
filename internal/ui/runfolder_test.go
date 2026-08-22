@@ -48,6 +48,24 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererDistinguishesCompletedCapabilityGate(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_gate", Folder: "tasks", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement-gate.md", Type: runfolder.TypeImplement, Status: "pending"}, {Name: "20-implement-dependent.md", Type: runfolder.TypeImplement, Status: "pending"}}, Total: 2})
+	unsafe := false
+	r.Update(runfolder.ProgressEvent{Type: "prompt.gate-blocked", PromptName: "10-implement-gate.md", PromptType: runfolder.TypeImplement, Status: "gate-blocked", WorkerID: "wrk_gate", Scope: "data-audit", Engine: "codex", Model: "gpt-5.6-terra", CompletionStatus: "BLOCKED", NextPromptSafe: &unsafe, Reason: "declared capability gate completed: product outcome BLOCKED", Total: 2, Completed: 1})
+	r.Finish(true)
+	got := out.String()
+	for _, want := range []string{"■ [1/2] 10-implement-gate.md|data-audit|codex/gpt-5.6-terra|<1s", "Completion: STATUS=BLOCKED NEXT_PROMPT_SAFE=no", "Result: product-blocked"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Result: failed") {
+		t.Fatalf("gate was rendered as an execution failure:\n%s", got)
+	}
+}
+
 func TestRunFolderRendererShowsAutomaticRecovery(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})

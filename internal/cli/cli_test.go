@@ -2449,6 +2449,25 @@ func TestCLIRunFolderPrintsAggregateSummary(t *testing.T) {
 	}
 }
 
+func TestCLIRunFolderPrintsProductBlockedOutcome(t *testing.T) {
+	unsafe := false
+	service := &fakeService{runFolderSummary: pgruntime.RunFolderSummary{
+		Run:      runfolder.RunState{Status: "product-blocked", Completed: []string{"10-implement-gate.md"}},
+		Sequence: &runfolder.SequenceState{SequenceID: "seq_gate", Status: "product-blocked", Items: []runfolder.SequenceItem{{PromptName: "10-implement-gate.md", Status: "gate-blocked", CompletionStatus: "BLOCKED", NextPromptSafe: &unsafe}}},
+		Prompts:  []runfolder.Prompt{{Name: "10-implement-gate.md", Type: runfolder.TypeImplement}},
+	}}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"--plain", "run-folder", "specs", "--detach=false"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Product outcome: blocked.") || strings.Contains(out.String(), "Result: failed") {
+		t.Fatalf("run-folder output = %q", out.String())
+	}
+}
+
 func TestCLIRunFolderForegroundRendersLifecycleWithoutDuplicateInventory(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("PROMPTGRINDER_PLAIN", "")

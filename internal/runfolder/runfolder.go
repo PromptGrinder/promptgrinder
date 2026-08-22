@@ -180,6 +180,7 @@ type Prompt struct {
 	RolePolicy  *RolePolicy
 	DependsOn   []string
 	ContextMode ContextMode
+	GateOutcome string
 }
 
 type FolderInspection struct {
@@ -253,6 +254,7 @@ type SequenceItem struct {
 	PromptID         string      `json:"prompt_id,omitempty"`
 	DependsOn        []string    `json:"depends_on,omitempty"`
 	ContextMode      ContextMode `json:"context_mode,omitempty"`
+	GateOutcome      string      `json:"gate_outcome,omitempty"`
 	PromptHash       string      `json:"prompt_hash,omitempty"`
 	PolicyHash       string      `json:"policy_hash,omitempty"`
 	ContentHash      string      `json:"content_hash"`
@@ -310,6 +312,7 @@ type PromptState struct {
 	RecoveryAttempts int                        `json:"recovery_attempts,omitempty"`
 	RecoveryMode     string                     `json:"recovery_mode,omitempty"`
 	RecoveryArtifact string                     `json:"recovery_artifact,omitempty"`
+	GateOutcome      string                     `json:"gate_outcome,omitempty"`
 	EngineSessionID  string                     `json:"engine_session_id,omitempty"`
 	GitBaseline      *workerpathpolicy.Snapshot `json:"git_baseline,omitempty"`
 	Worker           state.Worker               `json:"-"`
@@ -414,7 +417,8 @@ func inspectPrompt(promptPath, name string) (Prompt, error) {
 		id = strings.TrimSuffix(name, filepath.Ext(name))
 	}
 	role, _ := task.Metadata["role"].(string)
-	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"]), ContextMode: contextModeValue(task.Metadata["context_mode"])}, nil
+	gateOutcome, _ := task.Metadata["gate_outcome"].(string)
+	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"]), ContextMode: contextModeValue(task.Metadata["context_mode"]), GateOutcome: gateOutcome}, nil
 }
 
 func contextModeValue(value any) ContextMode {
@@ -549,6 +553,9 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	if err != nil {
 		return Summary{}, err
 	}
+	if sequenceResumed && sequence.Status == "product-blocked" {
+		return Summary{Sequence: &sequence, Prompts: prompts, Started: true, Resumed: true}, fmt.Errorf("sequence %s is product-blocked by a completed capability gate; resolve the prerequisite and start a new compatible sequence", sequence.SequenceID)
+	}
 	store := folderStore{Root: folderStateRoot(options.HomeDir, sequence.SequenceID), LegacyRoot: filepath.Join(absFolder, ".promptgrinder")}
 	runState, resumed, err := store.loadOrCreate(absFolder, options)
 	if err != nil {
@@ -587,7 +594,10 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 				stopSupervisor("cancelled")
 				return
 			}
-			status := "completed"
+			status := sequence.Status
+			if status == "" || status == "running" {
+				status = "completed"
+			}
 			if runErr != nil {
 				status = "interrupted"
 				if sequence.Status == "failed" {
@@ -597,7 +607,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			stopSupervisor(status)
 			_ = sequenceStore.save(sequence)
 			eventType := "notification.success"
-			if status != "completed" {
+			if status != "completed" && status != "product-blocked" {
 				eventType = "notification.failure"
 			}
 			emitProgress(options, ProgressEvent{Type: eventType, SequenceID: sequence.SequenceID, Folder: sequence.Folder, Status: sequence.Status, Completed: sequence.Progress().Succeeded, Total: len(sequence.Items)})
@@ -812,6 +822,27 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			identity := workeridentity.FromWorker(promptState.Worker)
 			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, RecoveryArtifact: promptState.RecoveryArtifact, Completed: len(runState.Completed), Total: len(prompts)})
 			return summary, err
+		}
+		if promptState.GateOutcome == "BLOCKED" {
+			if err := store.savePrompt(promptState); err != nil {
+				return summary, err
+			}
+			sequence.mark(prompt.Name, "gate-blocked", promptState.Worker, promptState.FinishedAt, promptState.CompletionReason)
+			sequence.refreshSummary()
+			finished := time.Now().UTC()
+			sequence.FinishedAt = &finished
+			_ = sequenceStore.save(sequence)
+			_ = store.saveSummary(sequence)
+			runState.Status = "product-blocked"
+			runState.Current = prompt.Name
+			runState.Completed = append(runState.Completed, prompt.Name)
+			runState.touch()
+			_ = store.saveRun(runState)
+			summary.Run, summary.Sequence = runState, &sequence
+			identity := workeridentity.FromWorker(promptState.Worker)
+			emitProgress(options, ProgressEvent{Type: "prompt.gate-blocked", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "gate-blocked", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "run.product-blocked", SequenceID: sequence.SequenceID, Status: "product-blocked", Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
+			return summary, nil
 		}
 		if err := store.savePrompt(promptState); err != nil {
 			return summary, err
@@ -1041,7 +1072,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHABefore, _ = gitSHA(repoRoot)
 	}
-	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach, prompt.RolePolicy)
+	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach, prompt.RolePolicy, prompt.GateOutcome)
 	if err != nil {
 		return promptState, err
 	}
@@ -1088,7 +1119,16 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 		promptState.Worker.EngineResult.CompletionStatus = promptState.CompletionStatus
 		promptState.Worker.EngineResult.NextPromptSafe = promptState.NextPromptSafe
 		promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
-		if semanticErr := promptState.Worker.EngineResult.OrderedCompletionError(); semanticErr != nil {
+		if prompt.GateOutcome == "BLOCKED" {
+			if promptState.CompletionStatus == "BLOCKED" && promptState.NextPromptSafe != nil && !*promptState.NextPromptSafe {
+				promptState.GateOutcome = "BLOCKED"
+				promptState.CompletionReason = "declared capability gate completed: product outcome BLOCKED"
+				promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
+			} else {
+				promptState.CompletionReason = "declared gate_outcome BLOCKED requires STATUS: BLOCKED and NEXT_PROMPT_SAFE: no"
+				promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
+			}
+		} else if semanticErr := promptState.Worker.EngineResult.OrderedCompletionError(); semanticErr != nil {
 			promptState.CompletionReason = semanticErr.Error()
 			promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
 		}
@@ -1105,7 +1145,7 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 	if worker.EngineResult == nil {
 		promptState.CompletionReason = "worker produced no structured completion result"
 	}
-	if promptState.CompletionReason != "" {
+	if promptState.CompletionReason != "" && promptState.GateOutcome == "" {
 		if promptState.Worker.EngineResult == nil {
 			promptState.Worker.EngineResult = &state.EngineResult{CompletionReason: promptState.CompletionReason}
 		} else {
@@ -1222,7 +1262,7 @@ func promptPolicyViolations(prompt Prompt, slicePolicy workerdomain.WorkerPolicy
 	return append(violations, roleViolations...), nil
 }
 
-func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RolePolicy) (string, error) {
+func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RolePolicy, gateOutcome string) (string, error) {
 	active, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -1239,6 +1279,9 @@ func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RoleP
 		assembledBody += promptGrinderCommitOwnershipContract
 	}
 	assembledBody += orderedCompletionContract
+	if gateOutcome == "BLOCKED" {
+		assembledBody += capabilityGateCompletionContract
+	}
 	if ok {
 		return frontmatter + assembledBody, nil
 	}
@@ -1303,6 +1346,22 @@ STATUS: PASS
 NEXT_PROMPT_SAFE: yes
 
 Use STATUS: BLOCKED or STATUS: PARTIAL and NEXT_PROMPT_SAFE: no when the task is not fully and safely complete. PromptGrinder will not advance to a later slice unless the final report is unambiguous PASS/yes.
+`
+
+const capabilityGateCompletionContract = `
+
+# Capability-Gate Outcome
+
+This slice is an explicitly declared hard-gate audit. If your completed audit
+establishes that the prerequisite is unavailable, end with exactly:
+
+STATUS: BLOCKED
+NEXT_PROMPT_SAFE: no
+
+That records a successful capability gate: PromptGrinder will checkpoint only
+your permitted evidence and mark product implementation blocked. Do not report
+PASS merely to advance the sequence. Any other completion remains an ordinary
+completion-contract failure.
 `
 
 func splitFrontmatter(text string) (string, string, bool) {
@@ -1597,6 +1656,7 @@ func sequenceStatus(items []SequenceItem) string {
 	hasFailed := false
 	hasInterrupted := false
 	hasCancelled := false
+	hasProductBlocked := false
 	hasPending := false
 	for _, item := range items {
 		switch item.Status {
@@ -1606,6 +1666,8 @@ func sequenceStatus(items []SequenceItem) string {
 			hasInterrupted = true
 		case "cancelled":
 			hasCancelled = true
+		case "gate-blocked":
+			hasProductBlocked = true
 		case "pending", "running":
 			hasPending = true
 		}
@@ -1619,6 +1681,9 @@ func sequenceStatus(items []SequenceItem) string {
 	if hasCancelled {
 		return "cancelled"
 	}
+	if hasProductBlocked {
+		return "product-blocked"
+	}
 	if hasPending {
 		return "running"
 	}
@@ -1626,22 +1691,23 @@ func sequenceStatus(items []SequenceItem) string {
 }
 
 type SequenceProgress struct {
-	SequenceID   string     `json:"sequence_id"`
-	Folder       string     `json:"folder"`
-	Status       string     `json:"status"`
-	Total        int        `json:"total"`
-	Succeeded    int        `json:"succeeded"`
-	Failed       int        `json:"failed"`
-	Interrupted  int        `json:"interrupted"`
-	Cancelled    int        `json:"cancelled"`
-	Pending      int        `json:"pending"`
-	Current      string     `json:"current"`
-	Next         string     `json:"next"`
-	LastWorkerID string     `json:"last_worker_id"`
-	CreatedAt    *time.Time `json:"created_at,omitempty"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	UpdatedAt    *time.Time `json:"updated_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	SequenceID     string     `json:"sequence_id"`
+	Folder         string     `json:"folder"`
+	Status         string     `json:"status"`
+	Total          int        `json:"total"`
+	Succeeded      int        `json:"succeeded"`
+	Failed         int        `json:"failed"`
+	Interrupted    int        `json:"interrupted"`
+	Cancelled      int        `json:"cancelled"`
+	ProductBlocked int        `json:"product_blocked"`
+	Pending        int        `json:"pending"`
+	Current        string     `json:"current"`
+	Next           string     `json:"next"`
+	LastWorkerID   string     `json:"last_worker_id"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	UpdatedAt      *time.Time `json:"updated_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 }
 
 func (s SequenceState) Progress() SequenceProgress {
@@ -1662,6 +1728,12 @@ func (s SequenceState) Progress() SequenceProgress {
 			}
 		case "cancelled":
 			progress.Cancelled++
+		case "gate-blocked":
+			progress.Succeeded++
+			progress.ProductBlocked++
+			if progress.Current == "" {
+				progress.Current = item.PromptName
+			}
 		case "running":
 			progress.Pending++
 			if progress.Current == "" {
@@ -1686,7 +1758,7 @@ func (s SequenceState) SummaryMarkdown() string {
 	fmt.Fprintf(&b, "# PromptGrinder Sequence Summary\n\n")
 	fmt.Fprintf(&b, "- Sequence: `%s`\n", s.SequenceID)
 	fmt.Fprintf(&b, "- Status: `%s`\n", s.Status)
-	fmt.Fprintf(&b, "- Prompts: %d total, %d succeeded, %d failed, %d pending\n", progress.Total, progress.Succeeded, progress.Failed, progress.Pending)
+	fmt.Fprintf(&b, "- Prompts: %d total, %d succeeded, %d product-blocked, %d failed, %d pending\n", progress.Total, progress.Succeeded, progress.ProductBlocked, progress.Failed, progress.Pending)
 	fmt.Fprintf(&b, "- Reported token usage: %s\n", s.TokenUsage)
 	if len(s.Items) > 0 {
 		fmt.Fprintln(&b, "\n## Token Usage by Slice")
@@ -1866,13 +1938,13 @@ func CancelSequence(homeDir, sequenceID string) (SequenceState, error) {
 	if err != nil {
 		return SequenceState{}, err
 	}
-	if sequence.Status == "completed" || sequence.Status == "failed" {
+	if sequence.Status == "completed" || sequence.Status == "failed" || sequence.Status == "product-blocked" {
 		return sequence, fmt.Errorf("sequence %s is already %s", sequenceID, sequence.Status)
 	}
 	now := time.Now().UTC()
 	for i := range sequence.Items {
 		switch sequence.Items[i].Status {
-		case "succeeded", "skipped", "failed":
+		case "succeeded", "skipped", "failed", "gate-blocked":
 			continue
 		default:
 			sequence.Items[i].Status = "cancelled"
@@ -2083,7 +2155,7 @@ func (s sequenceStore) findCompatibleResume(folder, repoRoot string, prompts []P
 		return SequenceState{}, false, err
 	}
 	for _, sequence := range sequences {
-		if sequence.Folder != folder || (sequence.RepositoryPath != "" && sequence.RepositoryPath != repoRoot) || sequence.Status == "completed" || sequence.Status == "cancelled" || len(sequence.Items) != len(prompts) {
+		if sequence.Folder != folder || (sequence.RepositoryPath != "" && sequence.RepositoryPath != repoRoot) || sequence.Status == "completed" || sequence.Status == "cancelled" || sequence.Status == "product-blocked" || len(sequence.Items) != len(prompts) {
 			continue
 		}
 		compatible := true
@@ -2209,7 +2281,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 		if err != nil {
 			return SequenceState{}, err
 		}
-		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), ContextMode: prompt.ContextMode, PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
+		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), ContextMode: prompt.ContextMode, GateOutcome: prompt.GateOutcome, PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
 		engineName, taskEngine, err := effectivePromptEngine(prompt.Path, cfg, options.EngineOverride)
 		if err != nil {
 			return SequenceState{}, err

@@ -3210,6 +3210,23 @@ func printRunFolderProgress(stdout io.Writer, event pgruntime.RunFolderProgressE
 		if event.CompletionStatus != "" || event.NextPromptSafe != nil {
 			fmt.Fprintf(stdout, "Completion: STATUS=%s NEXT_PROMPT_SAFE=%s\n", valueOrDash(event.CompletionStatus), sequenceBool(event.NextPromptSafe))
 		}
+	case "prompt.gate-blocked":
+		fmt.Fprintf(stdout, "[%d/%d] Capability gate completed: %s", event.Completed, event.Total, event.PromptName)
+		if event.WorkerID != "" {
+			fmt.Fprintf(stdout, " via %s", event.WorkerID)
+		}
+		fmt.Fprintln(stdout)
+		if event.Reason != "" {
+			fmt.Fprintf(stdout, "Outcome: product-blocked (%s)\n", event.Reason)
+		}
+		if event.CompletionStatus != "" || event.NextPromptSafe != nil {
+			fmt.Fprintf(stdout, "Completion: STATUS=%s NEXT_PROMPT_SAFE=%s\n", valueOrDash(event.CompletionStatus), sequenceBool(event.NextPromptSafe))
+		}
+	case "run.product-blocked":
+		fmt.Fprintf(stdout, "Sequence %s product-blocked after %d/%d prompt(s)\n", event.SequenceID, event.Completed, event.Total)
+		if event.Reason != "" {
+			fmt.Fprintf(stdout, "Reason: %s\n", event.Reason)
+		}
 	case "run.completed":
 		fmt.Fprintf(stdout, "Sequence %s completed: %d/%d prompt(s)\n", event.SequenceID, event.Completed, event.Total)
 	}
@@ -3233,13 +3250,15 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 			fmt.Fprintf(stdout, "Supervisor log: %s\n", sequence.Supervisor.LogPath)
 		}
 	}
-	fmt.Fprintf(stdout, "Progress: %d/%d done, %d failed, %d interrupted, %d pending\n", progress.Succeeded, progress.Total, progress.Failed, progress.Interrupted, progress.Pending)
+	fmt.Fprintf(stdout, "Progress: %d/%d done, %d product-blocked, %d failed, %d interrupted, %d pending\n", progress.Succeeded, progress.Total, progress.ProductBlocked, progress.Failed, progress.Interrupted, progress.Pending)
 	if progress.Current != "" {
 		label := "Running"
 		if sequence.Status == "failed" {
 			label = "Failed"
 		} else if sequence.Status == "interrupted" {
 			label = "Interrupted"
+		} else if sequence.Status == "product-blocked" {
+			label = "Product-blocked"
 		}
 		fmt.Fprintf(stdout, "%s: %s\n", label, progress.Current)
 	}
@@ -3420,6 +3439,9 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 			switch sequence.Status {
 			case "completed":
 				fmt.Fprintln(stdout, "State: completed")
+				return nil
+			case "product-blocked":
+				fmt.Fprintln(stdout, "State: product-blocked")
 				return nil
 			case "failed", "cancelled", "interrupted":
 				fmt.Fprintf(stdout, "State: %s\n", sequence.Status)
@@ -3655,7 +3677,14 @@ func printRunFolderAggregate(stdout io.Writer, summary pgruntime.RunFolderSummar
 			fmt.Fprintf(stdout, "Role-policy fingerprint changes recorded: %d\n", len(summary.Adoption.PolicyHashChanges))
 		}
 	}
-	if summary.Run.Status != "completed" || summary.Sequence == nil {
+	if summary.Sequence == nil {
+		return
+	}
+	if summary.Run.Status == "product-blocked" {
+		fmt.Fprintln(stdout, "Product outcome: blocked. Resolve the recorded capability gate before starting a new compatible sequence.")
+		return
+	}
+	if summary.Run.Status != "completed" {
 		return
 	}
 	fmt.Fprintln(stdout, "Summary:")
