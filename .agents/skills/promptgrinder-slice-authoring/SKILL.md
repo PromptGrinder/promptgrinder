@@ -20,7 +20,7 @@ limit.
 ## Resolve hard gates before a commit-each train
 
 - Do not place a capability audit that may legitimately return a product `BLOCKED` outcome before runnable implementation slices in the same `run-folder` sequence. `STATUS: BLOCKED` / `NEXT_PROMPT_SAFE: no` correctly stops the runner, but also makes `--commit-each` unable to commit the blocker report automatically.
-- Run such an audit as its own sequence, review and commit its evidence, then author or enable the implementation train only when the gate is ready. If a user explicitly requires a complete future graph up front, keep the blocked-dependent work as non-runnable planning material or state that the first run is expected to stop and requires manual report capture.
+- Run such an audit as its own sequence, review and commit its evidence, then author or enable the implementation train only when the gate is ready. If a user explicitly requires a complete future graph up front, put its blocked-dependent `.pg` files in a non-top-level holding directory such as `blocked-until-prerequisites/`: `run-folder` discovers only visible top-level work orders. Move them into the runnable folder only after the gate is ready.
 - Do not disguise a product blocker as `STATUS: PASS` merely to continue into implementation. A successful report and a safe next no-op are different from permission to implement.
 
 ## Write safe prompts
