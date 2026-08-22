@@ -71,6 +71,13 @@ is too large for one safe prompt: separate the domain change, CLI integration,
 tests, and final verification so each worker receives a smaller context and
 produces a reviewable result.
 
+Start new trains from the copyable
+[`baseline-train`](.agents/skills/promptgrinder-slice-authoring/templates/baseline-train)
+template. It provides the shared specification, an implementation and
+verification slice, safe path/validation placeholders, and the required
+completion contract; replace every placeholder and add only the slices the
+feature needs.
+
 For example, prepare a new `project archive` feature as three bounded slices:
 
 ```sh

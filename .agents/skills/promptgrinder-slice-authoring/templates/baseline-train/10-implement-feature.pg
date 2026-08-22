@@ -1,0 +1,36 @@
+---
+id: <feature>-implementation
+type: implement
+role: <registered-role>
+depends_on: []
+context_mode: fresh
+working_directory: .
+timeout: 45m
+engine:
+  name: codex
+  model: <approved-model>
+  sandbox: workspace-write
+acceptance_criteria:
+  - <observable implementation outcome>
+allowed_paths:
+  - <repository-relative-path>/**
+forbidden_paths:
+  - <adjacent-surface-not-owned-by-this-slice>/**
+expected_paths:
+  - <repository-relative-file>
+validation:
+  - <focused-test-or-build-command>
+  - git diff --check
+---
+
+# Implement <feature>
+
+Read `00-specification.md`, applicable repository instructions and skills, and
+the committed prerequisite evidence. Implement only the acceptance criteria.
+Do not modify forbidden paths, invent backend-owned semantics, or perform Git
+commits when the outer run uses `--commit-each`.
+
+State the actual validation commands and results in the final response.
+
+STATUS: PASS|PARTIAL|BLOCKED
+NEXT_PROMPT_SAFE: yes|no

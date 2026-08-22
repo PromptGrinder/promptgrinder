@@ -46,6 +46,13 @@ runnable only when frontmatter declares both `id` and `type`.
 
 ## Complete slice
 
+For a complete, copyable train structure—including shared specification,
+implementation, verification, path boundaries, and the required completion
+contract—start with the
+[`baseline-train`](../.agents/skills/promptgrinder-slice-authoring/templates/baseline-train)
+template. Copy it into the target repository and replace every placeholder
+before running validation.
+
 ```markdown
 ---
 id: ranking-history-api

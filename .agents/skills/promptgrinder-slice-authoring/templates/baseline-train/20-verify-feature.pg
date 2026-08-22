@@ -1,0 +1,36 @@
+---
+id: <feature>-verification
+type: verify
+role: <registered-role>
+depends_on:
+  - <feature>-implementation
+context_mode: fresh
+working_directory: .
+timeout: 45m
+engine:
+  name: codex
+  model: <approved-model>
+  sandbox: workspace-write
+acceptance_criteria:
+  - <focused feature behaviour is verified>
+  - <required component or repository gate is green>
+allowed_paths:
+  - <implementation-path>/**
+  - <test-path>/**
+  - docs/**
+forbidden_paths:
+  - <unrelated-surface>/**
+validation:
+  - <required-component-or-repository-gate>
+  - git diff --check
+---
+
+# Verify <feature>
+
+Read the shared specification and implementation handoff. Run the declared
+gate. Fix only regressions within this slice's path policy; otherwise report
+the exact blocker, command, and evidence. Update durable documentation when
+the shared specification requires it.
+
+STATUS: PASS|PARTIAL|BLOCKED
+NEXT_PROMPT_SAFE: yes|no
