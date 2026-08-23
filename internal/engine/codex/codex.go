@@ -150,6 +150,7 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 		}
 	}
 	result.CompletionStatus, result.NextPromptSafe, result.CompletionReason = state.ParseOrderedCompletionReport(result.Summary)
+	result.FailureReport = state.ParseFailureReport(result.Summary)
 	return result
 }
 

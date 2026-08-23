@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"promptgrinder/internal/runfolder"
+	"promptgrinder/internal/state"
 )
 
 type rendererTicker interface {
@@ -141,10 +142,36 @@ func (r *RunFolderRenderer) Finish(success bool) {
 		fmt.Fprintln(r.w, "Result: succeeded")
 		return
 	}
-	fmt.Fprintln(r.w, "Result: failed")
+	failed := r.latestFailureLocked()
+	label, summary := "failed", ""
+	if failed.CompletionStatus == "BLOCKED" {
+		label = "BLOCKED"
+	} else if failed.FailureReport != nil && failed.FailureReport.Category == "cancellation" {
+		label = "cancelled"
+	}
+	if failed.FailureReport != nil {
+		summary = failed.FailureReport.Summary
+	}
+	if summary == "" {
+		summary = failed.Reason
+	}
+	if summary != "" {
+		fmt.Fprintf(r.w, "Result: %s — %s\n", label, summary)
+	} else {
+		fmt.Fprintf(r.w, "Result: %s\n", label)
+	}
 	if r.folder != "" {
 		fmt.Fprintln(r.w, "Resume: promptgrinder run-folder "+shellQuote(r.folder)+" --resume")
 	}
+}
+
+func (r *RunFolderRenderer) latestFailureLocked() runfolder.ProgressEvent {
+	for i := len(r.items) - 1; i >= 0; i-- {
+		if r.items[i].Status == "failed" {
+			return r.details[r.items[i].Name]
+		}
+	}
+	return runfolder.ProgressEvent{}
 }
 
 func (r *RunFolderRenderer) hasProductBlockedLocked() bool {
@@ -386,10 +413,7 @@ func failureDetailLines(event runfolder.ProgressEvent) []string {
 	if event.Status != "failed" && event.Status != "gate-blocked" && event.Type != "prompt.failed" && event.Type != "prompt.recovering" && event.Type != "prompt.gate-blocked" {
 		return nil
 	}
-	lines := make([]string, 0, 2)
-	if event.Reason != "" {
-		lines = append(lines, "  Reason: "+event.Reason)
-	}
+	lines := make([]string, 0, 12)
 	if event.RecoveryArtifact != "" {
 		lines = append(lines, "  Retained artifact: "+event.RecoveryArtifact)
 	}
@@ -407,7 +431,78 @@ func failureDetailLines(event runfolder.ProgressEvent) []string {
 		}
 		lines = append(lines, fmt.Sprintf("  Completion: STATUS=%s NEXT_PROMPT_SAFE=%s", status, safe))
 	}
+	if report := event.FailureReport; report != nil {
+		if report.Category != "" {
+			lines = append(lines, "  Failure type: "+failureCategoryLabel(report.Category))
+		}
+		if report.Summary != "" {
+			lines = append(lines, "  Failure summary: "+report.Summary)
+		}
+		lines = append(lines, renderFailureEvidence(report)...)
+		if report.NextAction != "" {
+			lines = append(lines, "  Next action: "+report.NextAction)
+		}
+		if failureReportTruncated(report) && event.LogPath != "" {
+			lines = append(lines, "  See worker log for remaining details: "+event.LogPath)
+		}
+		return lines
+	}
+	if event.Reason != "" {
+		lines = append(lines, "  Reason: "+event.Reason)
+	}
 	return lines
+}
+
+func failureCategoryLabel(category string) string {
+	switch category {
+	case "product-test":
+		return "product/test failure"
+	case "environment-capability":
+		return "environment/capability block"
+	case "path-policy":
+		return "path-policy violation"
+	case "worker-crash":
+		return "worker/tool crash"
+	case "cancellation":
+		return "cancellation"
+	default:
+		return category
+	}
+}
+
+func renderFailureEvidence(report *state.FailureReport) []string {
+	lines := make([]string, 0, 10)
+	if len(report.FeatureEvidence) > 0 {
+		lines = append(lines, "  Feature evidence:")
+		for _, item := range report.FeatureEvidence[:min(len(report.FeatureEvidence), 4)] {
+			lines = append(lines, "    - "+item)
+		}
+	}
+	if len(report.BlockingChecks) > 0 {
+		lines = append(lines, "  Blocking checks:")
+		for _, check := range report.BlockingChecks[:min(len(report.BlockingChecks), 4)] {
+			lines = append(lines, "    - "+check.Summary)
+			for _, detail := range check.Details[:min(len(check.Details), 2)] {
+				lines = append(lines, "      - "+detail)
+			}
+		}
+	}
+	if report.EvidenceReport != "" {
+		lines = append(lines, "  Evidence report: "+report.EvidenceReport)
+	}
+	return lines
+}
+
+func failureReportTruncated(report *state.FailureReport) bool {
+	if len(report.FeatureEvidence) > 4 || len(report.BlockingChecks) > 4 {
+		return true
+	}
+	for _, check := range report.BlockingChecks {
+		if len(check.Details) > 2 {
+			return true
+		}
+	}
+	return false
 }
 
 func stateIcon(status string) string {

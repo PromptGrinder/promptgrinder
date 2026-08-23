@@ -193,6 +193,15 @@ than guessing. Exact worker IDs, paths, policy, and logs remain in worker and
 JSON detail. The active prompt uses the same `|`, `/`, `-`, and `\\` spinner as
 foreground shared `run` work. Failed rows show a copyable absolute worker-log
 path and use a local file hyperlink where the terminal supports it.
+When a worker returns `PARTIAL` or `BLOCKED` with an optional structured
+failure report, foreground output also shows the completion fields, failure
+type, independently blocking checks, evidence-report path, and next action.
+It bounds the display and directs users to the worker log only for remaining
+detail. The same additive fields are retained in `promptgrinder sequence <id>
+--json` and the sequence progress-event JSONL, so automation does not need to
+scrape terminal output. An undeclared `STATUS: BLOCKED` is displayed as a
+blocked result with its diagnostic, while it remains an ordinary failed worker
+for sequencing purposes.
 
 ### UC-17a: Select a model within cost and capability policy
 

@@ -3283,6 +3283,9 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 			}
 			fmt.Fprintln(stdout)
 		}
+		if item.FailureReport != nil {
+			printSequenceFailureReport(stdout, item.FailureReport)
+		}
 		if item.RecoveryArtifact != "" {
 			fmt.Fprintf(stdout, "     Retained recovery artifact: %s\n", item.RecoveryArtifact)
 		}
@@ -3292,6 +3295,27 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 		if item.RecoveryMode != "" {
 			fmt.Fprintf(stdout, "     Recovery mode: %s\n", item.RecoveryMode)
 		}
+	}
+}
+
+func printSequenceFailureReport(stdout io.Writer, report *state.FailureReport) {
+	if report.Category != "" {
+		fmt.Fprintf(stdout, "     Failure type: %s\n", report.Category)
+	}
+	if report.Summary != "" {
+		fmt.Fprintf(stdout, "     Failure summary: %s\n", report.Summary)
+	}
+	for _, check := range report.BlockingChecks {
+		fmt.Fprintf(stdout, "     Blocking check: %s\n", check.Summary)
+		for _, detail := range check.Details {
+			fmt.Fprintf(stdout, "       - %s\n", detail)
+		}
+	}
+	if report.EvidenceReport != "" {
+		fmt.Fprintf(stdout, "     Evidence report: %s\n", report.EvidenceReport)
+	}
+	if report.NextAction != "" {
+		fmt.Fprintf(stdout, "     Next action: %s\n", report.NextAction)
 	}
 }
 

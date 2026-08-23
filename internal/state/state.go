@@ -73,6 +73,29 @@ type EngineResult struct {
 	Cost                  *float64       `json:"cost,omitempty"`
 	CostCurrency          string         `json:"cost_currency,omitempty"`
 	Diagnostics           map[string]any `json:"diagnostics,omitempty"`
+	FailureReport         *FailureReport `json:"failure_report,omitempty"`
+}
+
+// FailureReport is optional structured evidence supplied in a worker's final
+// answer when an ordered slice cannot complete. It deliberately contains
+// concise, user-actionable facts rather than a copy of the worker log.
+//
+// The report is additive: workers that only provide the ordered completion
+// fields continue to work exactly as before.
+type FailureReport struct {
+	Category        string         `json:"category,omitempty"`
+	Summary         string         `json:"summary,omitempty"`
+	FeatureEvidence []string       `json:"feature_evidence,omitempty"`
+	BlockingChecks  []FailureCheck `json:"blocking_checks,omitempty"`
+	EvidenceReport  string         `json:"evidence_report,omitempty"`
+	NextAction      string         `json:"next_action,omitempty"`
+}
+
+// FailureCheck keeps independent validation failures separate so a terminal
+// renderer does not reduce them to one opaque reason.
+type FailureCheck struct {
+	Summary string   `json:"summary"`
+	Details []string `json:"details,omitempty"`
 }
 
 func (r EngineResult) Empty() bool {
@@ -89,7 +112,112 @@ func (r EngineResult) Empty() bool {
 		r.TokensTotal == nil &&
 		r.Cost == nil &&
 		r.CostCurrency == "" &&
-		len(r.Diagnostics) == 0
+		len(r.Diagnostics) == 0 &&
+		r.FailureReport == nil
+}
+
+// ParseFailureReport extracts an optional compact report from a final worker
+// message. The headings are intentionally plain Markdown so workers can state
+// useful evidence without coupling to an execution engine:
+//
+//	Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation
+//	Failure summary: short explanation
+//	Feature evidence:
+//	- completed check
+//	Blocking checks:
+//	- check: failed
+//	  - detail
+//	Evidence report: docs/features/.../handoff.md
+//	Next action: repair and rerun
+func ParseFailureReport(summary string) *FailureReport {
+	report := &FailureReport{}
+	section := ""
+	var current *FailureCheck
+	for _, raw := range strings.Split(summary, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if key, value, ok := strings.Cut(trimmed, ":"); ok {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "failure category":
+				report.Category = strings.TrimSpace(value)
+				section, current = "", nil
+				continue
+			case "failure summary", "failure reason":
+				report.Summary = strings.TrimSpace(value)
+				section, current = "", nil
+				continue
+			case "feature evidence":
+				section, current = "feature", nil
+				if value = strings.TrimSpace(value); value != "" {
+					report.FeatureEvidence = append(report.FeatureEvidence, value)
+				}
+				continue
+			case "blocking checks", "blocking check":
+				section, current = "blocking", nil
+				if value = strings.TrimSpace(value); value != "" {
+					report.BlockingChecks = append(report.BlockingChecks, FailureCheck{Summary: value})
+					current = &report.BlockingChecks[len(report.BlockingChecks)-1]
+				}
+				continue
+			case "evidence report", "handoff report":
+				report.EvidenceReport = strings.TrimSpace(value)
+				section, current = "", nil
+				continue
+			case "next action":
+				report.NextAction = strings.TrimSpace(value)
+				section, current = "", nil
+				continue
+			}
+		}
+		value := strings.TrimSpace(strings.TrimLeft(trimmed, "-* "))
+		if value == "" {
+			continue
+		}
+		switch section {
+		case "feature":
+			report.FeatureEvidence = append(report.FeatureEvidence, value)
+		case "blocking":
+			indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+			if current == nil || indent == 0 {
+				report.BlockingChecks = append(report.BlockingChecks, FailureCheck{Summary: value})
+				current = &report.BlockingChecks[len(report.BlockingChecks)-1]
+			} else {
+				current.Details = append(current.Details, value)
+			}
+		case "":
+			// Ignore ordinary prose: this parser must never mistake a complete
+			// final answer for a structured failure report.
+		}
+	}
+	if report.Category == "" && report.Summary == "" && len(report.FeatureEvidence) == 0 && len(report.BlockingChecks) == 0 && report.EvidenceReport == "" && report.NextAction == "" {
+		return nil
+	}
+	return report
+}
+
+// FailureReportForFailure returns either worker-declared evidence or a safe
+// compact fallback for crashes and orchestration failures.
+func FailureReportForFailure(result *EngineResult, reason string) *FailureReport {
+	if result != nil && result.FailureReport != nil {
+		return result.FailureReport
+	}
+	report := &FailureReport{Summary: strings.TrimSpace(reason)}
+	lower := strings.ToLower(reason)
+	switch {
+	case strings.Contains(lower, "path policy") || strings.Contains(lower, "forbidden path"):
+		report.Category = "path-policy"
+	case strings.Contains(lower, "cancel"):
+		report.Category = "cancellation"
+	case strings.Contains(lower, "credential") || strings.Contains(lower, "token") || strings.Contains(lower, "capability") || strings.Contains(lower, "not configured") || strings.Contains(lower, "unavailable"):
+		report.Category = "environment-capability"
+	case strings.Contains(lower, "worker status") || strings.Contains(lower, "launch") || strings.Contains(lower, "no structured completion"):
+		report.Category = "worker-crash"
+	default:
+		report.Category = "product-test"
+	}
+	return report
 }
 
 // ParseOrderedCompletionReport extracts the semantic completion fields from a

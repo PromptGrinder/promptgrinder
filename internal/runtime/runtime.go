@@ -1154,6 +1154,9 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 			}
 		}
 	}
+	if result.FailureReport == nil {
+		result.FailureReport = state.ParseFailureReport(result.Summary)
+	}
 	declaredCapabilityGate := isDeclaredCapabilityGateOutcome(worker, result, exitCode)
 	semanticFailure := exitCode == 0 && result.RejectsContinuation() && !declaredCapabilityGate
 	malformedSuccess := exitCode == 0 && worker.Engine == "codex" && strings.TrimSpace(result.Summary) == ""
@@ -1399,6 +1402,10 @@ func engineResultEventData(result state.EngineResult) map[string]any {
 	}
 	if len(result.Diagnostics) > 0 {
 		fields = append(fields, "diagnostics")
+	}
+	if result.FailureReport != nil {
+		fields = append(fields, "failure_report")
+		data["failure_report"] = result.FailureReport
 	}
 	data["reported_fields"] = fields
 	return data

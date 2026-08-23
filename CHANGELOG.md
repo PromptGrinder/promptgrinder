@@ -6,6 +6,12 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ### v1.0.0-rc.5.1 candidate
 
+- Added optional structured failure reports for `run-folder` workers. Foreground
+  output now shows declared completion status, failure type, independent
+  blocking checks, evidence-report path, and next action; the same additive
+  data is retained in sequence JSON and progress-event JSONL. Missing reports
+  receive a conservative crash, cancellation, path-policy, capability, or
+  product/test classification without changing sequence safety semantics.
 - When an explicit `run-folder --resume` selects a validation-only preflight
   record without persisted execution state, the failure now explains the
   possible cause and provides a copyable `--fresh` command instead of an

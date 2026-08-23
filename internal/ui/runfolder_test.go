@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"promptgrinder/internal/runfolder"
+	"promptgrinder/internal/state"
 )
 
 func inventory() []runfolder.ProgressPrompt {
@@ -63,6 +64,28 @@ func TestRunFolderRendererDistinguishesCompletedCapabilityGate(t *testing.T) {
 	}
 	if strings.Contains(got, "Result: failed") {
 		t.Fatalf("gate was rendered as an execution failure:\n%s", got)
+	}
+}
+
+func TestRunFolderRendererRendersStructuredBlockedReport(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_report", Folder: "tasks", Inventory: []runfolder.ProgressPrompt{{Name: "10-final-verify.pg", Type: runfolder.TypeVerify, Status: "pending"}}, Total: 1})
+	unsafe := false
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-final-verify.pg", PromptType: runfolder.TypeVerify, Status: "failed", CompletionStatus: "BLOCKED", NextPromptSafe: &unsafe, LogPath: "/tmp/worker.log", FailureReport: &state.FailureReport{
+		Category:        "environment-capability",
+		Summary:         "final verification incomplete",
+		FeatureEvidence: []string{"Slices 01–09: passed", "Targeted discovery behaviour: passed"},
+		BlockingChecks:  []state.FailureCheck{{Summary: "Backend full gate: failed", Details: []string{"35 fixture errors"}}, {Summary: "Local catalogue import: not run", Details: []string{"admin token unavailable"}}},
+		EvidenceReport:  "docs/features/example/handoffs/10-completion-report.md",
+		NextAction:      "repair fixtures and configure the local token",
+	}})
+	r.Finish(false)
+	got := out.String()
+	for _, want := range []string{"Result: BLOCKED — final verification incomplete", "Failure type: environment/capability block", "Feature evidence:", "Slices 01–09: passed", "Blocking checks:", "Backend full gate: failed", "Local catalogue import: not run", "Evidence report: docs/features/example/handoffs/10-completion-report.md", "Next action: repair fixtures and configure the local token", "Resume: promptgrinder run-folder tasks --resume"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
 	}
 }
 

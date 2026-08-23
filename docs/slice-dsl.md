@@ -181,6 +181,28 @@ duplicate fields, plus `PARTIAL`, `BLOCKED`, or `no`, stop the sequence.
 PromptGrinder also appends this requirement to runnable `run-folder` prompts,
 but including it in the slice makes the worker-facing contract unambiguous.
 
+When a slice returns `PARTIAL` or `BLOCKED`, it may also include this optional
+bounded failure report before the completion fields. PromptGrinder persists it
+with the sequence item, renders it immediately in foreground mode, and exposes
+the same fields through `promptgrinder sequence <id> --json` and sequence event
+JSONL. This does not change completion semantics.
+
+```text
+Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation
+Failure summary: one-line reason
+Feature evidence:
+- completed check
+Blocking checks:
+- check: failed or not run
+  - concise detail
+Evidence report: docs/features/.../handoffs/report.md
+Next action: repair, configure, or rerun action
+```
+
+The report is intentionally optional for compatibility. When absent,
+PromptGrinder derives a conservative category from the terminal failure and
+retains the worker log as the detailed source.
+
 ### Capability-gate outcomes
 
 Ordinarily `STATUS: BLOCKED` is a worker failure and no automatic checkpoint is

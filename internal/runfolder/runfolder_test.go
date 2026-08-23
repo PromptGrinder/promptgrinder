@@ -692,7 +692,7 @@ func TestEngineFailurePersistsOrderedCompletionFields(t *testing.T) {
 	unsafe := false
 	engineExitCode := 23
 	launcher := &fakeLauncher{result: &state.EngineResult{
-		Summary:        "STATUS: BLOCKED\nNEXT_PROMPT_SAFE: no",
+		Summary:        "Failure category: product-test\nFailure summary: backend full gate failed\nBlocking checks:\n- Fixture import: failed\n  - missing column\nEvidence report: docs/handoff.md\nNext action: update fixtures\nSTATUS: BLOCKED\nNEXT_PROMPT_SAFE: no",
 		EngineExitCode: &engineExitCode,
 		NextPromptSafe: &unsafe,
 	}}
@@ -704,6 +704,13 @@ func TestEngineFailurePersistsOrderedCompletionFields(t *testing.T) {
 	item := summary.Sequence.Items[0]
 	if item.ExitCode == nil || *item.ExitCode != engineExitCode || item.CompletionStatus != "BLOCKED" || item.NextPromptSafe == nil || *item.NextPromptSafe || item.CompletionReason != "STATUS is BLOCKED, not PASS" {
 		t.Fatalf("item = %#v", item)
+	}
+	if item.FailureReport == nil || item.FailureReport.Summary != "backend full gate failed" || len(item.FailureReport.BlockingChecks) != 1 || item.FailureReport.EvidenceReport != "docs/handoff.md" || item.FailureReport.NextAction != "update fixtures" {
+		t.Fatalf("failure report = %#v", item.FailureReport)
+	}
+	data, marshalErr := json.Marshal(summary.Sequence)
+	if marshalErr != nil || !strings.Contains(string(data), `"failure_report"`) || !strings.Contains(string(data), `"blocking_checks"`) {
+		t.Fatalf("sequence JSON = %s, err = %v", data, marshalErr)
 	}
 }
 
