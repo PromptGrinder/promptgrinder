@@ -9,8 +9,11 @@ are intentionally named and ordered for `promptgrinder run-folder`.
    in `00-specification.md`.
 2. Split independently verifiable outcomes into additional numbered slices;
    each slice consumes only committed predecessor output.
-3. Keep allowed paths narrow, list forbidden adjacent surfaces, and declare
-   only validation the slice must actually run.
+3. Use the complete role-owned module for ordinary implementation work (for
+   example `backend/**` or `mobile-android/**`). Reserve narrower grants for
+   actual parallel contention, shared/generated-contract ownership, test-only
+   slices (`src/test/**`), and documentation-only verification; declare only
+   validation the slice must actually run.
 4. Run `promptgrinder validate <folder> --repo .` before starting the train.
 
 Use a separate, committed gate sequence for a capability or product decision

@@ -4,6 +4,15 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.5.2 candidate
+
+- Documented the qualified runtime and terminal boundary prominently: macOS on
+  Apple silicon and Intel; Terminal.app, iTerm2, and headless execution; Codex
+  for `run` and `run-folder`; and Codex plus Antigravity for named workers.
+- Clarified slice-authoring guidance so ordinary implementation slices own a
+  complete role/module boundary, while genuinely concurrent, test-only, and
+  documentation-only work can use narrower declared scopes.
+
 ### v1.0.0-rc.5.1 candidate
 
 - Added optional structured failure reports for `run-folder` workers. Foreground

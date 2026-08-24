@@ -37,6 +37,11 @@ work orders or workers.
 
 Use `promptgrinder engines` and `promptgrinder engines describe <engine>` to
 see registered execution engines and their capabilities before assigning work.
+The supported release-candidate surface is macOS (Apple silicon and Intel),
+Terminal.app, iTerm2, and headless execution. Codex supports `run` and
+`run-folder`; Codex and Antigravity adapters are available for named workers.
+Other operating systems, terminals, and engines are not qualified or supported
+until explicitly documented.
 
 ## Work-order authoring and validation
 

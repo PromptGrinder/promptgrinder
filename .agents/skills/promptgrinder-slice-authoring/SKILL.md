@@ -30,7 +30,9 @@ limit.
 
 - Put executable task instructions in the Markdown body.
 - Use only supported frontmatter keys. Declare `id`, `type`, `role`, and `depends_on` for descriptive filenames and dependency-aware trains. Semantic keys include `acceptance_criteria`, `allowed_paths`, `forbidden_paths`, `validation`, and the hard-gate-only `gate_outcome: BLOCKED`; validate the prompt before running it.
-- Treat `role` as declared execution identity for ordinary folder runs; the slice's `allowed_paths` and `forbidden_paths` remain its enforced path policy. Do not claim that generated role YAML permissions are automatically merged.
+- Treat `role` as the outer execution boundary and align ordinary implementation slices with it: use the full owned module (for example `backend/**` or `mobile-android/**`) rather than a list of individual source files. Use a test role with only the relevant `src/test/**` subtree for test-only work, and `docs/**` for documentation-only verification.
+- Narrow a module grant only when slices will genuinely run concurrently, a shared/generated contract needs one explicit owner, or a worker is intentionally test- or documentation-only. Otherwise, serialize module work through dependencies; do not create brittle exclusions that prevent required compile-closure changes.
+- The slice's `allowed_paths` and `forbidden_paths` remain the enforced policy and can only narrow a registered role's boundary. Do not claim that generated role YAML permissions are automatically merged.
 - Keep paths repository-relative. Make forbidden paths override allowed paths.
 - State concrete behavior, tests, compatibility expectations, and non-goals. Avoid vague requests such as “finish the feature.”
 - Every sequence that adds or changes a user-visible feature must include updating `docs/use-cases.md` in the implementing slice or a dedicated documentation slice before final verification.

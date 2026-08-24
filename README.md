@@ -4,6 +4,18 @@
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
+## Supported today
+
+PromptGrinder currently supports **macOS** on Apple silicon and Intel. It can
+run workers in **Terminal.app**, **iTerm2**, or **headless** mode. The built-in
+**Codex CLI** engine supports one-off `run` and ordered `run-folder` workflows;
+named workers additionally support the **Codex** and **Antigravity** adapters.
+
+Linux and Windows, other terminal applications, and other AI engines are not
+qualified or supported for this release candidate. Run `promptgrinder doctor`
+to inspect the available local engines and terminal adapters before starting
+work.
+
 ## Quick start
 
 Run these commands from the root of the Git repository where PromptGrinder
@@ -836,7 +848,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.4.2` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.5.2` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
