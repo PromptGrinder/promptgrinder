@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,6 +56,7 @@ type Options struct {
 	RepoPath                string
 	Template                string
 	EngineOverride          string
+	SandboxOverride         string
 	IncludeSpecification    bool
 	RecoveryAttempts        int
 	HomeDir                 string
@@ -130,30 +130,33 @@ type Summary struct {
 }
 
 type ProgressEvent struct {
-	Type             string            `json:"type"`
-	SequenceID       string            `json:"sequence_id"`
-	PromptName       string            `json:"prompt_name,omitempty"`
-	PromptType       PromptType        `json:"prompt_type,omitempty"`
-	Status           string            `json:"status,omitempty"`
-	WorkerID         string            `json:"worker_id,omitempty"`
-	Scope            string            `json:"scope,omitempty"`
-	Engine           string            `json:"engine,omitempty"`
-	Model            string            `json:"model,omitempty"`
-	LogPath          string            `json:"log_path,omitempty"`
-	Completed        int               `json:"completed"`
-	Total            int               `json:"total"`
-	Folder           string            `json:"folder,omitempty"`
-	Duration         time.Duration     `json:"duration,omitempty"`
-	ExitCode         *int              `json:"exit_code,omitempty"`
-	CompletionStatus string            `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool             `json:"next_prompt_safe,omitempty"`
-	Reason           string            `json:"reason,omitempty"`
-	RecoveryAttempt  int               `json:"recovery_attempt,omitempty"`
-	Inventory        []ProgressPrompt  `json:"inventory,omitempty"`
-	MarkdownTotal    int               `json:"markdown_total,omitempty"`
-	Ignored          []string          `json:"ignored,omitempty"`
-	ResumePlan       string            `json:"resume_plan,omitempty"`
-	Adoption         *SequenceAdoption `json:"adoption,omitempty"`
+	Type             string               `json:"type"`
+	SequenceID       string               `json:"sequence_id"`
+	PromptName       string               `json:"prompt_name,omitempty"`
+	PromptType       PromptType           `json:"prompt_type,omitempty"`
+	Status           string               `json:"status,omitempty"`
+	WorkerID         string               `json:"worker_id,omitempty"`
+	Scope            string               `json:"scope,omitempty"`
+	Engine           string               `json:"engine,omitempty"`
+	Model            string               `json:"model,omitempty"`
+	LogPath          string               `json:"log_path,omitempty"`
+	Completed        int                  `json:"completed"`
+	Total            int                  `json:"total"`
+	Folder           string               `json:"folder,omitempty"`
+	Duration         time.Duration        `json:"duration,omitempty"`
+	ExitCode         *int                 `json:"exit_code,omitempty"`
+	CompletionStatus string               `json:"completion_status,omitempty"`
+	NextPromptSafe   *bool                `json:"next_prompt_safe,omitempty"`
+	Reason           string               `json:"reason,omitempty"`
+	FailureReport    *state.FailureReport `json:"failure_report,omitempty"`
+	RecoveryAttempt  int                  `json:"recovery_attempt,omitempty"`
+	RecoveryMode     string               `json:"recovery_mode,omitempty"`
+	RecoveryArtifact string               `json:"recovery_artifact,omitempty"`
+	Inventory        []ProgressPrompt     `json:"inventory,omitempty"`
+	MarkdownTotal    int                  `json:"markdown_total,omitempty"`
+	Ignored          []string             `json:"ignored,omitempty"`
+	ResumePlan       string               `json:"resume_plan,omitempty"`
+	Adoption         *SequenceAdoption    `json:"adoption,omitempty"`
 }
 
 // ProgressPrompt is the prompt metadata needed to render an ordered run
@@ -178,6 +181,7 @@ type Prompt struct {
 	RolePolicy  *RolePolicy
 	DependsOn   []string
 	ContextMode ContextMode
+	GateOutcome string
 }
 
 type FolderInspection struct {
@@ -246,50 +250,75 @@ type Supervisor struct {
 }
 
 type SequenceItem struct {
-	PromptPath       string      `json:"prompt_path"`
-	PromptName       string      `json:"prompt_name"`
-	PromptID         string      `json:"prompt_id,omitempty"`
-	DependsOn        []string    `json:"depends_on,omitempty"`
-	ContextMode      ContextMode `json:"context_mode,omitempty"`
-	PromptHash       string      `json:"prompt_hash,omitempty"`
-	PolicyHash       string      `json:"policy_hash,omitempty"`
-	ContentHash      string      `json:"content_hash"`
-	Status           string      `json:"status"`
-	WorkerID         string      `json:"worker_id,omitempty"`
-	StartedAt        *time.Time  `json:"started_at,omitempty"`
-	FinishedAt       *time.Time  `json:"finished_at,omitempty"`
-	ExitCode         *int        `json:"exit_code,omitempty"`
-	LogPath          string      `json:"log_path,omitempty"`
-	Error            string      `json:"error,omitempty"`
-	CompletionStatus string      `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool       `json:"next_prompt_safe,omitempty"`
-	CompletionReason string      `json:"completion_reason,omitempty"`
-	RecoveryAttempts int         `json:"recovery_attempts,omitempty"`
+	PromptPath       string               `json:"prompt_path"`
+	PromptName       string               `json:"prompt_name"`
+	PromptID         string               `json:"prompt_id,omitempty"`
+	DependsOn        []string             `json:"depends_on,omitempty"`
+	ContextMode      ContextMode          `json:"context_mode,omitempty"`
+	GateOutcome      string               `json:"gate_outcome,omitempty"`
+	PromptHash       string               `json:"prompt_hash,omitempty"`
+	PolicyHash       string               `json:"policy_hash,omitempty"`
+	ContentHash      string               `json:"content_hash"`
+	Status           string               `json:"status"`
+	WorkerID         string               `json:"worker_id,omitempty"`
+	Scope            string               `json:"scope,omitempty"`
+	Engine           string               `json:"engine,omitempty"`
+	Model            string               `json:"model,omitempty"`
+	StartedAt        *time.Time           `json:"started_at,omitempty"`
+	FinishedAt       *time.Time           `json:"finished_at,omitempty"`
+	ExitCode         *int                 `json:"exit_code,omitempty"`
+	LogPath          string               `json:"log_path,omitempty"`
+	Error            string               `json:"error,omitempty"`
+	CompletionStatus string               `json:"completion_status,omitempty"`
+	NextPromptSafe   *bool                `json:"next_prompt_safe,omitempty"`
+	CompletionReason string               `json:"completion_reason,omitempty"`
+	FailureReport    *state.FailureReport `json:"failure_report,omitempty"`
+	RecoveryAttempts int                  `json:"recovery_attempts,omitempty"`
+	RecoveryMode     string               `json:"recovery_mode,omitempty"`
+	RecoveryArtifact string               `json:"recovery_artifact,omitempty"`
+	TokenUsage       *TokenUsage          `json:"token_usage,omitempty"`
 }
 
 type TokenUsage struct {
-	Available bool `json:"available"`
-	Total     int  `json:"total"`
+	Available       bool  `json:"available"`
+	Input           int64 `json:"input"`
+	CachedInput     int64 `json:"cached_input"`
+	Output          int64 `json:"output"`
+	ReasoningOutput int64 `json:"reasoning_output"`
+	Total           int64 `json:"total"`
+}
+
+func (u TokenUsage) String() string {
+	if !u.Available {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%d (input: %d; cached input: %d; output: %d; reasoning output: %d)", u.Total, u.Input, u.CachedInput, u.Output, u.ReasoningOutput)
 }
 
 type PromptState struct {
-	Prompt           string       `json:"prompt"`
-	PromptType       PromptType   `json:"prompt_type"`
-	Status           string       `json:"status"`
-	StartedAt        *time.Time   `json:"started_at"`
-	FinishedAt       *time.Time   `json:"finished_at"`
-	ExitCode         *int         `json:"exit_code,omitempty"`
-	GitSHABefore     string       `json:"git_sha_before"`
-	GitSHAAfter      string       `json:"git_sha_after"`
-	CommitSHA        string       `json:"commit_sha"`
-	FilesChanged     []string     `json:"files_changed"`
-	WorkerID         string       `json:"worker_id,omitempty"`
-	Error            string       `json:"error,omitempty"`
-	CompletionStatus string       `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool        `json:"next_prompt_safe,omitempty"`
-	CompletionReason string       `json:"completion_reason,omitempty"`
-	RecoveryAttempts int          `json:"recovery_attempts,omitempty"`
-	Worker           state.Worker `json:"-"`
+	Prompt           string                     `json:"prompt"`
+	PromptType       PromptType                 `json:"prompt_type"`
+	Status           string                     `json:"status"`
+	StartedAt        *time.Time                 `json:"started_at"`
+	FinishedAt       *time.Time                 `json:"finished_at"`
+	ExitCode         *int                       `json:"exit_code,omitempty"`
+	GitSHABefore     string                     `json:"git_sha_before"`
+	GitSHAAfter      string                     `json:"git_sha_after"`
+	CommitSHA        string                     `json:"commit_sha"`
+	FilesChanged     []string                   `json:"files_changed"`
+	WorkerID         string                     `json:"worker_id,omitempty"`
+	Error            string                     `json:"error,omitempty"`
+	CompletionStatus string                     `json:"completion_status,omitempty"`
+	NextPromptSafe   *bool                      `json:"next_prompt_safe,omitempty"`
+	CompletionReason string                     `json:"completion_reason,omitempty"`
+	FailureReport    *state.FailureReport       `json:"failure_report,omitempty"`
+	RecoveryAttempts int                        `json:"recovery_attempts,omitempty"`
+	RecoveryMode     string                     `json:"recovery_mode,omitempty"`
+	RecoveryArtifact string                     `json:"recovery_artifact,omitempty"`
+	GateOutcome      string                     `json:"gate_outcome,omitempty"`
+	EngineSessionID  string                     `json:"engine_session_id,omitempty"`
+	GitBaseline      *workerpathpolicy.Snapshot `json:"git_baseline,omitempty"`
+	Worker           state.Worker               `json:"-"`
 }
 
 func Classify(filename string) PromptType {
@@ -391,7 +420,8 @@ func inspectPrompt(promptPath, name string) (Prompt, error) {
 		id = strings.TrimSuffix(name, filepath.Ext(name))
 	}
 	role, _ := task.Metadata["role"].(string)
-	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"]), ContextMode: contextModeValue(task.Metadata["context_mode"])}, nil
+	gateOutcome, _ := task.Metadata["gate_outcome"].(string)
+	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"]), ContextMode: contextModeValue(task.Metadata["context_mode"]), GateOutcome: gateOutcome}, nil
 }
 
 func contextModeValue(value any) ContextMode {
@@ -526,6 +556,9 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	if err != nil {
 		return Summary{}, err
 	}
+	if sequenceResumed && sequence.Status == "product-blocked" {
+		return Summary{Sequence: &sequence, Prompts: prompts, Started: true, Resumed: true}, fmt.Errorf("sequence %s is product-blocked by a completed capability gate; resolve the prerequisite and start a new compatible sequence", sequence.SequenceID)
+	}
 	store := folderStore{Root: folderStateRoot(options.HomeDir, sequence.SequenceID), LegacyRoot: filepath.Join(absFolder, ".promptgrinder")}
 	runState, resumed, err := store.loadOrCreate(absFolder, options)
 	if err != nil {
@@ -564,7 +597,10 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 				stopSupervisor("cancelled")
 				return
 			}
-			status := "completed"
+			status := sequence.Status
+			if status == "" || status == "running" {
+				status = "completed"
+			}
 			if runErr != nil {
 				status = "interrupted"
 				if sequence.Status == "failed" {
@@ -574,7 +610,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			stopSupervisor(status)
 			_ = sequenceStore.save(sequence)
 			eventType := "notification.success"
-			if status != "completed" {
+			if status != "completed" && status != "product-blocked" {
 				eventType = "notification.failure"
 			}
 			emitProgress(options, ProgressEvent{Type: eventType, SequenceID: sequence.SequenceID, Folder: sequence.Folder, Status: sequence.Status, Completed: sequence.Progress().Succeeded, Total: len(sequence.Items)})
@@ -601,6 +637,23 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, ResumePlan: resumePlan, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
 	if err := store.ensure(); err != nil {
 		return summary, err
+	}
+	if summary.Resumed && (options.CommitEach || options.RequireCleanGit) {
+		clean, cleanErr := gitClean(repoRoot)
+		if cleanErr != nil {
+			return summary, cleanErr
+		}
+		if !clean {
+			if err := prepareResumedRecovery(repoRoot, options.HomeDir, &sequence, prompts, options, store); err != nil {
+				return summary, err
+			}
+			if err := sequenceStore.save(sequence); err != nil {
+				return summary, err
+			}
+			if err := store.saveSummary(sequence); err != nil {
+				return summary, err
+			}
+		}
 	}
 	specContext, err := readSpecificationContext(prompts)
 	if err != nil {
@@ -646,6 +699,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			emitProgress(options, ProgressEvent{Type: "prompt.skipped", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "skipped", Completed: len(runState.Completed), Total: len(prompts)})
 			continue
 		}
+		resumingFailedItem := summary.Resumed && itemStatuses[prompt.Name] == "failed"
 		sequence.mark(prompt.Name, "running", state.Worker{}, nil, "")
 		sequence.refreshSummary()
 		if err := sequenceStore.save(sequence); err != nil {
@@ -653,17 +707,82 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		}
 		recoveryAttempt := 0
 		recoveryContext := ""
+		recoveryMode := ""
+		validationRepairUsed := false
+		var repairBaseline *workerpathpolicy.Snapshot
+		repairSessionID := ""
 		var promptState PromptState
 		var err error
+		if resumingFailedItem {
+			if failed, loadErr := newSequenceStore(options.HomeDir).loadPromptState(sequence.SequenceID, prompt.Name); loadErr == nil {
+				failed.Worker = failedWorkerEvidence(options.HomeDir, sequenceItem(sequence, prompt.Name), failed)
+				if evidence, eligible := validationRepairEligibility(repoRoot, options.HomeDir, prompt, failed); eligible && failed.RecoveryAttempts <= options.RecoveryAttempts && failed.GitBaseline != nil {
+					recoveryAttempt = failed.RecoveryAttempts
+					validationRepairUsed = true
+					recoveryMode = "validation-repair"
+					baseline := *failed.GitBaseline
+					repairBaseline = &baseline
+					repairSessionID = failed.Worker.EngineResult.SessionID
+					recoveryContext = validationRepairPromptContext(recoveryAttempt, options.RecoveryAttempts, evidence)
+					identity := workeridentity.FromWorker(failed.Worker)
+					emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "repairing", WorkerID: failed.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: failed.Worker.LogPath, Duration: promptDuration(failed), ExitCode: failed.ExitCode, CompletionStatus: failed.CompletionStatus, NextPromptSafe: failed.NextPromptSafe, Reason: validationRepairMessage(recoveryAttempt, options.RecoveryAttempts, evidence), RecoveryAttempt: recoveryAttempt, RecoveryMode: recoveryMode, Completed: len(runState.Completed), Total: len(prompts)})
+				}
+			}
+		}
 		for {
-			promptState, err = runPrompt(repoRoot, prompt, specContext, sessionForPrompt(prompt, sequence.SessionID), recoveryContext, options, launcher)
+			sessionID := sessionForPrompt(prompt, sequence.SessionID)
+			if repairBaseline != nil {
+				sessionID = repairSessionID
+			}
+			promptState, err = runPrompt(repoRoot, prompt, specContext, sessionID, recoveryContext, options, launcher, repairBaseline)
 			promptState.RecoveryAttempts = recoveryAttempt
-			if err == nil || recoveryAttempt >= options.RecoveryAttempts || !recoverableFailure(promptState, err) {
+			promptState.RecoveryMode = recoveryMode
+			if err == nil {
 				break
 			}
+			if validationRepairUsed || recoveryAttempt >= options.RecoveryAttempts {
+				break
+			}
+			if evidence, eligible := validationRepairEligibility(repoRoot, options.HomeDir, prompt, promptState); eligible {
+				recoveryAttempt++
+				validationRepairUsed = true
+				recoveryMode = "validation-repair"
+				promptState.RecoveryAttempts = recoveryAttempt
+				promptState.RecoveryMode = recoveryMode
+				baseline := *promptState.GitBaseline
+				repairBaseline = &baseline
+				repairSessionID = promptState.Worker.EngineResult.SessionID
+				promptState.Status = "repairing"
+				promptState.Error = evidence.Reason
+				if err := store.savePrompt(promptState); err != nil {
+					return summary, err
+				}
+				sequence.mark(prompt.Name, "running", promptState.Worker, nil, validationRepairMessage(recoveryAttempt, options.RecoveryAttempts, evidence))
+				sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+				sequence.setRecoveryMode(prompt.Name, recoveryMode)
+				sequence.refreshSummary()
+				_ = sequenceStore.save(sequence)
+				_ = store.saveSummary(sequence)
+				identity := workeridentity.FromWorker(promptState.Worker)
+				emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "repairing", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: validationRepairMessage(recoveryAttempt, options.RecoveryAttempts, evidence), RecoveryAttempt: recoveryAttempt, RecoveryMode: recoveryMode, Completed: len(runState.Completed), Total: len(prompts)})
+				recoveryContext = validationRepairPromptContext(recoveryAttempt, options.RecoveryAttempts, evidence)
+				continue
+			}
+			if !recoverableFailure(promptState, err) {
+				break
+			}
+			if artifact, isolateErr := isolateRecoveryChanges(repoRoot, options.HomeDir, sequence.SequenceID, prompt, promptState); isolateErr != nil {
+				promptState.RecoveryArtifact = artifact
+				err = fmt.Errorf("automatic recovery blocked: %w", isolateErr)
+				break
+			} else {
+				promptState.RecoveryArtifact = artifact
+			}
 			recoveryAttempt++
+			recoveryMode = "runtime-recovery"
 			promptState.Status = "recovering"
 			promptState.Error = err.Error()
+			promptState.RecoveryMode = recoveryMode
 			if promptState.Worker.ID == "" {
 				promptState.Worker = state.Worker{ID: promptState.WorkerID, ExitCode: promptState.ExitCode}
 			}
@@ -672,21 +791,33 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			}
 			sequence.mark(prompt.Name, "running", promptState.Worker, nil, recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err))
 			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.setRecoveryMode(prompt.Name, recoveryMode)
+			sequence.setRecoveryArtifact(prompt.Name, promptState.RecoveryArtifact)
 			sequence.refreshSummary()
 			_ = sequenceStore.save(sequence)
 			_ = store.saveSummary(sequence)
 			identity := workeridentity.FromWorker(promptState.Worker)
-			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "prompt.recovering", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "recovering", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: recoveryMessage(recoveryAttempt, options.RecoveryAttempts, err), RecoveryAttempt: recoveryAttempt, RecoveryMode: recoveryMode, RecoveryArtifact: promptState.RecoveryArtifact, Completed: len(runState.Completed), Total: len(prompts)})
 			recoveryContext = recoveryPromptContext(recoveryAttempt, options.RecoveryAttempts, err, promptState)
 		}
 		if err != nil {
 			promptState.Status = "failed"
 			promptState.Error = err.Error()
+			if promptState.FailureReport == nil {
+				promptState.FailureReport = state.FailureReportForFailure(promptState.Worker.EngineResult, err.Error())
+			}
+			if promptState.Worker.EngineResult == nil {
+				promptState.Worker.EngineResult = &state.EngineResult{FailureReport: promptState.FailureReport}
+			} else if promptState.Worker.EngineResult.FailureReport == nil {
+				promptState.Worker.EngineResult.FailureReport = promptState.FailureReport
+			}
 			if promptState.Worker.ID == "" {
 				promptState.Worker = state.Worker{ID: promptState.WorkerID, ExitCode: promptState.ExitCode}
 			}
 			sequence.mark(prompt.Name, "failed", promptState.Worker, promptState.FinishedAt, err.Error())
 			sequence.setRecoveryAttempts(prompt.Name, recoveryAttempt)
+			sequence.setRecoveryMode(prompt.Name, recoveryMode)
+			sequence.setRecoveryArtifact(prompt.Name, promptState.RecoveryArtifact)
 			finished := time.Now().UTC()
 			sequence.FinishedAt = &finished
 			sequence.refreshSummary()
@@ -700,8 +831,33 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			summary.Run = runState
 			summary.Failed = err
 			identity := workeridentity.FromWorker(promptState.Worker)
-			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
+			reason := promptState.CompletionReason
+			if reason == "" {
+				reason = err.Error()
+			}
+			emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "failed", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: reason, FailureReport: promptState.FailureReport, RecoveryArtifact: promptState.RecoveryArtifact, Completed: len(runState.Completed), Total: len(prompts)})
 			return summary, err
+		}
+		if promptState.GateOutcome == "BLOCKED" {
+			if err := store.savePrompt(promptState); err != nil {
+				return summary, err
+			}
+			sequence.mark(prompt.Name, "gate-blocked", promptState.Worker, promptState.FinishedAt, promptState.CompletionReason)
+			sequence.refreshSummary()
+			finished := time.Now().UTC()
+			sequence.FinishedAt = &finished
+			_ = sequenceStore.save(sequence)
+			_ = store.saveSummary(sequence)
+			runState.Status = "product-blocked"
+			runState.Current = prompt.Name
+			runState.Completed = append(runState.Completed, prompt.Name)
+			runState.touch()
+			_ = store.saveRun(runState)
+			summary.Run, summary.Sequence = runState, &sequence
+			identity := workeridentity.FromWorker(promptState.Worker)
+			emitProgress(options, ProgressEvent{Type: "prompt.gate-blocked", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "gate-blocked", WorkerID: promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, LogPath: promptState.Worker.LogPath, Duration: promptDuration(promptState), ExitCode: promptState.ExitCode, CompletionStatus: promptState.CompletionStatus, NextPromptSafe: promptState.NextPromptSafe, Reason: promptState.CompletionReason, FailureReport: promptState.FailureReport, Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "run.product-blocked", SequenceID: sequence.SequenceID, Status: "product-blocked", Reason: promptState.CompletionReason, Completed: len(runState.Completed), Total: len(prompts)})
+			return summary, nil
 		}
 		if err := store.savePrompt(promptState); err != nil {
 			return summary, err
@@ -746,6 +902,15 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 	summary.Sequence = &sequence
 	emitProgress(options, ProgressEvent{Type: "run.completed", SequenceID: sequence.SequenceID, Completed: len(runState.Completed), Total: len(prompts)})
 	return summary, nil
+}
+
+func sequenceItem(sequence SequenceState, promptName string) SequenceItem {
+	for _, item := range sequence.Items {
+		if item.PromptName == promptName {
+			return item
+		}
+	}
+	return SequenceItem{}
 }
 
 func sessionForPrompt(prompt Prompt, sessionID string) string {
@@ -892,32 +1057,37 @@ func startSupervisorHeartbeat(options Options, sequence *SequenceState) func(str
 	}
 }
 
-func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryContext string, options Options, launcher Launcher) (PromptState, error) {
+func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryContext string, options Options, launcher Launcher, repairBaseline *workerpathpolicy.Snapshot) (PromptState, error) {
 	started := time.Now().UTC()
 	promptState := PromptState{Prompt: prompt.Name, PromptType: prompt.Type, Status: "running", StartedAt: &started}
 	policy, err := taskPathPolicy(prompt.Path)
 	if err != nil {
 		return promptState, err
 	}
-	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0 || roleHasPathPolicy(prompt.RolePolicy)
+	needsGitTracking := options.Checkpoint || options.CommitEach || options.RequireCleanGit || options.RecoveryAttempts > 0 || len(policy.AllowedPaths) != 0 || len(policy.ForbiddenPaths) != 0 || roleHasPathPolicy(prompt.RolePolicy)
 	var baseline workerpathpolicy.Snapshot
 	if needsGitTracking {
-		baseline, err = workerpathpolicy.Capture(repoRoot)
-		if err != nil {
-			return promptState, fmt.Errorf("capture worker Git baseline: %w", err)
+		if repairBaseline != nil {
+			baseline = *repairBaseline
+		} else {
+			baseline, err = workerpathpolicy.Capture(repoRoot)
+			if err != nil {
+				return promptState, fmt.Errorf("capture worker Git baseline: %w", err)
+			}
+			baseline.Entries = withoutPromptGrinderPaths(baseline.Entries)
 		}
-		baseline.Entries = withoutPromptGrinderPaths(baseline.Entries)
+		promptState.GitBaseline = &baseline
 	}
 	// Focused automatic commits are only attributable from a clean baseline.
 	// --require-clean-git=false remains useful for non-committing runs, but is
 	// deliberately not an unsafe acknowledgement for automatic commits.
-	if (options.RequireCleanGit || options.CommitEach) && len(baseline.Entries) != 0 {
+	if repairBaseline == nil && (options.RequireCleanGit || options.CommitEach) && len(baseline.Entries) != 0 {
 		return promptState, fmt.Errorf("working tree is dirty; automatic commits require a clean baseline (use --commit-each=false to retain unrelated changes)")
 	}
 	if options.Checkpoint || options.CommitEach {
 		promptState.GitSHABefore, _ = gitSHA(repoRoot)
 	}
-	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach, prompt.RolePolicy)
+	content, err := assemblePrompt(prompt.Path, specContext, options.CommitEach, prompt.RolePolicy, prompt.GateOutcome)
 	if err != nil {
 		return promptState, err
 	}
@@ -959,11 +1129,25 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 		promptState.ExitCode = &engineExitCode
 	}
 	if worker.EngineResult != nil {
+		promptState.EngineSessionID = worker.EngineResult.SessionID
 		promptState.CompletionStatus, promptState.NextPromptSafe, promptState.CompletionReason = state.ParseOrderedCompletionReport(worker.EngineResult.Summary)
 		promptState.Worker.EngineResult.CompletionStatus = promptState.CompletionStatus
 		promptState.Worker.EngineResult.NextPromptSafe = promptState.NextPromptSafe
 		promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
-		if semanticErr := promptState.Worker.EngineResult.OrderedCompletionError(); semanticErr != nil {
+		if promptState.Worker.EngineResult.FailureReport == nil {
+			promptState.Worker.EngineResult.FailureReport = state.ParseFailureReport(promptState.Worker.EngineResult.Summary)
+		}
+		promptState.FailureReport = promptState.Worker.EngineResult.FailureReport
+		if prompt.GateOutcome == "BLOCKED" {
+			if promptState.CompletionStatus == "BLOCKED" && promptState.NextPromptSafe != nil && !*promptState.NextPromptSafe {
+				promptState.GateOutcome = "BLOCKED"
+				promptState.CompletionReason = "declared capability gate completed: product outcome BLOCKED"
+				promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
+			} else {
+				promptState.CompletionReason = "declared gate_outcome BLOCKED requires STATUS: BLOCKED and NEXT_PROMPT_SAFE: no"
+				promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
+			}
+		} else if semanticErr := promptState.Worker.EngineResult.OrderedCompletionError(); semanticErr != nil {
 			promptState.CompletionReason = semanticErr.Error()
 			promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
 		}
@@ -979,12 +1163,17 @@ func runPrompt(repoRoot string, prompt Prompt, specContext, sessionID, recoveryC
 	}
 	if worker.EngineResult == nil {
 		promptState.CompletionReason = "worker produced no structured completion result"
+		promptState.FailureReport = state.FailureReportForFailure(nil, promptState.CompletionReason)
 	}
-	if promptState.CompletionReason != "" {
+	if promptState.CompletionReason != "" && promptState.GateOutcome == "" {
 		if promptState.Worker.EngineResult == nil {
-			promptState.Worker.EngineResult = &state.EngineResult{CompletionReason: promptState.CompletionReason}
+			promptState.Worker.EngineResult = &state.EngineResult{CompletionReason: promptState.CompletionReason, FailureReport: promptState.FailureReport}
 		} else {
 			promptState.Worker.EngineResult.CompletionReason = promptState.CompletionReason
+		}
+		if promptState.FailureReport == nil {
+			promptState.FailureReport = state.FailureReportForFailure(promptState.Worker.EngineResult, promptState.CompletionReason)
+			promptState.Worker.EngineResult.FailureReport = promptState.FailureReport
 		}
 		finished := time.Now().UTC()
 		promptState.FinishedAt = &finished
@@ -1097,7 +1286,7 @@ func promptPolicyViolations(prompt Prompt, slicePolicy workerdomain.WorkerPolicy
 	return append(violations, roleViolations...), nil
 }
 
-func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RolePolicy) (string, error) {
+func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RolePolicy, gateOutcome string) (string, error) {
 	active, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -1114,6 +1303,9 @@ func assemblePrompt(path, specContext string, commitEach bool, rolePolicy *RoleP
 		assembledBody += promptGrinderCommitOwnershipContract
 	}
 	assembledBody += orderedCompletionContract
+	if gateOutcome == "BLOCKED" {
+		assembledBody += capabilityGateCompletionContract
+	}
 	if ok {
 		return frontmatter + assembledBody, nil
 	}
@@ -1178,6 +1370,34 @@ STATUS: PASS
 NEXT_PROMPT_SAFE: yes
 
 Use STATUS: BLOCKED or STATUS: PARTIAL and NEXT_PROMPT_SAFE: no when the task is not fully and safely complete. PromptGrinder will not advance to a later slice unless the final report is unambiguous PASS/yes.
+
+When reporting PARTIAL or BLOCKED, include the following concise optional headings when evidence is available. They are rendered in the terminal and sequence JSON; keep details bounded and put exhaustive output in the worker log or a handoff file.
+
+Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation
+Failure summary: one-line reason
+Feature evidence:
+- completed check
+Blocking checks:
+- check: failed or not run
+  - concise detail
+Evidence report: relative/path/to/report.md
+Next action: one-line repair or configuration action
+`
+
+const capabilityGateCompletionContract = `
+
+# Capability-Gate Outcome
+
+This slice is an explicitly declared hard-gate audit. If your completed audit
+establishes that the prerequisite is unavailable, end with exactly:
+
+STATUS: BLOCKED
+NEXT_PROMPT_SAFE: no
+
+That records a successful capability gate: PromptGrinder will checkpoint only
+your permitted evidence and mark product implementation blocked. Do not report
+PASS merely to advance the sequence. Any other completion remains an ordinary
+completion-contract failure.
 `
 
 func splitFrontmatter(text string) (string, string, bool) {
@@ -1223,6 +1443,26 @@ type folderStore struct {
 	LegacyRoot string
 }
 
+// noResumableRunStateError identifies an explicit --resume request that chose
+// a sequence identity without a persisted execution run state. This can occur
+// after validation-only preflight selected a new identity; it is not safe to
+// treat that record as resumable.
+type noResumableRunStateError struct {
+	Root   string
+	Folder string
+}
+
+func (e noResumableRunStateError) Error() string {
+	return fmt.Sprintf("No resumable run state was found in %s; this can happen when --resume selected a validation-only preflight record.\nStart fresh: promptgrinder run-folder %s --fresh", e.Root, shellQuoteRunFolder(e.Folder))
+}
+
+func shellQuoteRunFolder(value string) string {
+	if value != "" && !strings.ContainsAny(value, " \t\n'\"\\$`!&;|<>()[]{}*?") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
 func folderStateRoot(homeDir, sequenceID string) string {
 	sequenceRoot := newSequenceStore(homeDir).Root
 	resolvedHome := filepath.Dir(filepath.Dir(sequenceRoot))
@@ -1246,7 +1486,7 @@ func (s folderStore) loadOrCreate(folder string, options Options) (RunState, boo
 				return RunState{}, false, fmt.Errorf("no unfinished run found in %s", s.Root)
 			}
 			if errors.Is(err, os.ErrNotExist) {
-				return RunState{}, false, fmt.Errorf("no run state found in %s", s.Root)
+				return RunState{}, false, noResumableRunStateError{Root: s.Root, Folder: folder}
 			}
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1336,9 +1576,24 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 		} else if status == "succeeded" || status == "failed" || status == "skipped" {
 			item.FinishedAt = &now
 		}
-		item.WorkerID = worker.ID
-		item.LogPath = worker.LogPath
-		item.ExitCode = worker.ExitCode
+		// A recovery preflight can fail before it launches a replacement worker.
+		// Keep the original worker evidence rather than replacing it with an
+		// empty/default identity in the final failed sequence row.
+		if worker.ID != "" {
+			item.WorkerID = worker.ID
+		}
+		if worker.LogPath != "" {
+			item.LogPath = worker.LogPath
+		}
+		if worker.ExitCode != nil {
+			item.ExitCode = worker.ExitCode
+		}
+		if worker.ID != "" {
+			identity := workeridentity.FromWorker(worker)
+			item.Scope = identity.Scope
+			item.Engine = identity.Engine
+			item.Model = identity.Model
+		}
 		item.Error = errorMessage
 		if worker.EngineResult != nil {
 			if worker.EngineResult.EngineExitCode != nil {
@@ -1347,6 +1602,8 @@ func (s *SequenceState) mark(promptName, status string, worker state.Worker, fin
 			item.CompletionStatus = worker.EngineResult.CompletionStatus
 			item.NextPromptSafe = worker.EngineResult.NextPromptSafe
 			item.CompletionReason = worker.EngineResult.CompletionReason
+			item.FailureReport = worker.EngineResult.FailureReport
+			item.TokenUsage = addTokenUsage(item.TokenUsage, tokenUsageFromEngineResult(worker.EngineResult))
 		}
 		if errorMessage != "" && item.CompletionReason == "" {
 			item.CompletionReason = errorMessage
@@ -1366,6 +1623,30 @@ func (s *SequenceState) setRecoveryAttempts(promptName string, attempts int) {
 	}
 }
 
+func (s *SequenceState) setRecoveryMode(promptName, mode string) {
+	if mode == "" {
+		return
+	}
+	for i := range s.Items {
+		if s.Items[i].PromptName == promptName {
+			s.Items[i].RecoveryMode = mode
+			return
+		}
+	}
+}
+
+func (s *SequenceState) setRecoveryArtifact(promptName, artifact string) {
+	if artifact == "" {
+		return
+	}
+	for i := range s.Items {
+		if s.Items[i].PromptName == promptName {
+			s.Items[i].RecoveryArtifact = artifact
+			return
+		}
+	}
+}
+
 func recoverableFailure(prompt PromptState, err error) bool {
 	if err == nil {
 		return false
@@ -1380,11 +1661,28 @@ func recoverableFailure(prompt PromptState, err error) bool {
 			return false
 		}
 	}
-	return true
+	if strings.Contains(text, "did not satisfy ordered completion contract") ||
+		strings.Contains(text, "path policy violation") ||
+		strings.Contains(text, "timeout") {
+		return false
+	}
+	// A launch failure has no completed worker command to preserve and remains
+	// safely retryable. Once a worker ran, retry only when its durable log
+	// contains the exact runtime-side client-disconnect evidence. This avoids
+	// treating compiler/test failures that happen to mention cancellation as
+	// infrastructure failures.
+	if prompt.WorkerID == "" || prompt.Worker.Status == state.StatusLaunchFailed || strings.Contains(text, "launch failed") {
+		return true
+	}
+	return runtimeClientDisconnected(prompt.Worker.LogPath)
 }
 
 func recoveryMessage(attempt, maximum int, err error) string {
 	return fmt.Sprintf("automatic recovery attempt %d of %d after: %s", attempt, maximum, err)
+}
+
+func validationRepairMessage(attempt, maximum int, evidence validationRepairEvidence) string {
+	return fmt.Sprintf("validation-repair attempt %d of %d: %s (%s)", attempt, maximum, evidence.Reason, evidence.Command)
 }
 
 func recoveryPromptContext(attempt, maximum int, err error, previous PromptState) string {
@@ -1399,10 +1697,23 @@ func recoveryPromptContext(attempt, maximum int, err error, previous PromptState
 	return b.String()
 }
 
+func validationRepairPromptContext(attempt, maximum int, evidence validationRepairEvidence) string {
+	return fmt.Sprintf(`
+# Validation Repair Attempt
+
+PromptGrinder is continuing this same slice and runtime session for one bounded validation repair attempt (%d of %d). Your earlier declared validation command failed:
+
+    %s
+
+The current worktree contains only this slice's approved, uncommitted changes. Inspect and repair those changes only within the declared scope. Re-run the failed validation and every required check. Do not commit, stash, reset, discard, or broaden scope. Return STATUS: PASS and NEXT_PROMPT_SAFE: yes only after completed validation evidence.
+`, attempt, maximum, evidence.Command)
+}
+
 func sequenceStatus(items []SequenceItem) string {
 	hasFailed := false
 	hasInterrupted := false
 	hasCancelled := false
+	hasProductBlocked := false
 	hasPending := false
 	for _, item := range items {
 		switch item.Status {
@@ -1412,6 +1723,8 @@ func sequenceStatus(items []SequenceItem) string {
 			hasInterrupted = true
 		case "cancelled":
 			hasCancelled = true
+		case "gate-blocked":
+			hasProductBlocked = true
 		case "pending", "running":
 			hasPending = true
 		}
@@ -1425,6 +1738,9 @@ func sequenceStatus(items []SequenceItem) string {
 	if hasCancelled {
 		return "cancelled"
 	}
+	if hasProductBlocked {
+		return "product-blocked"
+	}
 	if hasPending {
 		return "running"
 	}
@@ -1432,22 +1748,23 @@ func sequenceStatus(items []SequenceItem) string {
 }
 
 type SequenceProgress struct {
-	SequenceID   string     `json:"sequence_id"`
-	Folder       string     `json:"folder"`
-	Status       string     `json:"status"`
-	Total        int        `json:"total"`
-	Succeeded    int        `json:"succeeded"`
-	Failed       int        `json:"failed"`
-	Interrupted  int        `json:"interrupted"`
-	Cancelled    int        `json:"cancelled"`
-	Pending      int        `json:"pending"`
-	Current      string     `json:"current"`
-	Next         string     `json:"next"`
-	LastWorkerID string     `json:"last_worker_id"`
-	CreatedAt    *time.Time `json:"created_at,omitempty"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	UpdatedAt    *time.Time `json:"updated_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	SequenceID     string     `json:"sequence_id"`
+	Folder         string     `json:"folder"`
+	Status         string     `json:"status"`
+	Total          int        `json:"total"`
+	Succeeded      int        `json:"succeeded"`
+	Failed         int        `json:"failed"`
+	Interrupted    int        `json:"interrupted"`
+	Cancelled      int        `json:"cancelled"`
+	ProductBlocked int        `json:"product_blocked"`
+	Pending        int        `json:"pending"`
+	Current        string     `json:"current"`
+	Next           string     `json:"next"`
+	LastWorkerID   string     `json:"last_worker_id"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	UpdatedAt      *time.Time `json:"updated_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 }
 
 func (s SequenceState) Progress() SequenceProgress {
@@ -1468,6 +1785,12 @@ func (s SequenceState) Progress() SequenceProgress {
 			}
 		case "cancelled":
 			progress.Cancelled++
+		case "gate-blocked":
+			progress.Succeeded++
+			progress.ProductBlocked++
+			if progress.Current == "" {
+				progress.Current = item.PromptName
+			}
 		case "running":
 			progress.Pending++
 			if progress.Current == "" {
@@ -1492,11 +1815,20 @@ func (s SequenceState) SummaryMarkdown() string {
 	fmt.Fprintf(&b, "# PromptGrinder Sequence Summary\n\n")
 	fmt.Fprintf(&b, "- Sequence: `%s`\n", s.SequenceID)
 	fmt.Fprintf(&b, "- Status: `%s`\n", s.Status)
-	fmt.Fprintf(&b, "- Prompts: %d total, %d succeeded, %d failed, %d pending\n", progress.Total, progress.Succeeded, progress.Failed, progress.Pending)
-	if s.TokenUsage.Available {
-		fmt.Fprintf(&b, "- Total tokens used: %d\n", s.TokenUsage.Total)
-	} else {
-		fmt.Fprintf(&b, "- Total tokens used: not reported by worker logs\n")
+	fmt.Fprintf(&b, "- Prompts: %d total, %d succeeded, %d product-blocked, %d failed, %d pending\n", progress.Total, progress.Succeeded, progress.ProductBlocked, progress.Failed, progress.Pending)
+	fmt.Fprintf(&b, "- Reported token usage: %s\n", s.TokenUsage)
+	if len(s.Items) > 0 {
+		fmt.Fprintln(&b, "\n## Token Usage by Slice")
+		for _, item := range s.Items {
+			if item.Status == "skipped" {
+				continue
+			}
+			if item.TokenUsage == nil {
+				fmt.Fprintf(&b, "- `%s`: unavailable\n", item.PromptName)
+				continue
+			}
+			fmt.Fprintf(&b, "- `%s`: %s\n", item.PromptName, *item.TokenUsage)
+		}
 	}
 	if len(s.Adoptions) > 0 {
 		fmt.Fprintf(&b, "\n## Sequence Adoption\n")
@@ -1526,47 +1858,57 @@ func shortHash(value string) string {
 }
 
 func totalTokenUsage(items []SequenceItem) TokenUsage {
-	total := 0
-	available := false
+	total := TokenUsage{}
 	for _, item := range items {
-		if item.LogPath == "" {
+		if item.TokenUsage == nil {
 			continue
 		}
-		data, err := os.ReadFile(item.LogPath)
-		if err != nil {
-			continue
-		}
-		usage := parseTokenUsage(string(data))
-		if usage.Available {
-			available = true
-			total += usage.Total
-		}
+		total.Available = true
+		total.Input += item.TokenUsage.Input
+		total.CachedInput += item.TokenUsage.CachedInput
+		total.Output += item.TokenUsage.Output
+		total.ReasoningOutput += item.TokenUsage.ReasoningOutput
+		total.Total += item.TokenUsage.Total
 	}
-	return TokenUsage{Available: available, Total: total}
+	return total
 }
 
-func parseTokenUsage(text string) TokenUsage {
-	total := 0
-	available := false
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\btotal[_ ]tokens\b[^0-9]*([0-9][0-9,]*)`),
-		regexp.MustCompile(`(?i)\btokens[_ ]used\b[^0-9]*([0-9][0-9,]*)`),
-		regexp.MustCompile(`(?i)\bused\b[^0-9]*([0-9][0-9,]*)[^0-9]*\btokens\b`),
+func tokenUsageFromEngineResult(result *state.EngineResult) *TokenUsage {
+	if result == nil || result.TokensTotal == nil {
+		return nil
 	}
-	for _, pattern := range patterns {
-		for _, match := range pattern.FindAllStringSubmatch(text, -1) {
-			if len(match) < 2 {
-				continue
-			}
-			value, err := strconv.Atoi(strings.ReplaceAll(match[1], ",", ""))
-			if err != nil {
-				continue
-			}
-			total += value
-			available = true
-		}
+	usage := TokenUsage{Available: true, Total: *result.TokensTotal}
+	if result.TokensInput != nil {
+		usage.Input = *result.TokensInput
 	}
-	return TokenUsage{Available: available, Total: total}
+	if result.TokensCachedInput != nil {
+		usage.CachedInput = *result.TokensCachedInput
+	}
+	if result.TokensOutput != nil {
+		usage.Output = *result.TokensOutput
+	}
+	if result.TokensReasoningOutput != nil {
+		usage.ReasoningOutput = *result.TokensReasoningOutput
+	}
+	return &usage
+}
+
+func addTokenUsage(existing, reported *TokenUsage) *TokenUsage {
+	if reported == nil {
+		return existing
+	}
+	if existing == nil {
+		copy := *reported
+		return &copy
+	}
+	return &TokenUsage{
+		Available:       true,
+		Input:           existing.Input + reported.Input,
+		CachedInput:     existing.CachedInput + reported.CachedInput,
+		Output:          existing.Output + reported.Output,
+		ReasoningOutput: existing.ReasoningOutput + reported.ReasoningOutput,
+		Total:           existing.Total + reported.Total,
+	}
 }
 
 func buildExecutiveSummary(items []SequenceItem) string {
@@ -1653,13 +1995,13 @@ func CancelSequence(homeDir, sequenceID string) (SequenceState, error) {
 	if err != nil {
 		return SequenceState{}, err
 	}
-	if sequence.Status == "completed" || sequence.Status == "failed" {
+	if sequence.Status == "completed" || sequence.Status == "failed" || sequence.Status == "product-blocked" {
 		return sequence, fmt.Errorf("sequence %s is already %s", sequenceID, sequence.Status)
 	}
 	now := time.Now().UTC()
 	for i := range sequence.Items {
 		switch sequence.Items[i].Status {
-		case "succeeded", "skipped", "failed":
+		case "succeeded", "skipped", "failed", "gate-blocked":
 			continue
 		default:
 			sequence.Items[i].Status = "cancelled"
@@ -1870,7 +2212,7 @@ func (s sequenceStore) findCompatibleResume(folder, repoRoot string, prompts []P
 		return SequenceState{}, false, err
 	}
 	for _, sequence := range sequences {
-		if sequence.Folder != folder || (sequence.RepositoryPath != "" && sequence.RepositoryPath != repoRoot) || sequence.Status == "completed" || sequence.Status == "cancelled" || len(sequence.Items) != len(prompts) {
+		if sequence.Folder != folder || (sequence.RepositoryPath != "" && sequence.RepositoryPath != repoRoot) || sequence.Status == "completed" || sequence.Status == "cancelled" || sequence.Status == "product-blocked" || len(sequence.Items) != len(prompts) {
 			continue
 		}
 		compatible := true
@@ -1996,7 +2338,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 		if err != nil {
 			return SequenceState{}, err
 		}
-		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), ContextMode: prompt.ContextMode, PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
+		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), ContextMode: prompt.ContextMode, GateOutcome: prompt.GateOutcome, PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
 		engineName, taskEngine, err := effectivePromptEngine(prompt.Path, cfg, options.EngineOverride)
 		if err != nil {
 			return SequenceState{}, err

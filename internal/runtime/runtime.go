@@ -836,6 +836,7 @@ func (s Service) RunPromptFolder(path string, options RunFolderOptions) (RunFold
 	}
 	manager := s.Worker
 	manager.EngineOverride = options.EngineOverride
+	manager.SandboxOverride = options.SandboxOverride
 	manager.RepositoryOverride = repoRoot
 	switch options.ExecutionPolicy {
 	case runfolder.ExecutionConfigured:
@@ -860,6 +861,7 @@ func (s Service) PreflightRunFolder(path string, options RunFolderOptions) (RunF
 	}
 	manager := s.Worker
 	manager.EngineOverride = options.EngineOverride
+	manager.SandboxOverride = options.SandboxOverride
 	manager.RepositoryOverride = preflight.Repository
 	manager.SkipExecutorValidation = true
 	for index, prompt := range preflight.Inspection.Prompts {
@@ -1152,7 +1154,11 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 			}
 		}
 	}
-	semanticFailure := exitCode == 0 && result.RejectsContinuation()
+	if result.FailureReport == nil {
+		result.FailureReport = state.ParseFailureReport(result.Summary)
+	}
+	declaredCapabilityGate := isDeclaredCapabilityGateOutcome(worker, result, exitCode)
+	semanticFailure := exitCode == 0 && result.RejectsContinuation() && !declaredCapabilityGate
 	malformedSuccess := exitCode == 0 && worker.Engine == "codex" && strings.TrimSpace(result.Summary) == ""
 	if malformedSuccess {
 		result.CompletionReason = "empty final answer"
@@ -1217,6 +1223,19 @@ func (s Service) FinishWorker(recordPath string, exitCode int) error {
 		return fmt.Errorf("Codex exited successfully but produced no parseable final message; inspect with promptgrinder logs %s, then retry the task", worker.ID)
 	}
 	return nil
+}
+
+// isDeclaredCapabilityGateOutcome recognizes the only ordered-completion
+// exception permitted at the generic runtime boundary. The declaration is
+// persisted from run-folder frontmatter in worker metadata, so no engine- or
+// Codex-specific state is required. Every other non-continuable completion
+// remains a failed worker result.
+func isDeclaredCapabilityGateOutcome(worker state.Worker, result state.EngineResult, exitCode int) bool {
+	if exitCode != 0 || result.CompletionReason != "" {
+		return false
+	}
+	declared, _ := worker.Metadata["gate_outcome"].(string)
+	return declared == "BLOCKED" && result.CompletionStatus == "BLOCKED" && result.NextPromptSafe != nil && !*result.NextPromptSafe
 }
 
 func enforceOrdinaryWorkerPathPolicy(worker state.Worker) error {
@@ -1363,8 +1382,14 @@ func engineResultEventData(result state.EngineResult) map[string]any {
 	if result.TokensInput != nil {
 		fields = append(fields, "tokens_input")
 	}
+	if result.TokensCachedInput != nil {
+		fields = append(fields, "tokens_cached_input")
+	}
 	if result.TokensOutput != nil {
 		fields = append(fields, "tokens_output")
+	}
+	if result.TokensReasoningOutput != nil {
+		fields = append(fields, "tokens_reasoning_output")
 	}
 	if result.TokensTotal != nil {
 		fields = append(fields, "tokens_total")
@@ -1377,6 +1402,10 @@ func engineResultEventData(result state.EngineResult) map[string]any {
 	}
 	if len(result.Diagnostics) > 0 {
 		fields = append(fields, "diagnostics")
+	}
+	if result.FailureReport != nil {
+		fields = append(fields, "failure_report")
+		data["failure_report"] = result.FailureReport
 	}
 	data["reported_fields"] = fields
 	return data

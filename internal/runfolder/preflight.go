@@ -92,7 +92,12 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	}
 	if options.CommitEach || options.RequireCleanGit {
 		if err := requireCleanBaseline(repoRoot); err != nil {
-			issues = append(issues, err)
+			_, _, _, recoverable, recoveryErr := resumedRecoveryCandidate(absFolder, repoRoot, inspection.Prompts, options)
+			if recoveryErr != nil {
+				issues = append(issues, fmt.Errorf("%w\n\nResume recovery cannot safely isolate the retained failed-slice changes: %v\nInspect or restore the worker artifact, resolve the worktree deliberately, then resume.", err, recoveryErr))
+			} else if !recoverable {
+				issues = append(issues, err)
+			}
 		}
 	}
 	if len(issues) > 0 {

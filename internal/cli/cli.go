@@ -1015,6 +1015,7 @@ Examples:
 	var runFolderRepo string
 	var runFolderTemplate string
 	var runFolderEngine string
+	var runFolderSandbox string
 	var runFolderIncludeSpecification bool
 	var runFolderRestart bool
 	var runFolderNoResume bool
@@ -1077,6 +1078,7 @@ Examples:
 			RepoPath:                runFolderRepo,
 			Template:                runFolderTemplate,
 			EngineOverride:          runFolderEngine,
+			SandboxOverride:         runFolderSandbox,
 			IncludeSpecification:    runFolderIncludeSpecification,
 			RecoveryAttempts:        runFolderRecoveryAttempts,
 			SupervisorID:            runFolderSupervisorID,
@@ -1095,6 +1097,7 @@ Examples:
 		cmd.Flags().StringVar(&runFolderRepo, "repo", ".", "repository path where workers run and git operations apply")
 		cmd.Flags().StringVar(&runFolderTemplate, "template", "codex", "execution template")
 		cmd.Flags().StringVar(&runFolderEngine, "engine", "", "override every prompt engine for this run")
+		cmd.Flags().StringVar(&runFolderSandbox, "sandbox", "", "override Codex sandbox for every runnable slice (read-only, workspace-write, danger-full-access)")
 		cmd.Flags().BoolVar(&runFolderIncludeSpecification, "include-specification", false, "execute specification prompts instead of using them only as context")
 		cmd.Flags().IntVar(&runFolderRecoveryAttempts, "recovery-attempts", 0, "retry a recoverable failed slice this many times (0-3)")
 		cmd.Flags().BoolVar(&runFolderAllowConcurrentWorktree, "allow-concurrent-worktree", false, "allow another PromptGrinder batch to use the same git worktree")
@@ -3207,6 +3210,23 @@ func printRunFolderProgress(stdout io.Writer, event pgruntime.RunFolderProgressE
 		if event.CompletionStatus != "" || event.NextPromptSafe != nil {
 			fmt.Fprintf(stdout, "Completion: STATUS=%s NEXT_PROMPT_SAFE=%s\n", valueOrDash(event.CompletionStatus), sequenceBool(event.NextPromptSafe))
 		}
+	case "prompt.gate-blocked":
+		fmt.Fprintf(stdout, "[%d/%d] Capability gate completed: %s", event.Completed, event.Total, event.PromptName)
+		if event.WorkerID != "" {
+			fmt.Fprintf(stdout, " via %s", event.WorkerID)
+		}
+		fmt.Fprintln(stdout)
+		if event.Reason != "" {
+			fmt.Fprintf(stdout, "Outcome: product-blocked (%s)\n", event.Reason)
+		}
+		if event.CompletionStatus != "" || event.NextPromptSafe != nil {
+			fmt.Fprintf(stdout, "Completion: STATUS=%s NEXT_PROMPT_SAFE=%s\n", valueOrDash(event.CompletionStatus), sequenceBool(event.NextPromptSafe))
+		}
+	case "run.product-blocked":
+		fmt.Fprintf(stdout, "Sequence %s product-blocked after %d/%d prompt(s)\n", event.SequenceID, event.Completed, event.Total)
+		if event.Reason != "" {
+			fmt.Fprintf(stdout, "Reason: %s\n", event.Reason)
+		}
 	case "run.completed":
 		fmt.Fprintf(stdout, "Sequence %s completed: %d/%d prompt(s)\n", event.SequenceID, event.Completed, event.Total)
 	}
@@ -3230,13 +3250,15 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 			fmt.Fprintf(stdout, "Supervisor log: %s\n", sequence.Supervisor.LogPath)
 		}
 	}
-	fmt.Fprintf(stdout, "Progress: %d/%d done, %d failed, %d interrupted, %d pending\n", progress.Succeeded, progress.Total, progress.Failed, progress.Interrupted, progress.Pending)
+	fmt.Fprintf(stdout, "Progress: %d/%d done, %d product-blocked, %d failed, %d interrupted, %d pending\n", progress.Succeeded, progress.Total, progress.ProductBlocked, progress.Failed, progress.Interrupted, progress.Pending)
 	if progress.Current != "" {
 		label := "Running"
 		if sequence.Status == "failed" {
 			label = "Failed"
 		} else if sequence.Status == "interrupted" {
 			label = "Interrupted"
+		} else if sequence.Status == "product-blocked" {
+			label = "Product-blocked"
 		}
 		fmt.Fprintf(stdout, "%s: %s\n", label, progress.Current)
 	}
@@ -3248,6 +3270,9 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 	for i, item := range sequence.Items {
 		label := sequencePromptLabel(item)
 		fmt.Fprintf(stdout, "%-4d %-44s %-12s %-28s %s\n", i+1, truncate(label, 44), item.Status, valueOrDash(item.WorkerID), valueOrDash(item.LogPath))
+		if item.Scope != "" || item.Engine != "" || item.Model != "" {
+			fmt.Fprintf(stdout, "     Runtime: %s|%s/%s\n", valueOrDash(item.Scope), valueOrDash(item.Engine), valueOrDash(item.Model))
+		}
 		if item.CompletionStatus != "" || item.NextPromptSafe != nil || item.CompletionReason != "" {
 			fmt.Fprintf(stdout, "     Completion: STATUS=%s NEXT_PROMPT_SAFE=%s", valueOrDash(item.CompletionStatus), sequenceBool(item.NextPromptSafe))
 			if item.ExitCode != nil {
@@ -3258,6 +3283,39 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 			}
 			fmt.Fprintln(stdout)
 		}
+		if item.FailureReport != nil {
+			printSequenceFailureReport(stdout, item.FailureReport)
+		}
+		if item.RecoveryArtifact != "" {
+			fmt.Fprintf(stdout, "     Retained recovery artifact: %s\n", item.RecoveryArtifact)
+		}
+		if item.RecoveryAttempts > 0 {
+			fmt.Fprintf(stdout, "     Recovery attempts: %d\n", item.RecoveryAttempts)
+		}
+		if item.RecoveryMode != "" {
+			fmt.Fprintf(stdout, "     Recovery mode: %s\n", item.RecoveryMode)
+		}
+	}
+}
+
+func printSequenceFailureReport(stdout io.Writer, report *state.FailureReport) {
+	if report.Category != "" {
+		fmt.Fprintf(stdout, "     Failure type: %s\n", report.Category)
+	}
+	if report.Summary != "" {
+		fmt.Fprintf(stdout, "     Failure summary: %s\n", report.Summary)
+	}
+	for _, check := range report.BlockingChecks {
+		fmt.Fprintf(stdout, "     Blocking check: %s\n", check.Summary)
+		for _, detail := range check.Details {
+			fmt.Fprintf(stdout, "       - %s\n", detail)
+		}
+	}
+	if report.EvidenceReport != "" {
+		fmt.Fprintf(stdout, "     Evidence report: %s\n", report.EvidenceReport)
+	}
+	if report.NextAction != "" {
+		fmt.Fprintf(stdout, "     Next action: %s\n", report.NextAction)
 	}
 }
 
@@ -3369,6 +3427,7 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 		"--repo", stringDefault(options.RepoPath, "."),
 		"--template", stringDefault(options.Template, "codex"),
 		fmt.Sprintf("--include-specification=%t", options.IncludeSpecification),
+		"--recovery-attempts", strconv.Itoa(options.RecoveryAttempts),
 		"--supervisor-id", supervisorID,
 		"--supervisor-log", logPath,
 	)
@@ -3377,6 +3436,9 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 	}
 	if options.EngineOverride != "" {
 		args = append(args, "--engine", options.EngineOverride)
+	}
+	if options.SandboxOverride != "" {
+		args = append(args, "--sandbox", options.SandboxOverride)
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout = logFile
@@ -3391,6 +3453,7 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 	fmt.Fprintf(stdout, "Detached run-folder supervisor starting\n")
 	fmt.Fprintf(stdout, "Sequence: %s\n", sequenceID)
 	fmt.Fprintf(stdout, "Status: promptgrinder sequence %s\n", sequenceID)
+	fmt.Fprintf(stdout, "Cancel: promptgrinder sequence cancel %s\n", sequenceID)
 	fmt.Fprintf(stdout, "PID: %d\n", cmd.Process.Pid)
 	fmt.Fprintf(stdout, "Log: %s\n", logPath)
 	fmt.Fprintln(stdout, "Progress: promptgrinder sequences")
@@ -3400,6 +3463,9 @@ func startDetachedRunFolder(stdout io.Writer, service Service, homeDir, folder s
 			switch sequence.Status {
 			case "completed":
 				fmt.Fprintln(stdout, "State: completed")
+				return nil
+			case "product-blocked":
+				fmt.Fprintln(stdout, "State: product-blocked")
 				return nil
 			case "failed", "cancelled", "interrupted":
 				fmt.Fprintf(stdout, "State: %s\n", sequence.Status)
@@ -3617,11 +3683,7 @@ func printRunFolderSummary(stdout io.Writer, folder string, summary pgruntime.Ru
 		if summary.Sequence != nil {
 			fmt.Fprintln(stdout)
 			fmt.Fprintln(stdout, "Summary:")
-			if summary.Sequence.TokenUsage.Available {
-				fmt.Fprintf(stdout, "Total tokens used: %d\n", summary.Sequence.TokenUsage.Total)
-			} else {
-				fmt.Fprintln(stdout, "Total tokens used: not reported by worker logs")
-			}
+			printRunFolderTokenUsage(stdout, summary.Sequence)
 			fmt.Fprintln(stdout, "Executive summary:")
 			fmt.Fprintln(stdout, valueOrDash(summary.Sequence.ExecutiveSummary))
 		}
@@ -3639,17 +3701,34 @@ func printRunFolderAggregate(stdout io.Writer, summary pgruntime.RunFolderSummar
 			fmt.Fprintf(stdout, "Role-policy fingerprint changes recorded: %d\n", len(summary.Adoption.PolicyHashChanges))
 		}
 	}
-	if summary.Run.Status != "completed" || summary.Sequence == nil {
+	if summary.Sequence == nil {
+		return
+	}
+	if summary.Run.Status == "product-blocked" {
+		fmt.Fprintln(stdout, "Product outcome: blocked. Resolve the recorded capability gate before starting a new compatible sequence.")
+		return
+	}
+	if summary.Run.Status != "completed" {
 		return
 	}
 	fmt.Fprintln(stdout, "Summary:")
-	if summary.Sequence.TokenUsage.Available {
-		fmt.Fprintf(stdout, "Total tokens used: %d\n", summary.Sequence.TokenUsage.Total)
-	} else {
-		fmt.Fprintln(stdout, "Total tokens used: not reported by worker logs")
-	}
+	printRunFolderTokenUsage(stdout, summary.Sequence)
 	fmt.Fprintln(stdout, "Executive summary:")
 	fmt.Fprintln(stdout, valueOrDash(summary.Sequence.ExecutiveSummary))
+}
+
+func printRunFolderTokenUsage(stdout io.Writer, sequence *runfolder.SequenceState) {
+	fmt.Fprintf(stdout, "Reported token usage: %s\n", sequence.TokenUsage)
+	for _, item := range sequence.Items {
+		if item.Status == "skipped" {
+			continue
+		}
+		if item.TokenUsage == nil {
+			fmt.Fprintf(stdout, "- %s: unavailable\n", item.PromptName)
+			continue
+		}
+		fmt.Fprintf(stdout, "- %s: %s\n", item.PromptName, *item.TokenUsage)
+	}
 }
 
 func printTerminalCandidates(stdout io.Writer, candidates []pgruntime.TerminalCandidate) error {

@@ -37,6 +37,11 @@ work orders or workers.
 
 Use `promptgrinder engines` and `promptgrinder engines describe <engine>` to
 see registered execution engines and their capabilities before assigning work.
+The supported release-candidate surface is macOS (Apple silicon and Intel),
+Terminal.app, iTerm2, and headless execution. Codex supports `run` and
+`run-folder`; Codex and Antigravity adapters are available for named workers.
+Other operating systems, terminals, and engines are not qualified or supported
+until explicitly documented.
 
 ## Work-order authoring and validation
 
@@ -148,6 +153,15 @@ runnable when frontmatter supplies a stable `id` and explicit `type`; optional
 must resolve to earlier task IDs before the sequence can start. Slice path
 metadata and declared role boundaries are the enforced ordinary run-folder file
 policy.
+
+`run-folder --sandbox danger-full-access` overrides the Codex sandbox for the
+current invocation only, including a resumed failed slice and later runnable
+slices. Completed checkpoints remain untouched. Omit the flag to preserve the
+task/default sandbox selection.
+
+Every started sequence prints its copyable cancellation command,
+`promptgrinder sequence cancel <sequence-id>`. Cancellation preserves completed
+checkpoints and recorded worker evidence.
 When a slice declares a role, the role description and allowed paths are also
 injected as an outer boundary: changed and expected paths must satisfy both the
 role and slice policies. Role quality gates are visible readiness guidance, not
@@ -184,6 +198,15 @@ than guessing. Exact worker IDs, paths, policy, and logs remain in worker and
 JSON detail. The active prompt uses the same `|`, `/`, `-`, and `\\` spinner as
 foreground shared `run` work. Failed rows show a copyable absolute worker-log
 path and use a local file hyperlink where the terminal supports it.
+When a worker returns `PARTIAL` or `BLOCKED` with an optional structured
+failure report, foreground output also shows the completion fields, failure
+type, independently blocking checks, evidence-report path, and next action.
+It bounds the display and directs users to the worker log only for remaining
+detail. The same additive fields are retained in `promptgrinder sequence <id>
+--json` and the sequence progress-event JSONL, so automation does not need to
+scrape terminal output. An undeclared `STATUS: BLOCKED` is displayed as a
+blocked result with its diagnostic, while it remains an ordinary failed worker
+for sequencing purposes.
 
 ### UC-17a: Select a model within cost and capability policy
 
@@ -220,6 +243,14 @@ failed or changed slice. A changed completed slice is never adopted. Use
 sequence from the beginning, `--fresh` to create a new sequence, or
 `--no-resume` to avoid existing resume state.
 
+An explicit `--resume` can sometimes select a validation-only preflight record
+after a changed completed prefix. That record deliberately has no persisted
+`run.json` and is not resumable. PromptGrinder keeps the command failed, names
+validation-only preflight as a possible cause, and prints a copyable
+`--fresh` command; it never silently starts fresh. Ordinary failed or
+interrupted runs that retain valid run state continue to show their normal
+`--resume` guidance.
+
 When several interrupted records exist, use
 `promptgrinder run-folder <folder> --resume-sequence <sequence-id>` to adopt exactly one named unfinished
 sequence. PromptGrinder does not recalculate, copy, or silently rewrite the
@@ -240,6 +271,15 @@ Legacy sequence records are accepted when their combined hashes or retained Git
 checkpoint/commit evidence prove the same content and dependency identity. If
 that proof is unavailable, PromptGrinder fails with a migration message and
 leaves the original state untouched.
+
+### UC-19a: Inspect reported run-folder token usage
+
+When a runtime reports structured token usage, `run-folder` stores and displays
+the input, cached input, output, reasoning output, and total for each executed
+slice, plus the sequence aggregate. These are observed runtime counts, not
+currency estimates. A missing runtime usage event is displayed as `unavailable`;
+PromptGrinder does not infer token counts from worker prose or logs. Usage from
+each recorded recovery attempt is included in that slice's total.
 
 ### UC-20: Keep reviewable Git checkpoints
 
@@ -546,3 +586,56 @@ PromptGrinder orchestrates engineering work; it does not provide a coding
 model, replace Git, silently merge or publish work, guarantee that AI-generated
 commands are safe, or turn discovered role proposals into active named workers
 without explicit project configuration.
+## UC-19b — recover safely from an interrupted worker runtime
+
+When a worker log contains the explicit runtime evidence `client disconnection
+detected`, `run-folder --recovery-attempts N` may retry only that slice. On a
+later `--resume` with `--commit-each` or `--require-clean-git`, PromptGrinder
+checks persisted failed-slice evidence before applying the ordinary clean-Git
+rejection. Before the retry, it attributes changes against the exact persisted
+pre-slice baseline and enforces the allowed/forbidden path policy. Proven
+slice-owned untracked output is moved, and tracked output is represented by a
+binary patch, under
+`$PROMPTGRINDER_HOME/recovery-artifacts/`; the artifact manifest explains how
+to inspect and selectively restore it. The retry begins from a clean baseline.
+
+PromptGrinder never resets, cleans, stashes, broadly kills processes, or
+auto-commits partial output. A test assertion, compiler error, malformed
+completion report, explicit cancellation, timeout, changed Git history, or
+ambiguous path is not a recoverable client disconnect and stops with retained
+evidence instead.
+
+## UC-19c — repair one declared validation failure in the same worker session
+
+When an implementation worker returns `STATUS: PARTIAL` and
+`NEXT_PROMPT_SAFE: no`, PromptGrinder may use one configured recovery attempt
+to continue the same runtime session only when the worker log proves that a
+command declared in the slice's `validation` list failed and the pre-slice
+baseline proves the current diff is exclusively within the slice's allowed,
+non-forbidden paths. The repair context names that command and requires the
+worker to inspect the retained delta, fix it within scope, rerun validation,
+and return `PASS`/`yes` before normal checkpointing can occur.
+
+This is distinct from client-disconnect recovery: validation repair keeps the
+scoped delta in place, while a runtime interruption uses a preservation
+artifact and a clean retry baseline. Cancellation, timeout, `BLOCKED`, missing
+or malformed completion evidence, an unrelated/forbidden path, no reusable
+runtime session, another active worker, or a repeated partial result stops
+without source cleanup or automatic commit.
+
+## UC-19d — finish a capability audit that product-blocks implementation
+
+A hard-gate audit may complete successfully by proving that an authoritative
+data source or prerequisite is unavailable. Such a slice explicitly declares
+`gate_outcome: BLOCKED` and returns `STATUS: BLOCKED` with
+`NEXT_PROMPT_SAFE: no`. PromptGrinder still enforces its exact baseline and
+allowed/forbidden path policy; with `--commit-each`, it checkpoints only the
+scoped audit report. It then records the slice as `gate-blocked`, records the
+sequence as `product-blocked`, and does not launch dependent implementation
+slices.
+
+This is distinct from an execution failure: the terminal summary identifies a
+completed capability gate and its product outcome, while an undeclared
+`STATUS: BLOCKED` continues to be a failed worker. A product-blocked sequence
+cannot auto-recover or resume. Resolve the prerequisite and deliberately start
+a new compatible or fresh sequence.

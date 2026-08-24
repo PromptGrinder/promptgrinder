@@ -402,6 +402,46 @@ func TestWorkerStateUsesOwnerOnlyPermissions(t *testing.T) {
 	}
 }
 
+func TestParseFailureReportPreservesIndependentChecks(t *testing.T) {
+	report := ParseFailureReport(`Failure category: environment-capability
+Failure summary: final verification incomplete
+Feature evidence:
+- Slices 01–09: passed
+- Targeted discovery behaviour: passed
+Blocking checks:
+- Backend full gate: failed
+  - 35 fixture errors
+- Local catalogue import: not run
+  - admin token unavailable
+Evidence report: docs/features/example/handoffs/10-completion-report.md
+Next action: configure the local token and repair fixtures
+STATUS: BLOCKED
+NEXT_PROMPT_SAFE: no`)
+	if report == nil {
+		t.Fatal("report = nil")
+	}
+	if report.Category != "environment-capability" || report.Summary != "final verification incomplete" || len(report.FeatureEvidence) != 2 || len(report.BlockingChecks) != 2 || len(report.BlockingChecks[0].Details) != 1 || report.EvidenceReport != "docs/features/example/handoffs/10-completion-report.md" || report.NextAction != "configure the local token and repair fixtures" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestFailureReportForFailureClassifiesFallbacks(t *testing.T) {
+	for _, test := range []struct {
+		reason string
+		want   string
+	}{
+		{"path policy violation at completion", "path-policy"},
+		{"local credential unavailable", "environment-capability"},
+		{"worker failed with worker status failed", "worker-crash"},
+		{"task was cancelled", "cancellation"},
+		{"test assertion failed", "product-test"},
+	} {
+		if got := FailureReportForFailure(nil, test.reason).Category; got != test.want {
+			t.Fatalf("%q category = %q, want %q", test.reason, got, test.want)
+		}
+	}
+}
+
 func testWorker(store Store, id, status string) Worker {
 	now := time.Now().UTC()
 	return Worker{

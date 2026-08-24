@@ -31,6 +31,48 @@ type synchronousTerminal struct {
 	launched  []string
 }
 
+// completionRuntimeTerminal drives the real worker completion handoff while
+// keeping the test independent of Codex and shell-installed PromptGrinder.
+// It executes a test-owned fake engine, writes its output where FinishWorker
+// reads it, and then calls the production completion path.
+type completionRuntimeTerminal struct {
+	service    *Service
+	store      state.Store
+	executable string
+	repo       string
+	launches   []string
+}
+
+func (t *completionRuntimeTerminal) Name() string                     { return "runtime-completion" }
+func (t *completionRuntimeTerminal) Command(scriptPath string) string { return scriptPath }
+func (t *completionRuntimeTerminal) Launch(scriptPath string) error {
+	workerID := filepath.Base(filepath.Dir(scriptPath))
+	t.launches = append(t.launches, workerID)
+	worker, err := t.store.Load(workerID)
+	if err != nil {
+		return err
+	}
+	if declared, _ := worker.Metadata["gate_outcome"].(string); declared == "BLOCKED" {
+		if err := os.MkdirAll(filepath.Join(t.repo, "reports"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(t.repo, "reports", "capability-gate.md"), []byte("authoritative prerequisite unavailable\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	output, err := exec.Command(t.executable, "exec").Output()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(worker.LogPath, output, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(codex.CapturedOutputPath(worker.RecordPath), output, 0o600); err != nil {
+		return err
+	}
+	return t.service.FinishWorker(worker.RecordPath, 0)
+}
+
 type failingFolderLauncher struct {
 	failName string
 }
@@ -732,6 +774,101 @@ func TestRunPromptFolderForegroundFailureStopsAndPersistsResumeState(t *testing.
 	}
 	if persisted.Status != "failed" || persisted.Items[1].Status != "failed" || persisted.Items[2].Status != "pending" {
 		t.Fatalf("persisted = %#v", persisted)
+	}
+}
+
+func TestRunPromptFolderCapabilityGateCompletesThroughRuntimeHandoff(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "PromptGrinder Test")
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	writeFile(t, repo, "10-implement-capability-gate.md", "---\nid: authoritative-data-gate\ntype: implement\ngate_outcome: BLOCKED\nallowed_paths: [reports/**]\n---\n# Audit\n")
+	writeFile(t, repo, "20-implement-dependent.md", "---\nid: dependent-feature\ntype: implement\ndepends_on: [authoritative-data-gate]\n---\n# Do not launch\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	home := t.TempDir()
+	store := state.NewStore(home)
+	fakeEngine := testsupport.FakeExecutable(t, "codex-gate", `#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-gate"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Audit complete\nSTATUS: BLOCKED\nNEXT_PROMPT_SAFE: no"}}'
+`)
+	completionTerminal := &completionRuntimeTerminal{store: store, executable: fakeEngine, repo: repo}
+	service := Service{
+		Store:    store,
+		Registry: engine.NewRegistry(codex.Engine{}),
+		Worker: worker.Manager{
+			Store: store, Engine: codex.Engine{}, EngineName: "codex", Executable: "promptgrinder",
+			BaseConfig:            config.Config{Engine: "codex", CodexExecutable: fakeEngine, TerminalAdapter: "terminal", TerminalMode: "normal", HomeDir: home},
+			NewExecutor:           runtimeTestExecutorFactory(store, completionTerminal),
+			SelectTerminalAdapter: func(string, string) (terminal.TerminalAdapter, error) { return completionTerminal, nil },
+		},
+	}
+	completionTerminal.service = &service
+	events := []RunFolderProgressEvent{}
+	summary, err := service.RunPromptFolder(repo, RunFolderOptions{
+		HomeDir: home, RepoPath: repo, Checkpoint: true, CommitEach: true, RequireCleanGit: true,
+		ExecutionPolicy: RunFolderExecutionForeground,
+		Progress:        func(event RunFolderProgressEvent) { events = append(events, event) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Sequence == nil || summary.Sequence.Status != "product-blocked" || summary.Run.Status != "product-blocked" {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if len(completionTerminal.launches) != 1 {
+		t.Fatalf("launched workers = %v", completionTerminal.launches)
+	}
+	gate, dependent := summary.Sequence.Items[0], summary.Sequence.Items[1]
+	if gate.Status != "gate-blocked" || gate.CompletionStatus != "BLOCKED" || gate.NextPromptSafe == nil || *gate.NextPromptSafe || dependent.Status != "pending" {
+		t.Fatalf("items = %#v", summary.Sequence.Items)
+	}
+	if count := strings.TrimSpace(runGit(t, repo, "rev-list", "--count", "HEAD")); count != "2" {
+		t.Fatalf("gate report was not checkpointed exactly once: commits=%s", count)
+	}
+	if files := strings.TrimSpace(runGit(t, repo, "show", "--format=", "--name-only", "HEAD")); files != "reports/capability-gate.md" {
+		t.Fatalf("gate checkpoint files = %q", files)
+	}
+	for _, event := range events {
+		if event.Type == "prompt.failed" {
+			t.Fatalf("gate emitted ordinary failure: %#v", events)
+		}
+	}
+	if _, err := service.RunPromptFolder(repo, RunFolderOptions{HomeDir: home, RepoPath: repo, Resume: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true, ExecutionPolicy: RunFolderExecutionForeground}); err == nil || !strings.Contains(err.Error(), "product-blocked") {
+		t.Fatalf("resume err = %v", err)
+	}
+}
+
+func TestRunPromptFolderUndeclaredBlockedCompletionFailsThroughRuntimeHandoff(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "PromptGrinder Test")
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	writeFile(t, repo, "10-implement-ordinary.md", "---\nid: ordinary-audit\ntype: implement\n---\n# Ordinary task\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	home := t.TempDir()
+	store := state.NewStore(home)
+	fakeEngine := testsupport.FakeExecutable(t, "codex-blocked", `#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-blocked"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Audit complete\nSTATUS: BLOCKED\nNEXT_PROMPT_SAFE: no"}}'
+`)
+	completionTerminal := &completionRuntimeTerminal{store: store, executable: fakeEngine, repo: repo}
+	service := Service{Store: store, Registry: engine.NewRegistry(codex.Engine{}), Worker: worker.Manager{
+		Store: store, Engine: codex.Engine{}, EngineName: "codex", Executable: "promptgrinder",
+		BaseConfig:            config.Config{Engine: "codex", CodexExecutable: fakeEngine, TerminalAdapter: "terminal", TerminalMode: "normal", HomeDir: home},
+		NewExecutor:           runtimeTestExecutorFactory(store, completionTerminal),
+		SelectTerminalAdapter: func(string, string) (terminal.TerminalAdapter, error) { return completionTerminal, nil },
+	}}
+	completionTerminal.service = &service
+	summary, err := service.RunPromptFolder(repo, RunFolderOptions{HomeDir: home, RepoPath: repo, ExecutionPolicy: RunFolderExecutionForeground})
+	if err == nil || !strings.Contains(err.Error(), "non-continuable result") {
+		t.Fatalf("summary=%#v err=%v", summary, err)
+	}
+	if summary.Sequence == nil || summary.Sequence.Status != "failed" || summary.Sequence.Items[0].Status != "failed" {
+		t.Fatalf("sequence = %#v", summary.Sequence)
 	}
 }
 

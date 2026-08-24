@@ -83,6 +83,7 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 		{"bad type", "type: deploy", "type must be one of"},
 		{"bad role", "role: Backend Feature", "role must be a lowercase"},
 		{"bad context mode", "context_mode: isolated", "context_mode must be one of shared or fresh"},
+		{"bad gate outcome", "gate_outcome: PASS", "gate_outcome must be BLOCKED"},
 		{"duplicate dependency", "depends_on: [task-a, task-a]", `depends_on contains duplicate "task-a"`},
 		{"criteria type", "acceptance_criteria: true", "must be a string or nonempty list"},
 		{"empty validation", "validation: []", "must be a string or nonempty list"},
@@ -159,6 +160,19 @@ func TestContractRendersContextMode(t *testing.T) {
 	want := "# Task Semantics (v3)\n\n## Context Mode\n\n- fresh\n\nbody"
 	if got := string(Render(task)); got != want {
 		t.Fatalf("rendered = %q, want %q", got, want)
+	}
+}
+
+func TestContractRendersCapabilityGateOutcome(t *testing.T) {
+	task, err := Parse("---\ngate_outcome: BLOCKED\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "task.md"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(Render(task)); !strings.Contains(got, "## Gate Outcome\n\n- BLOCKED") {
+		t.Fatalf("rendered = %q", got)
 	}
 }
 

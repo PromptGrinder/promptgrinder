@@ -46,6 +46,13 @@ runnable only when frontmatter declares both `id` and `type`.
 
 ## Complete slice
 
+For a complete, copyable train structure—including shared specification,
+implementation, verification, path boundaries, and the required completion
+contract—start with the
+[`baseline-train`](../.agents/skills/promptgrinder-slice-authoring/templates/baseline-train)
+template. Copy it into the target repository and replace every placeholder
+before running validation.
+
 ```markdown
 ---
 id: ranking-history-api
@@ -95,6 +102,7 @@ available DSL; it is not a requirement to set every optional field.
 | `role` | Declared execution responsibility | Lowercase, hyphen-separated slug. PromptGrinder loads its description and allowed paths as an outer boundary; the slice policy can only narrow that scope. |
 | `depends_on` | Earlier prerequisite task IDs | List of `id` values. Every referenced ID must exist and occur earlier in filename order. |
 | `context_mode` | Runtime conversation continuity | `shared` (the default) resumes the preceding runtime session when the engine supports it. `fresh` starts this slice without the preceding session, establishing a deliberate clean-context boundary. The shared specification and current repository state remain available in both modes. |
+| `gate_outcome` | Capability-gate product outcome | Optional. The only supported value is `BLOCKED`. Use on an audit slice that may successfully establish an authoritative-data or prerequisite blocker. It requires the worker to return `STATUS: BLOCKED` and `NEXT_PROMPT_SAFE: no`; PromptGrinder checkpoints permitted scoped evidence, marks the sequence `product-blocked`, and does not launch later slices. |
 | `engine` | Runtime and model selection | A string engine name, or a mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`, `approval`, `web_search`, and `images`. `max_cost` is `low`, `medium`, or `high`; `capabilities` uses `text`, `image`, `code`, or `web-search`. |
 | `working_directory` | Worker directory relative to the repository | Optional. |
 | `timeout` | Worker timeout | Optional duration such as `45m`. |
@@ -172,6 +180,57 @@ The sequence continues only when the final worker output contains exactly one
 duplicate fields, plus `PARTIAL`, `BLOCKED`, or `no`, stop the sequence.
 PromptGrinder also appends this requirement to runnable `run-folder` prompts,
 but including it in the slice makes the worker-facing contract unambiguous.
+
+When a slice returns `PARTIAL` or `BLOCKED`, it may also include this optional
+bounded failure report before the completion fields. PromptGrinder persists it
+with the sequence item, renders it immediately in foreground mode, and exposes
+the same fields through `promptgrinder sequence <id> --json` and sequence event
+JSONL. This does not change completion semantics.
+
+```text
+Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation
+Failure summary: one-line reason
+Feature evidence:
+- completed check
+Blocking checks:
+- check: failed or not run
+  - concise detail
+Evidence report: docs/features/.../handoffs/report.md
+Next action: repair, configure, or rerun action
+```
+
+The report is intentionally optional for compatibility. When absent,
+PromptGrinder derives a conservative category from the terminal failure and
+retains the worker log as the detailed source.
+
+### Capability-gate outcomes
+
+Ordinarily `STATUS: BLOCKED` is a worker failure and no automatic checkpoint is
+made. Declare `gate_outcome: BLOCKED` only for a hard-gate audit whose useful,
+successful result can be that product implementation must not proceed. The
+worker must still write its report only inside `allowed_paths` and pass the
+normal path-policy checks. With `--commit-each`, PromptGrinder commits those
+scoped findings, records the completed slice as `gate-blocked`, and ends the
+sequence as `product-blocked`; dependent implementation slices remain pending
+and are never launched.
+
+PromptGrinder carries this declared outcome through the worker completion
+handoff. The sole exception is exactly `STATUS: BLOCKED` with
+`NEXT_PROMPT_SAFE: no`; an undeclared `BLOCKED`, malformed completion, or any
+other status/safety combination remains a failed worker result.
+
+```yaml
+id: authoritative-data-gate
+type: implement
+gate_outcome: BLOCKED
+allowed_paths:
+  - docs/decisions/**
+```
+
+This is not a successful product delivery and is not recoverable through
+`--resume`. After the underlying prerequisite is explicitly resolved, start a
+new compatible sequence (or a deliberately fresh one) with updated gate
+evidence. Do not use `STATUS: PASS` to conceal a product blocker.
 
 ## Authoring and preflight
 

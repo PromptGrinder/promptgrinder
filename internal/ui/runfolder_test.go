@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"promptgrinder/internal/runfolder"
+	"promptgrinder/internal/state"
 )
 
 func inventory() []runfolder.ProgressPrompt {
@@ -35,7 +36,7 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	r.Close()
 
 	got := out.String()
-	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "Status: promptgrinder sequence seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "✗ [2/6] 10-implement.md|unscoped|unknown-engine/default|1m 6s", "Reason: STATUS is BLOCKED, not PASS", "Completion: STATUS=BLOCKED NEXT_PROMPT_SAFE=no", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
+	for _, want := range []string{"PromptGrinder", "Mode: foreground", "Sequence: seq_1", "Status: promptgrinder sequence seq_1", "Cancel: promptgrinder sequence cancel seq_1", "00-spec.md [specification] - skipped", "30-review.md [review] - pending", "50-other.md [unknown] - pending", "10-implement.md [implement] - active", "✗ [2/6] 10-implement.md|unscoped|unknown-engine/default|1m 6s", "Reason: STATUS is BLOCKED, not PASS", "Completion: STATUS=BLOCKED NEXT_PROMPT_SAFE=no", "Resume: promptgrinder run-folder 'my prompts' --resume"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
@@ -48,6 +49,46 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererDistinguishesCompletedCapabilityGate(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_gate", Folder: "tasks", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement-gate.md", Type: runfolder.TypeImplement, Status: "pending"}, {Name: "20-implement-dependent.md", Type: runfolder.TypeImplement, Status: "pending"}}, Total: 2})
+	unsafe := false
+	r.Update(runfolder.ProgressEvent{Type: "prompt.gate-blocked", PromptName: "10-implement-gate.md", PromptType: runfolder.TypeImplement, Status: "gate-blocked", WorkerID: "wrk_gate", Scope: "data-audit", Engine: "codex", Model: "gpt-5.6-terra", CompletionStatus: "BLOCKED", NextPromptSafe: &unsafe, Reason: "declared capability gate completed: product outcome BLOCKED", Total: 2, Completed: 1})
+	r.Finish(true)
+	got := out.String()
+	for _, want := range []string{"■ [1/2] 10-implement-gate.md|data-audit|codex/gpt-5.6-terra|<1s", "Completion: STATUS=BLOCKED NEXT_PROMPT_SAFE=no", "Result: product-blocked"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Result: failed") {
+		t.Fatalf("gate was rendered as an execution failure:\n%s", got)
+	}
+}
+
+func TestRunFolderRendererRendersStructuredBlockedReport(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_report", Folder: "tasks", Inventory: []runfolder.ProgressPrompt{{Name: "10-final-verify.pg", Type: runfolder.TypeVerify, Status: "pending"}}, Total: 1})
+	unsafe := false
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-final-verify.pg", PromptType: runfolder.TypeVerify, Status: "failed", CompletionStatus: "BLOCKED", NextPromptSafe: &unsafe, LogPath: "/tmp/worker.log", FailureReport: &state.FailureReport{
+		Category:        "environment-capability",
+		Summary:         "final verification incomplete",
+		FeatureEvidence: []string{"Slices 01–09: passed", "Targeted discovery behaviour: passed"},
+		BlockingChecks:  []state.FailureCheck{{Summary: "Backend full gate: failed", Details: []string{"35 fixture errors"}}, {Summary: "Local catalogue import: not run", Details: []string{"admin token unavailable"}}},
+		EvidenceReport:  "docs/features/example/handoffs/10-completion-report.md",
+		NextAction:      "repair fixtures and configure the local token",
+	}})
+	r.Finish(false)
+	got := out.String()
+	for _, want := range []string{"Result: BLOCKED — final verification incomplete", "Failure type: environment/capability block", "Feature evidence:", "Slices 01–09: passed", "Blocking checks:", "Backend full gate: failed", "Local catalogue import: not run", "Evidence report: docs/features/example/handoffs/10-completion-report.md", "Next action: repair fixtures and configure the local token", "Resume: promptgrinder run-folder tasks --resume"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRunFolderRendererShowsAutomaticRecovery(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})
@@ -56,6 +97,19 @@ func TestRunFolderRendererShowsAutomaticRecovery(t *testing.T) {
 	r.Close()
 	if got := out.String(); !strings.Contains(got, "10-implement.md [implement] - active") || !strings.Contains(got, "Reason: automatic recovery attempt 1 of 1 after: launch failed") {
 		t.Fatalf("recovery output = %q", got)
+	}
+}
+
+func TestRunFolderRendererRetainsKnownRecoveryIdentityAndArtifact(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", Inventory: []runfolder.ProgressPrompt{{Name: "10-test.md", Type: runfolder.TypeTest, Status: "pending"}}})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-test.md", PromptType: runfolder.TypeTest, Status: "failed", WorkerID: "wrk_known", Scope: "android-test", Engine: "codex", Model: "gpt-5.6-terra", LogPath: "/tmp/known.log", RecoveryAttempt: 1, RecoveryArtifact: "/tmp/artifact", Reason: "resume recovery blocked"})
+	r.Close()
+	for _, want := range []string{"10-test.md|android-test|codex/gpt-5.6-terra|<1s", "Retained artifact: /tmp/artifact", "Reason: resume recovery blocked"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q: %q", want, out.String())
+		}
 	}
 }
 

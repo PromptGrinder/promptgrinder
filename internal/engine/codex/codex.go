@@ -114,7 +114,13 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 		var event struct {
 			Type     string `json:"type"`
 			ThreadID string `json:"thread_id"`
-			Item     struct {
+			Usage    struct {
+				InputTokens           *int64 `json:"input_tokens"`
+				CachedInputTokens     *int64 `json:"cached_input_tokens"`
+				OutputTokens          *int64 `json:"output_tokens"`
+				ReasoningOutputTokens *int64 `json:"reasoning_output_tokens"`
+			} `json:"usage"`
+			Item struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"item"`
@@ -125,11 +131,26 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 		if event.Type == "thread.started" && event.ThreadID != "" {
 			result.SessionID = event.ThreadID
 		}
+		if event.Type == "turn.completed" && (event.Usage.InputTokens != nil || event.Usage.OutputTokens != nil) {
+			result.TokensInput = event.Usage.InputTokens
+			result.TokensCachedInput = event.Usage.CachedInputTokens
+			result.TokensOutput = event.Usage.OutputTokens
+			result.TokensReasoningOutput = event.Usage.ReasoningOutputTokens
+			total := int64(0)
+			if result.TokensInput != nil {
+				total += *result.TokensInput
+			}
+			if result.TokensOutput != nil {
+				total += *result.TokensOutput
+			}
+			result.TokensTotal = &total
+		}
 		if event.Type == "item.completed" && event.Item.Type == "agent_message" && strings.TrimSpace(event.Item.Text) != "" {
 			result.Summary = strings.TrimSpace(event.Item.Text)
 		}
 	}
 	result.CompletionStatus, result.NextPromptSafe, result.CompletionReason = state.ParseOrderedCompletionReport(result.Summary)
+	result.FailureReport = state.ParseFailureReport(result.Summary)
 	return result
 }
 

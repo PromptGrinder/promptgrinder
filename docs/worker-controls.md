@@ -36,3 +36,17 @@ path-policy violations, cancellation, or a dirty baseline required by the run.
 It never substitutes a different model. After the configured bound or a
 non-recoverable failure, the sequence remains failed with its evidence intact
 and can be repaired and resumed explicitly.
+
+## Capability-gate outcome
+
+An ordinary `STATUS: BLOCKED` remains an execution failure. A slice that
+declares `gate_outcome: BLOCKED` is the explicit exception: its completed
+`BLOCKED`/`no` report is a successful capability audit with a product-blocked
+outcome. PromptGrinder applies the usual Git baseline, clean-worktree, and
+allowed/forbidden path checks, and may checkpoint its scoped report with
+`--commit-each`; it then stops before launching later slices.
+
+This outcome is never retried automatically and cannot be resumed as if the
+gate had passed. Resolve the prerequisite, update the work order, and start a
+new compatible or fresh sequence. No worker runtime semantics, cleanup, or
+ordinary failed-worker handling change.

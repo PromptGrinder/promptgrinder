@@ -4,6 +4,18 @@
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
+## Supported today
+
+PromptGrinder currently supports **macOS** on Apple silicon and Intel. It can
+run workers in **Terminal.app**, **iTerm2**, or **headless** mode. The built-in
+**Codex CLI** engine supports one-off `run` and ordered `run-folder` workflows;
+named workers additionally support the **Codex** and **Antigravity** adapters.
+
+Linux and Windows, other terminal applications, and other AI engines are not
+qualified or supported for this release candidate. Run `promptgrinder doctor`
+to inspect the available local engines and terminal adapters before starting
+work.
+
 ## Quick start
 
 Run these commands from the root of the Git repository where PromptGrinder
@@ -70,6 +82,13 @@ explicit `.pg` extension or the conventional `.md` extension. Use them when a fe
 is too large for one safe prompt: separate the domain change, CLI integration,
 tests, and final verification so each worker receives a smaller context and
 produces a reviewable result.
+
+Start new trains from the copyable
+[`baseline-train`](.agents/skills/promptgrinder-slice-authoring/templates/baseline-train)
+template. It provides the shared specification, an implementation and
+verification slice, safe path/validation placeholders, and the required
+completion contract; replace every placeholder and add only the slices the
+feature needs.
 
 For example, prepare a new `project archive` feature as three bounded slices:
 
@@ -171,6 +190,13 @@ responsibility, runtime, and path restrictions for named workers. These
 controls reduce risk, but they do not replace reviewing the generated changes
 and test evidence.
 
+When a runtime reports structured token usage, PromptGrinder persists the
+input, cached-input, output, and reasoning-output counts for each worker and
+shows per-slice and sequence totals. Counts are reported usage, not estimated
+currency cost: subscriptions, cached-input pricing, and organization pricing
+policies vary. Runtimes that do not report usage remain explicitly
+`unavailable`; PromptGrinder never estimates or scrapes token counts from prose.
+
 When a slice declares `role`, PromptGrinder loads that role's description and
 path boundary into the worker prompt. Role paths are an outer boundary: a slice
 can narrow them with its own path policy but cannot escape them. Role quality
@@ -256,6 +282,18 @@ same slice, but no later slice starts until it produces `PASS` and
 `NEXT_PROMPT_SAFE: yes`. PromptGrinder also never selects a fallback model;
 inspect the retained worker log and use `--resume` after a human repair when a
 failure is not recoverable.
+
+### Record a successful capability gate that blocks product work
+
+An ordinary `STATUS: BLOCKED` remains a failed worker result. For a hard-gate
+audit that can successfully prove an authoritative-data or prerequisite
+blocker, declare `gate_outcome: BLOCKED` in that slice's frontmatter. When the
+worker returns `STATUS: BLOCKED` and `NEXT_PROMPT_SAFE: no`, PromptGrinder
+checks the normal path policy, commits its scoped audit report with
+`--commit-each`, and marks the sequence `product-blocked`. Later slices do not
+launch, and the CLI reports this separately from an execution failure. A
+product-blocked sequence cannot be resumed until the prerequisite is resolved
+and a new compatible sequence is deliberately started.
 
 See [Slice DSL Reference](docs/slice-dsl.md) for the complete filename,
 frontmatter, path-policy, ordering, and completion-report contract.
@@ -810,7 +848,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.4.0` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.5.2` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
@@ -858,6 +896,9 @@ general development, slice authoring, CI, and release qualification.
   PromptGrinder workflows and product boundaries.
 
 - [Release policy](docs/RELEASE_POLICY.md)
+- [RC.4.2 qualification](docs/release/v1.0.0-rc.4.2-qualification.md)
+- [RC.4.2 final gate](docs/release/v1.0.0-rc.4.2-final-gate.md)
+- [RC.4.2 candidate notes](docs/release/v1.0.0-rc.4.2-release-notes.md)
 - [RC.4.0 qualification](docs/release/v1.0.0-rc.4.0-qualification.md)
 - [RC.4.0 final gate](docs/release/v1.0.0-rc.4.0-final-gate.md)
 - [RC.4.0 candidate notes](docs/release/v1.0.0-rc.4.0-release-notes.md)

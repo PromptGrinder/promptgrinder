@@ -4,6 +4,85 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.5.2 candidate
+
+- Documented the qualified runtime and terminal boundary prominently: macOS on
+  Apple silicon and Intel; Terminal.app, iTerm2, and headless execution; Codex
+  for `run` and `run-folder`; and Codex plus Antigravity for named workers.
+- Clarified slice-authoring guidance so ordinary implementation slices own a
+  complete role/module boundary, while genuinely concurrent, test-only, and
+  documentation-only work can use narrower declared scopes.
+
+### v1.0.0-rc.5.1 candidate
+
+- Added optional structured failure reports for `run-folder` workers. Foreground
+  output now shows declared completion status, failure type, independent
+  blocking checks, evidence-report path, and next action; the same additive
+  data is retained in sequence JSON and progress-event JSONL. Missing reports
+  receive a conservative crash, cancellation, path-policy, capability, or
+  product/test classification without changing sequence safety semantics.
+- When an explicit `run-folder --resume` selects a validation-only preflight
+  record without persisted execution state, the failure now explains the
+  possible cause and provides a copyable `--fresh` command instead of an
+  unusable resume recommendation.
+- Ordinary failed or interrupted run-folder executions with valid persisted
+  run state keep their existing `--resume` guidance.
+- Completed `gate_outcome: BLOCKED` audits now retain their exact
+  `BLOCKED`/`no` completion through the runtime handoff, so permitted evidence
+  checkpoints and the sequence ends as `product-blocked`. Ordinary `BLOCKED`
+  completions remain failed workers.
+
+### v1.0.0-rc.5.0 candidate
+
+- Added explicit `gate_outcome: BLOCKED` for hard-gate audit slices. A declared
+  gate can checkpoint its path-policy-approved report with `--commit-each`,
+  then ends the sequence as `product-blocked` without launching dependent
+  implementation slices.
+- Kept ordinary `STATUS: BLOCKED` as a failed worker result. Terminal and
+  sequence output now distinguish a completed product-blocking capability gate
+  from an execution failure and from a completed sequence.
+- Product-blocked sequences retain their audit evidence but cannot auto-retry
+  or resume until the prerequisite is resolved and a new compatible sequence
+  is deliberately started.
+
+### v1.0.0-rc.4.3 candidate
+
+- Show the exact `promptgrinder sequence cancel <sequence-id>` command whenever a run-folder sequence starts.
+
+### v1.0.0-rc.4.2 candidate
+
+- Hardened run-folder recovery after a runtime client disconnect. Known worker
+  identity, log evidence, and completion details are retained rather than
+  being replaced by an unscoped/default failure.
+- Before retrying a failed slice with retained, path-policy-approved changes,
+  PromptGrinder moves untracked output and records a binary patch in a durable
+  recovery artifact, then restores the proven clean baseline without using a
+  reset, clean, stash, or automatic partial commit.
+- Recovery remains fail-closed for ordinary validation failures, completion
+  contract failures, cancellation, timeouts, path-policy violations, changed
+  Git history, and ambiguous changes.
+- Added one bounded same-session validation-repair pass for a worker-declared
+  `PARTIAL`/`no` result only when its durable log proves a declared validation
+  command failed and the retained diff is exclusively within that slice's path
+  policy. The repair keeps the scoped diff for the worker to correct; it never
+  checkpoints or advances until a later `PASS`/`yes` result succeeds.
+
+RC.4.2 is a compatible recovery-safety candidate. It is not tagged or
+published by merging this branch.
+
+### v1.0.0-rc.4.1 candidate
+
+- Added structured, reported Codex token usage to run-folder summaries and
+  status output. Per-slice input, cached-input, output, reasoning-output, and
+  total values are retained when the runtime reports them; unavailable values
+  remain explicitly unavailable rather than being inferred from worker logs.
+- Recovery attempts now accumulate reported usage once per attempt, so the
+  sequence total represents the observed cost of the complete run rather than
+  only the final retry.
+
+RC.4.1 is a compatible observability candidate. It is not tagged or published
+by merging this branch.
+
 ### v1.0.0-rc.2.4 candidate
 
 - Added repository-owned model policy with explicit low, medium, and high cost

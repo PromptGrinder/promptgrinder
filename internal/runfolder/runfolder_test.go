@@ -21,9 +21,12 @@ type fakeLauncher struct {
 	failName           string
 	failOnceName       string
 	failedOnce         bool
+	runtimeFailureOnce bool
+	runtimeFailed      bool
 	running            bool
 	logDir             string
 	logText            string
+	failureLogText     string
 	onLaunch           func(path string)
 	reportedSessionID  string
 	result             *state.EngineResult
@@ -50,11 +53,18 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 		f.onLaunch(path)
 	}
 	if filepath.Base(path) == f.failName {
-		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
+		return f.failedWorker(), fmt.Errorf("launch failed")
 	}
 	if filepath.Base(path) == f.failOnceName && !f.failedOnce {
 		f.failedOnce = true
-		return state.Worker{ID: "wrk_fail", Status: state.StatusFailed}, fmt.Errorf("launch failed")
+		return f.failedWorker(), fmt.Errorf("launch failed")
+	}
+	if f.runtimeFailureOnce && !f.runtimeFailed {
+		f.runtimeFailed = true
+		worker := f.failedWorker()
+		one := 1
+		worker.ExitCode = &one
+		return worker, nil
 	}
 	if f.running {
 		return state.Worker{ID: "wrk_running", Status: state.StatusRunning}, nil
@@ -80,6 +90,17 @@ func (f *fakeLauncher) LaunchPrompt(path, content, sessionID string) (state.Work
 		}
 	}
 	return worker, nil
+}
+
+func (f *fakeLauncher) failedWorker() state.Worker {
+	worker := state.Worker{ID: "wrk_fail", Status: state.StatusFailed}
+	if f.logDir != "" {
+		worker.LogPath = filepath.Join(f.logDir, worker.ID+".log")
+		if err := os.WriteFile(worker.LogPath, []byte(f.failureLogText), 0o644); err != nil {
+			panic(err)
+		}
+	}
+	return worker
 }
 
 func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
@@ -154,20 +175,315 @@ func TestRunFolderRecoversOnlyTheFailedSlice(t *testing.T) {
 	}
 }
 
-func TestRunFolderRecoversBlockedCompletionInTheSameSlice(t *testing.T) {
+func TestRunFolderRepairsDeclaredValidationInSameSession(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\nvalidation: [./verify-home]\n---\na")
+	writePromptFile(t, dir, "20-test-b.md", "b")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	partial := &state.EngineResult{Summary: "validation failed\nSTATUS: PARTIAL\nNEXT_PROMPT_SAFE: no", SessionID: "thread_repair", CompletionStatus: "PARTIAL", NextPromptSafe: boolPtr(false)}
+	launcher := &fakeLauncher{resultOnce: partial, logDir: t.TempDir(), logText: "./verify-home\nBUILD FAILED"}
+	launches := 0
+	launcher.onLaunch = func(path string) {
+		if filepath.Base(path) != "10-implement-a.md" || launches > 0 {
+			launches++
+			return
+		}
+		launches++
+		if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writePromptFile(t, filepath.Join(dir, "src"), "repaired.txt", "repaired")
+	}
+
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, CommitEach: true, RequireCleanGit: true, RecoveryAttempts: 1}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 3 || launcher.calls[1].SessionID != "thread_repair" {
+		t.Fatalf("calls=%#v", launcher.calls)
+	}
+	if !strings.Contains(launcher.calls[1].Content, "# Validation Repair Attempt") || !strings.Contains(launcher.calls[1].Content, "./verify-home") {
+		t.Fatalf("repair prompt = %q", launcher.calls[1].Content)
+	}
+	item := summary.Sequence.Items[0]
+	if item.RecoveryAttempts != 1 || item.RecoveryMode != "validation-repair" || item.Status != "succeeded" {
+		t.Fatalf("item=%#v", item)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "repaired.txt")); err != nil {
+		t.Fatalf("repaired file missing after checkpoint: %v", err)
+	}
+	if commits := strings.TrimSpace(string(gitOutput(t, dir, "rev-list", "--count", "HEAD"))); commits != "2" {
+		t.Fatalf("repair was not checkpointed exactly once: commits=%s", commits)
+	}
+}
+
+func TestDeclaredValidationFailureRecognizesNormalizedShellCommand(t *testing.T) {
+	log := `/bin/zsh -lc './gradlew :app:testLocalDebugUnitTest --tests "*MatchDetail*"'
+BUILD FAILED
+Execution failed for task`
+	if !declaredCommandFailed(log, `cd mobile-android && ./gradlew :app:testLocalDebugUnitTest --tests "*MatchDetail*"`) {
+		t.Fatal("normalized declared Gradle command was not recognized")
+	}
+	if declaredCommandFailed(log, `cd mobile-android && ./gradlew :app:lintLocalDebug`) {
+		t.Fatal("unrelated declared command was recognized")
+	}
+}
+
+func TestValidationRepairUsesCompletionFromDurableWorkerEvidence(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\nvalidation: [./verify-home]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, filepath.Join(dir, "src"), "retained.txt", "retain")
+	log := filepath.Join(t.TempDir(), "worker.log")
+	if err := os.WriteFile(log, []byte("./verify-home\nBUILD FAILED"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next := false
+	failed := PromptState{WorkerID: "wrk_partial", GitBaseline: &baseline, Worker: state.Worker{ID: "wrk_partial", LogPath: log, EngineResult: &state.EngineResult{Summary: "STATUS: PARTIAL\nNEXT_PROMPT_SAFE: no", SessionID: "thread_partial", NextPromptSafe: &next}}}
+	if _, eligible := validationRepairEligibility(dir, home, Prompt{Path: filepath.Join(dir, "10-implement-a.md")}, failed); !eligible {
+		t.Fatal("durable worker completion evidence was not accepted")
+	}
+}
+
+func TestRunFolderRetriesClientDisconnectAfterIsolatingScopedChanges(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{
+		runtimeFailureOnce: true,
+		logDir:             t.TempDir(),
+		failureLogText:     "client disconnection detected, canceling the build",
+	}
+	// The first launched worker creates only an allowed untracked file. The
+	// recovery path must move it to an artifact, retry, and leave no partial
+	// output for --require-clean-git to reject.
+	launches := 0
+	launcher.onLaunch = func(string) {
+		launches++
+		if launches == 1 {
+			if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writePromptFile(t, filepath.Join(dir, "src"), "retained.txt", "retain")
+		}
+	}
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, CommitEach: true, RequireCleanGit: true, RecoveryAttempts: 1}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 2 || summary.Sequence.Items[0].RecoveryArtifact == "" {
+		t.Fatalf("calls=%d item=%#v", len(launcher.calls), summary.Sequence.Items[0])
+	}
+	artifact := summary.Sequence.Items[0].RecoveryArtifact
+	if _, err := os.Stat(filepath.Join(artifact, "manifest.json")); err != nil {
+		t.Fatalf("recovery manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(artifact, "files", "src", "retained.txt")); err != nil {
+		t.Fatalf("retained file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "retained.txt")); !os.IsNotExist(err) {
+		t.Fatalf("worktree retained output = %v", err)
+	}
+	clean, err := gitClean(dir)
+	if err != nil || !clean {
+		t.Fatalf("retry worktree clean=%t err=%v", clean, err)
+	}
+}
+
+func TestResumeIsolatesRecoverableScopedOutputBeforeCleanGitPreflight(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{runtimeFailureOnce: true, logDir: t.TempDir(), failureLogText: "client disconnection detected, canceling the build"}
+	launches := 0
+	launcher.onLaunch = func(string) {
+		launches++
+		if launches != 1 {
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writePromptFile(t, filepath.Join(dir, "src"), "partial.txt", "partial")
+	}
+	first, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err == nil || len(launcher.calls) != 1 {
+		t.Fatalf("first err=%v calls=%d", err, len(launcher.calls))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "partial.txt")); err != nil {
+		t.Fatalf("partial output unexpectedly missing: %v", err)
+	}
+
+	resumed, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Resume: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumed.Resumed || resumed.Sequence.SequenceID != first.Sequence.SequenceID || len(launcher.calls) != 2 {
+		t.Fatalf("resume=%t sequence=%s calls=%d", resumed.Resumed, resumed.Sequence.SequenceID, len(launcher.calls))
+	}
+	item := resumed.Sequence.Items[0]
+	if item.RecoveryArtifact == "" {
+		t.Fatalf("item=%#v", item)
+	}
+	if commits := strings.TrimSpace(string(gitOutput(t, dir, "rev-list", "--count", "HEAD"))); commits != "1" {
+		t.Fatalf("partial output was committed before retry: commits=%s", commits)
+	}
+	if _, err := os.Stat(filepath.Join(item.RecoveryArtifact, "files", "src", "partial.txt")); err != nil {
+		t.Fatalf("isolated partial output missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "partial.txt")); !os.IsNotExist(err) {
+		t.Fatalf("partial output remained in worktree: %v", err)
+	}
+	clean, cleanErr := gitClean(dir)
+	if cleanErr != nil || !clean {
+		t.Fatalf("resume retry baseline clean=%t err=%v", clean, cleanErr)
+	}
+}
+
+func TestResumeRefusesAmbiguousRetainedChangesWithoutModifyingThem(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &fakeLauncher{runtimeFailureOnce: true, logDir: t.TempDir(), failureLogText: "client disconnection detected, canceling the build"}
+	launcher.onLaunch = func(string) {
+		writePromptFile(t, dir, "outside.txt", "unrelated")
+	}
+	if _, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher); err == nil {
+		t.Fatal("expected initial worker failure")
+	}
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Resume: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "Resume recovery cannot safely isolate") {
+		t.Fatalf("resume error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "outside.txt")); statErr != nil {
+		t.Fatalf("ambiguous retained change was modified: %v", statErr)
+	}
+	if len(launcher.calls) != 1 {
+		t.Fatalf("unsafe recovery launched another worker: %d", len(launcher.calls))
+	}
+}
+
+func TestRecoverableFailureRequiresClientDisconnectEvidenceForCompletedWorker(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "worker.log")
+	if err := os.WriteFile(log, []byte("client disconnection detected, canceling the build"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prompt := PromptState{WorkerID: "wrk_1", Worker: state.Worker{ID: "wrk_1", Status: state.StatusFailed, LogPath: log}}
+	if !recoverableFailure(prompt, errors.New("slice failed with worker status failed")) {
+		t.Fatal("client disconnect should be recoverable")
+	}
+	if recoverableFailure(PromptState{WorkerID: "wrk_2", Worker: state.Worker{ID: "wrk_2", Status: state.StatusFailed}}, errors.New("slice failed with worker status failed")) {
+		t.Fatal("ordinary worker failure must not be recoverable")
+	}
+}
+
+func TestRecoveryIsolationRefusesAmbiguousOrForbiddenChanges(t *testing.T) {
+	dir := initGitRepo(t)
+	promptPath := filepath.Join(dir, "10-implement-a.md")
+	writePromptFile(t, dir, "10-implement-a.md", "---\nallowed_paths: [src/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline, err := workerpathpolicy.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromptFile(t, dir, "outside.txt", "must remain")
+	artifact, err := isolateRecoveryChanges(dir, t.TempDir(), "seq_test", Prompt{Path: promptPath, Name: "10-implement-a.md"}, PromptState{WorkerID: "wrk_test", GitBaseline: &baseline})
+	if err == nil || !strings.Contains(err.Error(), "not provably slice-owned") {
+		t.Fatalf("artifact=%q err=%v", artifact, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "outside.txt")); err != nil {
+		t.Fatalf("ambiguous user change was modified: %v", err)
+	}
+}
+
+func TestRunFolderDoesNotRecoverBlockedCompletion(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
 	writePromptFile(t, dir, "10-implement-first.md", "first")
 	launcher := &fakeLauncher{resultOnce: completionResult("BLOCKED", false)}
 
 	summary, err := Run(dir, Options{HomeDir: home, RecoveryAttempts: 1}, launcher)
+	if err == nil {
+		t.Fatal("expected blocked completion failure")
+	}
+	if len(launcher.calls) != 1 || summary.Sequence.Items[0].RecoveryAttempts != 0 {
+		t.Fatalf("calls = %#v", launcher.calls)
+	}
+}
+
+func TestCapabilityGateCheckpointsReportAndProductBlocksSequence(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-capability-gate.md", "---\nid: authoritative-data-gate\ntype: implement\ngate_outcome: BLOCKED\nallowed_paths: [reports/**]\n---\nAudit the authoritative data prerequisite.")
+	writePromptFile(t, dir, "20-implement-dependent.md", "---\nid: dependent-feature\ntype: implement\ndepends_on: [authoritative-data-gate]\n---\nThis must not launch after a blocked gate.")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+
+	launcher := &fakeLauncher{result: completionResult("BLOCKED", false)}
+	launcher.onLaunch = func(path string) {
+		if filepath.Base(path) != "10-implement-capability-gate.md" {
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "reports"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writePromptFile(t, filepath.Join(dir, "reports"), "authoritative-data.md", "The prerequisite is unavailable.\n")
+	}
+	events := []ProgressEvent{}
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true, Progress: func(event ProgressEvent) {
+		events = append(events, event)
+	}}, launcher)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(launcher.calls) != 2 || summary.Sequence.Items[0].RecoveryAttempts != 1 {
-		t.Fatalf("calls = %#v", launcher.calls)
+	if got := namesFromCalls(launcher.calls); strings.Join(got, ",") != "10-implement-capability-gate.md" {
+		t.Fatalf("launched = %v", got)
 	}
-	if !strings.Contains(launcher.calls[1].Content, "Previous completion reason: STATUS is BLOCKED, not PASS") {
-		t.Fatalf("recovery prompt = %q", launcher.calls[1].Content)
+	if !strings.Contains(launcher.calls[0].Content, "# Capability-Gate Outcome") || !strings.Contains(launcher.calls[0].Content, "STATUS: BLOCKED") {
+		t.Fatalf("gate worker instructions = %q", launcher.calls[0].Content)
+	}
+	if summary.Run.Status != "product-blocked" || summary.Sequence.Status != "product-blocked" {
+		t.Fatalf("summary = %#v", summary)
+	}
+	gate, dependent := summary.Sequence.Items[0], summary.Sequence.Items[1]
+	if gate.Status != "gate-blocked" || gate.GateOutcome != "BLOCKED" || gate.CompletionStatus != "BLOCKED" || gate.NextPromptSafe == nil || *gate.NextPromptSafe {
+		t.Fatalf("gate = %#v", gate)
+	}
+	if dependent.Status != "pending" {
+		t.Fatalf("dependent = %#v", dependent)
+	}
+	if summary.Failed != nil {
+		t.Fatalf("completed gate reported as failure: %v", summary.Failed)
+	}
+	if commits := strings.TrimSpace(string(gitOutput(t, dir, "rev-list", "--count", "HEAD"))); commits != "2" {
+		t.Fatalf("gate report was not checkpointed exactly once: commits=%s", commits)
+	}
+	if names := strings.TrimSpace(string(gitOutput(t, dir, "show", "--format=", "--name-only", "HEAD"))); names != "reports/authoritative-data.md" {
+		t.Fatalf("gate commit files = %q", names)
+	}
+	foundGate, foundFailure := false, false
+	for _, event := range events {
+		foundGate = foundGate || event.Type == "prompt.gate-blocked"
+		foundFailure = foundFailure || event.Type == "prompt.failed"
+	}
+	if !foundGate || foundFailure {
+		t.Fatalf("events = %#v", events)
+	}
+
+	_, err = Run(dir, Options{RepoPath: dir, HomeDir: home, Resume: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "product-blocked") {
+		t.Fatalf("resume err = %v", err)
 	}
 }
 
@@ -376,7 +692,7 @@ func TestEngineFailurePersistsOrderedCompletionFields(t *testing.T) {
 	unsafe := false
 	engineExitCode := 23
 	launcher := &fakeLauncher{result: &state.EngineResult{
-		Summary:        "STATUS: BLOCKED\nNEXT_PROMPT_SAFE: no",
+		Summary:        "Failure category: product-test\nFailure summary: backend full gate failed\nBlocking checks:\n- Fixture import: failed\n  - missing column\nEvidence report: docs/handoff.md\nNext action: update fixtures\nSTATUS: BLOCKED\nNEXT_PROMPT_SAFE: no",
 		EngineExitCode: &engineExitCode,
 		NextPromptSafe: &unsafe,
 	}}
@@ -388,6 +704,13 @@ func TestEngineFailurePersistsOrderedCompletionFields(t *testing.T) {
 	item := summary.Sequence.Items[0]
 	if item.ExitCode == nil || *item.ExitCode != engineExitCode || item.CompletionStatus != "BLOCKED" || item.NextPromptSafe == nil || *item.NextPromptSafe || item.CompletionReason != "STATUS is BLOCKED, not PASS" {
 		t.Fatalf("item = %#v", item)
+	}
+	if item.FailureReport == nil || item.FailureReport.Summary != "backend full gate failed" || len(item.FailureReport.BlockingChecks) != 1 || item.FailureReport.EvidenceReport != "docs/handoff.md" || item.FailureReport.NextAction != "update fixtures" {
+		t.Fatalf("failure report = %#v", item.FailureReport)
+	}
+	data, marshalErr := json.Marshal(summary.Sequence)
+	if marshalErr != nil || !strings.Contains(string(data), `"failure_report"`) || !strings.Contains(string(data), `"blocking_checks"`) {
+		t.Fatalf("sequence JSON = %s, err = %v", data, marshalErr)
 	}
 }
 
@@ -895,7 +1218,7 @@ func TestExplicitResumeRejectsChangedCompletedPrefix(t *testing.T) {
 	}
 	writePromptFile(t, dir, "10-implement-a.md", "changed")
 	_, err := Run(dir, Options{HomeDir: home, Resume: true}, &fakeLauncher{})
-	if err == nil || !strings.Contains(err.Error(), "no run state found") {
+	if err == nil || !strings.Contains(err.Error(), "No resumable run state was found") || !strings.Contains(err.Error(), "validation-only preflight") || !strings.Contains(err.Error(), "--fresh") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -1594,19 +1917,19 @@ func TestDetachedNotificationsReportSuccessAndFailure(t *testing.T) {
 func TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
-	logDir := t.TempDir()
 	writePromptFile(t, dir, "00-specification.md", "spec context")
 	writePromptFile(t, dir, "10-implement-a.md", "a")
 	writePromptFile(t, dir, "20-implement-b.md", "b")
+	input, cached, output, reasoning, total := int64(1_000), int64(800), int64(234), int64(111), int64(1_234)
 
-	summary, err := Run(dir, Options{HomeDir: home}, &fakeLauncher{logDir: logDir, logText: "total tokens: 1,234\n"})
+	summary, err := Run(dir, Options{HomeDir: home}, &fakeLauncher{result: &state.EngineResult{Summary: "done\nSTATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: boolPtr(true), TokensInput: &input, TokensCachedInput: &cached, TokensOutput: &output, TokensReasoningOutput: &reasoning, TokensTotal: &total}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if summary.Sequence == nil {
 		t.Fatal("missing sequence")
 	}
-	if !summary.Sequence.TokenUsage.Available || summary.Sequence.TokenUsage.Total != 2468 {
+	if !summary.Sequence.TokenUsage.Available || summary.Sequence.TokenUsage.Total != 2468 || summary.Sequence.TokenUsage.Input != 2000 || summary.Sequence.TokenUsage.CachedInput != 1600 || summary.Sequence.TokenUsage.Output != 468 || summary.Sequence.TokenUsage.ReasoningOutput != 222 {
 		t.Fatalf("token usage = %#v", summary.Sequence.TokenUsage)
 	}
 	if !strings.Contains(summary.Sequence.ExecutiveSummary, "10-implement-a.md succeeded") || !strings.Contains(summary.Sequence.ExecutiveSummary, "00-specification.md was used as shared context") {
@@ -1616,21 +1939,35 @@ func TestSequenceSummaryIncludesTokenUsageAndExecutiveSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "Total tokens used: 2468") || !strings.Contains(string(data), "Executive Summary") {
+	if !strings.Contains(string(data), "Reported token usage: 2468 (input: 2000; cached input: 1600; output: 468; reasoning output: 222)") || !strings.Contains(string(data), "`10-implement-a.md`: 1234 (input: 1000; cached input: 800; output: 234; reasoning output: 111)") || !strings.Contains(string(data), "Executive Summary") {
 		t.Fatalf("summary.md = %q", string(data))
 	}
 	globalData, err := os.ReadFile(filepath.Join(home, "summaries", summary.Sequence.SequenceID+".md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(globalData), "Total tokens used: 2468") {
+	if !strings.Contains(string(globalData), "Reported token usage: 2468") {
 		t.Fatalf("global summary = %q", string(globalData))
 	}
 }
 
-func TestParseTokenUsage(t *testing.T) {
-	usage := parseTokenUsage("total_tokens: 100\nTokens used: 25\nused 5 tokens\n")
-	if !usage.Available || usage.Total != 130 {
+func TestSequenceSummaryMarksMissingStructuredUsageUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.md", "a")
+	summary, err := Run(dir, Options{HomeDir: t.TempDir()}, &fakeLauncher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Sequence.TokenUsage.Available || !strings.Contains(summary.Sequence.SummaryMarkdown(), "Reported token usage: unavailable") || !strings.Contains(summary.Sequence.SummaryMarkdown(), "`10-implement-a.md`: unavailable") {
+		t.Fatalf("summary = %s", summary.Sequence.SummaryMarkdown())
+	}
+}
+
+func TestTokenUsageAccumulatesReportedRecoveryAttempts(t *testing.T) {
+	first := &TokenUsage{Available: true, Input: 100, CachedInput: 80, Output: 20, ReasoningOutput: 10, Total: 120}
+	second := &TokenUsage{Available: true, Input: 200, CachedInput: 170, Output: 30, ReasoningOutput: 15, Total: 230}
+	usage := addTokenUsage(first, second)
+	if usage.Input != 300 || usage.CachedInput != 250 || usage.Output != 50 || usage.ReasoningOutput != 25 || usage.Total != 350 {
 		t.Fatalf("usage = %#v", usage)
 	}
 }

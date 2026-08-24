@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"promptgrinder/internal/runfolder"
+	"promptgrinder/internal/state"
 )
 
 type rendererTicker interface {
@@ -64,7 +65,7 @@ func NewRunFolderRenderer(w io.Writer, interactive bool, opts Options) *RunFolde
 func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
-	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "run.completed" {
+	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" || event.Type == "run.completed" {
 		r.stopTicker()
 	}
 	r.mu.Lock()
@@ -104,7 +105,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 		} else {
 			r.writePlainEventLocked(event)
 		}
-	case "prompt.skipped", "prompt.succeeded", "prompt.failed":
+	case "prompt.skipped", "prompt.succeeded", "prompt.failed", "prompt.gate-blocked":
 		r.active = ""
 		r.setStatusLocked(event.PromptName, event.Status, event.PromptType)
 		r.details[event.PromptName] = event
@@ -133,14 +134,53 @@ func (r *RunFolderRenderer) Finish(success bool) {
 		return
 	}
 	r.finished = true
+	if r.hasProductBlockedLocked() {
+		fmt.Fprintln(r.w, "Result: product-blocked")
+		return
+	}
 	if success {
 		fmt.Fprintln(r.w, "Result: succeeded")
 		return
 	}
-	fmt.Fprintln(r.w, "Result: failed")
+	failed := r.latestFailureLocked()
+	label, summary := "failed", ""
+	if failed.CompletionStatus == "BLOCKED" {
+		label = "BLOCKED"
+	} else if failed.FailureReport != nil && failed.FailureReport.Category == "cancellation" {
+		label = "cancelled"
+	}
+	if failed.FailureReport != nil {
+		summary = failed.FailureReport.Summary
+	}
+	if summary == "" {
+		summary = failed.Reason
+	}
+	if summary != "" {
+		fmt.Fprintf(r.w, "Result: %s — %s\n", label, summary)
+	} else {
+		fmt.Fprintf(r.w, "Result: %s\n", label)
+	}
 	if r.folder != "" {
 		fmt.Fprintln(r.w, "Resume: promptgrinder run-folder "+shellQuote(r.folder)+" --resume")
 	}
+}
+
+func (r *RunFolderRenderer) latestFailureLocked() runfolder.ProgressEvent {
+	for i := len(r.items) - 1; i >= 0; i-- {
+		if r.items[i].Status == "failed" {
+			return r.details[r.items[i].Name]
+		}
+	}
+	return runfolder.ProgressEvent{}
+}
+
+func (r *RunFolderRenderer) hasProductBlockedLocked() bool {
+	for _, item := range r.items {
+		if item.Status == "gate-blocked" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RunFolderRenderer) Close() {
@@ -214,6 +254,7 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 	if r.sequenceID != "" {
 		fmt.Fprintln(r.w, "Sequence: "+r.sequenceID)
 		fmt.Fprintln(r.w, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
+		fmt.Fprintln(r.w, "Cancel: promptgrinder sequence cancel "+shellQuote(r.sequenceID))
 	}
 	if r.resumePlan != "" {
 		fmt.Fprintln(r.w, "Resume plan: "+r.resumePlan)
@@ -231,7 +272,7 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 }
 
 func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent) {
-	if event.Type == "prompt.succeeded" || event.Type == "prompt.failed" {
+	if event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" {
 		index, total := r.eventPositionLocked(event)
 		fmt.Fprintf(r.w, "%s [%d/%d] %s|%s\n", stateIcon(event.Status), index, total, event.PromptName, compactRunFolderIdentity(event))
 		writeFailureDetails(r.w, event)
@@ -286,6 +327,7 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	if r.sequenceID != "" {
 		lines = append(lines, "Sequence: "+r.sequenceID)
 		lines = append(lines, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
+		lines = append(lines, "Cancel: promptgrinder sequence cancel "+shellQuote(r.sequenceID))
 	}
 	if r.resumePlan != "" {
 		lines = append(lines, "Resume plan: "+r.resumePlan)
@@ -303,18 +345,18 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		if item.Name == r.active {
 			icon = colorizeStatusIcon(spinnerFrames[r.frame%len(spinnerFrames)], "active", themeColor(r.opts.Theme))
 			duration = " " + formatDuration(r.now().Sub(r.activeSince))
-		} else if item.Status == "succeeded" || item.Status == "failed" || item.Status == "skipped" {
+		} else if item.Status == "succeeded" || item.Status == "failed" || item.Status == "skipped" || item.Status == "gate-blocked" {
 			duration = " " + formatDuration(detail.Duration)
 		}
 		line := fmt.Sprintf("%s [%d/%d] %s [%s] - %s%s", icon, i+1, len(r.items), item.Name, item.Type, stateLabel(item.Status), duration)
-		if item.Status == "succeeded" || item.Status == "failed" {
+		if item.Status == "succeeded" || item.Status == "failed" || item.Status == "gate-blocked" {
 			line = fmt.Sprintf("%s [%d/%d] %s|%s", icon, i+1, len(r.items), item.Name, compactRunFolderIdentity(detail))
 		}
-		if item.Status == "failed" && detail.LogPath != "" {
+		if (item.Status == "failed" || item.Status == "gate-blocked") && detail.LogPath != "" {
 			line += " (log: " + terminalFileLink(detail.LogPath) + ")"
 		}
 		lines = append(lines, line)
-		if item.Status == "failed" {
+		if item.Status == "failed" || item.Status == "gate-blocked" {
 			lines = append(lines, failureDetailLines(detail)...)
 		}
 	}
@@ -368,12 +410,12 @@ func writeFailureDetails(w io.Writer, event runfolder.ProgressEvent) {
 }
 
 func failureDetailLines(event runfolder.ProgressEvent) []string {
-	if event.Status != "failed" && event.Type != "prompt.failed" && event.Type != "prompt.recovering" {
+	if event.Status != "failed" && event.Status != "gate-blocked" && event.Type != "prompt.failed" && event.Type != "prompt.recovering" && event.Type != "prompt.gate-blocked" {
 		return nil
 	}
-	lines := make([]string, 0, 2)
-	if event.Reason != "" {
-		lines = append(lines, "  Reason: "+event.Reason)
+	lines := make([]string, 0, 12)
+	if event.RecoveryArtifact != "" {
+		lines = append(lines, "  Retained artifact: "+event.RecoveryArtifact)
 	}
 	if event.CompletionStatus != "" || event.NextPromptSafe != nil {
 		status, safe := "-", "-"
@@ -389,7 +431,78 @@ func failureDetailLines(event runfolder.ProgressEvent) []string {
 		}
 		lines = append(lines, fmt.Sprintf("  Completion: STATUS=%s NEXT_PROMPT_SAFE=%s", status, safe))
 	}
+	if report := event.FailureReport; report != nil {
+		if report.Category != "" {
+			lines = append(lines, "  Failure type: "+failureCategoryLabel(report.Category))
+		}
+		if report.Summary != "" {
+			lines = append(lines, "  Failure summary: "+report.Summary)
+		}
+		lines = append(lines, renderFailureEvidence(report)...)
+		if report.NextAction != "" {
+			lines = append(lines, "  Next action: "+report.NextAction)
+		}
+		if failureReportTruncated(report) && event.LogPath != "" {
+			lines = append(lines, "  See worker log for remaining details: "+event.LogPath)
+		}
+		return lines
+	}
+	if event.Reason != "" {
+		lines = append(lines, "  Reason: "+event.Reason)
+	}
 	return lines
+}
+
+func failureCategoryLabel(category string) string {
+	switch category {
+	case "product-test":
+		return "product/test failure"
+	case "environment-capability":
+		return "environment/capability block"
+	case "path-policy":
+		return "path-policy violation"
+	case "worker-crash":
+		return "worker/tool crash"
+	case "cancellation":
+		return "cancellation"
+	default:
+		return category
+	}
+}
+
+func renderFailureEvidence(report *state.FailureReport) []string {
+	lines := make([]string, 0, 10)
+	if len(report.FeatureEvidence) > 0 {
+		lines = append(lines, "  Feature evidence:")
+		for _, item := range report.FeatureEvidence[:min(len(report.FeatureEvidence), 4)] {
+			lines = append(lines, "    - "+item)
+		}
+	}
+	if len(report.BlockingChecks) > 0 {
+		lines = append(lines, "  Blocking checks:")
+		for _, check := range report.BlockingChecks[:min(len(report.BlockingChecks), 4)] {
+			lines = append(lines, "    - "+check.Summary)
+			for _, detail := range check.Details[:min(len(check.Details), 2)] {
+				lines = append(lines, "      - "+detail)
+			}
+		}
+	}
+	if report.EvidenceReport != "" {
+		lines = append(lines, "  Evidence report: "+report.EvidenceReport)
+	}
+	return lines
+}
+
+func failureReportTruncated(report *state.FailureReport) bool {
+	if len(report.FeatureEvidence) > 4 || len(report.BlockingChecks) > 4 {
+		return true
+	}
+	for _, check := range report.BlockingChecks {
+		if len(check.Details) > 2 {
+			return true
+		}
+	}
+	return false
 }
 
 func stateIcon(status string) string {
@@ -402,6 +515,8 @@ func stateIcon(status string) string {
 		return "✓"
 	case "failed":
 		return "✗"
+	case "gate-blocked":
+		return "■"
 	default:
 		return "·"
 	}
@@ -414,6 +529,8 @@ func stateLabel(status string) string {
 		return "succeeded"
 	case "failed":
 		return "failed"
+	case "gate-blocked":
+		return "product-blocked"
 	case "skipped":
 		return "skipped"
 	default:

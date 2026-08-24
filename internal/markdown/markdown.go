@@ -20,7 +20,7 @@ type Task struct {
 const FrontmatterContractVersion = 3
 
 var (
-	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "context_mode": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
+	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "context_mode": true, "gate_outcome": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
 	engineKeys    = map[string]bool{"name": true, "model": true, "max_cost": true, "capabilities": true, "profile": true, "sandbox": true, "approval": true, "web_search": true, "images": true}
 	secretPattern = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(sk-[a-z0-9_-]{8,}|(?:api[_ -]?key|[a-z0-9_]*(?:token|password|secret))\s*[:=]\s*\S+))`)
 )
@@ -125,6 +125,12 @@ func Validate(task Task, source string) error {
 		value, ok := raw.(string)
 		if !ok || (value != "shared" && value != "fresh") {
 			return fail("context_mode must be one of shared or fresh")
+		}
+	}
+	if raw, ok := task.Metadata["gate_outcome"]; ok {
+		value, ok := raw.(string)
+		if !ok || value != "BLOCKED" {
+			return fail("gate_outcome must be BLOCKED")
 		}
 	}
 	if raw, ok := task.Metadata["depends_on"]; ok {
@@ -303,7 +309,7 @@ func pathList(raw any, field string, requiredNonempty, present bool) ([]string, 
 // Render returns the exact AI instruction bytes: a deterministic semantic preamble followed by the untouched body.
 func Render(task Task) []byte {
 	var b bytes.Buffer
-	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"context_mode", "Context Mode"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"expected_paths", "Expected Paths"}, {"validation", "Validation"}}
+	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"context_mode", "Context Mode"}, {"gate_outcome", "Gate Outcome"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"expected_paths", "Expected Paths"}, {"validation", "Validation"}}
 	started := false
 	for _, section := range sections {
 		raw, ok := task.Metadata[section.key]
