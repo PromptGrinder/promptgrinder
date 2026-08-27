@@ -179,10 +179,12 @@ type ProgressEvent struct {
 // inventory. Content is deliberately excluded from progress events.
 type ProgressPrompt struct {
 	Name             string     `json:"name"`
+	ID               string     `json:"id,omitempty"`
 	Type             PromptType `json:"type"`
 	Status           string     `json:"status"`
 	Lane             string     `json:"lane,omitempty"`
 	Priority         int        `json:"priority,omitempty"`
+	DependsOn        []string   `json:"depends_on,omitempty"`
 	Worktree         string     `json:"worktree,omitempty"`
 	IntegrationState string     `json:"integration_state,omitempty"`
 }
@@ -669,7 +671,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		if status == "" || status == "running" {
 			status = "pending"
 		}
-		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, Type: prompt.Type, Status: status, Lane: prompt.Lane, Priority: prompt.Priority})
+		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, ID: prompt.ID, Type: prompt.Type, Status: status, Lane: prompt.Lane, Priority: prompt.Priority, DependsOn: append([]string(nil), prompt.DependsOn...)})
 	}
 	featureBranch := ""
 	if options.ParallelWorktrees {

@@ -61,9 +61,40 @@ func TestRunFolderRendererShowsParallelWorktreeLanes(t *testing.T) {
 	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: "01-location.pg", PromptType: runfolder.TypeImplement, Lane: "location-policy", Priority: 1, Worktree: "/tmp/lanes/location", IntegrationState: "integrated", Status: "integrated"})
 	r.Update(runfolder.ProgressEvent{Type: "run.completed", PRHint: "Integrated feature branch is ready for review; create a PR against your intended base: gh pr create --head feature/google-play"})
 	r.Close()
-	for _, want := range []string{"Mode: parallel worktrees · foreground", "Feature branch: feature/google-play", "├─ P1 01-location.pg [location-policy] - pending", "└─ P2 02-storage.pg [deletion-storage] - pending", "01-location.pg [implement] - working", "02-storage.pg [implement] - waiting-to-merge", "✓ ├─ P1 01-location.pg [location-policy] - succeeded|unscoped|unknown-engine/default|<1s · /tmp/lanes/location", "Next action: Integrated feature branch is ready for review; create a PR against your intended base: gh pr create --head feature/google-play"} {
+	for _, want := range []string{"Mode: parallel worktrees · foreground", "Feature branch: feature/google-play", "Lanes: 2 waiting", "├─ P1 location-policy", "└─ P2 deletion-storage", "01-location.pg [implement] - working", "02-storage.pg [implement] - waiting-to-merge", "✓ ├─ P1 location-policy", "· location", "Next action: Integrated feature branch is ready for review; create a PR against your intended base: gh pr create --head feature/google-play"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRunFolderRendererAnimatesEveryWorkingParallelLaneAndShowsDependencies(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeMinimal})
+	r.now = func() time.Time { return time.Date(2026, 8, 27, 12, 30, 5, 0, time.UTC) }
+	r.Update(runfolder.ProgressEvent{Type: "run.started", ParallelWorktrees: true, Inventory: []runfolder.ProgressPrompt{
+		{Name: "01-location.pg", ID: "location", Type: runfolder.TypeImplement, Status: "pending", Lane: "location-policy", Priority: 1},
+		{Name: "02-storage.pg", ID: "storage", Type: runfolder.TypeImplement, Status: "pending", Lane: "deletion-storage", Priority: 2},
+		{Name: "03-security.pg", ID: "security", Type: runfolder.TypeImplement, Status: "pending", Lane: "release-security", Priority: 3},
+		{Name: "04-audit.pg", ID: "audit", Type: runfolder.TypeVerify, Status: "pending", Lane: "play-audit", Priority: 4, DependsOn: []string{"location", "storage", "security"}},
+	}})
+	for _, event := range []runfolder.ProgressEvent{
+		{Type: "prompt.started", PromptName: "01-location.pg", PromptType: runfolder.TypeImplement, Status: "working", Lane: "location-policy", Priority: 1, Worktree: "/tmp/train/location"},
+		{Type: "prompt.started", PromptName: "02-storage.pg", PromptType: runfolder.TypeImplement, Status: "working", Lane: "deletion-storage", Priority: 2, Worktree: "/tmp/train/storage"},
+		{Type: "prompt.started", PromptName: "03-security.pg", PromptType: runfolder.TypeImplement, Status: "working", Lane: "release-security", Priority: 3, Worktree: "/tmp/train/security"},
+	} {
+		r.Update(event)
+	}
+	r.mu.Lock()
+	r.frame = 0
+	r.renderDashboardLocked()
+	r.mu.Unlock()
+	r.Close()
+	got := out.String()
+	for _, want := range []string{"Lanes: 3 working · 1 waiting", "location-policy", "deletion-storage", "release-security", "waiting on P1, P2, P3", "\033[36m|\033[0m", "\033[36m/\033[0m", "\033[36m-\033[0m"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
 		}
 	}
 }

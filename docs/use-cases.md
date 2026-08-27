@@ -657,6 +657,12 @@ lane, priority, worker ID, worktree path, and integration state such as
 top-level sequence progress data, including `parallel_worktrees` and
 `feature_branch`.
 
+The interactive parallel foreground dashboard keeps the shared worktree root
+in its header and shows only each lane worktree's leaf on its row. Every
+working lane has its own spinner and elapsed clock. Pending dependencies are
+dim, completed lanes waiting for priority integration are amber, integration is
+blue, and successful/failed lanes retain the established green/red colours.
+
 The listing is observational: it neither launches a worker nor modifies a
 worktree. A failed lane remains inspectable in its retained worktree; durable
 per-lane restart is intentionally added only once the coordinator can safely

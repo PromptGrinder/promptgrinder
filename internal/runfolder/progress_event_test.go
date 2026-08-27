@@ -2,6 +2,7 @@ package runfolder
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestProgressEventJSONNewFieldsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Folder != want.Folder || got.Duration != want.Duration || len(got.Inventory) != 1 || got.Inventory[0] != want.Inventory[0] {
+	if got.Folder != want.Folder || got.Duration != want.Duration || len(got.Inventory) != 1 || !reflect.DeepEqual(got.Inventory[0], want.Inventory[0]) {
 		t.Fatalf("round trip = %#v", got)
 	}
 }

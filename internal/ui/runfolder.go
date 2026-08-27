@@ -42,8 +42,7 @@ type RunFolderRenderer struct {
 	parallel       bool
 	featureBranch  string
 	prHint         string
-	active         string
-	activeSince    time.Time
+	activeSince    map[string]time.Time
 	frame          int
 	dashboardSaved bool
 	started        bool
@@ -61,14 +60,15 @@ func NewRunFolderRenderer(w io.Writer, interactive bool, opts Options) *RunFolde
 	return &RunFolderRenderer{
 		w: w, interactive: interactive && !plain, opts: opts,
 		now: time.Now, newTicker: func(d time.Duration) rendererTicker { return realRendererTicker{time.NewTicker(d)} },
-		details: make(map[string]runfolder.ProgressEvent),
+		details:     make(map[string]runfolder.ProgressEvent),
+		activeSince: make(map[string]time.Time),
 	}
 }
 
 func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
-	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.waiting-to-merge" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" || event.Type == "run.completed" {
+	if !r.parallel && (event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.waiting-to-merge" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" || event.Type == "run.completed") {
 		r.stopTicker()
 	}
 	r.mu.Lock()
@@ -98,7 +98,8 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 		}
 		r.setStatusLocked(event.PromptName, status, event.PromptType)
 		r.applyParallelDetailLocked(event)
-		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
+		r.activeSince[event.PromptName] = r.now()
+		r.frame = 0
 		if r.interactive {
 			r.renderDashboardLocked()
 			r.startTickerLocked()
@@ -106,6 +107,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 			r.writePlainEventLocked(event)
 		}
 	case "prompt.waiting-to-merge":
+		delete(r.activeSince, event.PromptName)
 		r.setStatusLocked(event.PromptName, "waiting-to-merge", event.PromptType)
 		r.applyParallelDetailLocked(event)
 		r.details[event.PromptName] = event
@@ -117,7 +119,8 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	case "prompt.recovering":
 		r.setStatusLocked(event.PromptName, "active", event.PromptType)
 		r.applyParallelDetailLocked(event)
-		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
+		r.activeSince[event.PromptName] = r.now()
+		r.frame = 0
 		if r.interactive {
 			r.renderDashboardLocked()
 			r.startTickerLocked()
@@ -125,7 +128,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 			r.writePlainEventLocked(event)
 		}
 	case "prompt.skipped", "prompt.succeeded", "prompt.failed", "prompt.gate-blocked":
-		r.active = ""
+		delete(r.activeSince, event.PromptName)
 		r.setStatusLocked(event.PromptName, event.Status, event.PromptType)
 		r.applyParallelDetailLocked(event)
 		r.details[event.PromptName] = event
@@ -135,7 +138,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 			r.writePlainEventLocked(event)
 		}
 	case "run.completed":
-		r.active = ""
+		r.activeSince = make(map[string]time.Time)
 		r.prHint = event.PRHint
 		if r.interactive {
 			r.renderDashboardLocked()
@@ -219,6 +222,9 @@ func (r *RunFolderRenderer) Close() {
 }
 
 func (r *RunFolderRenderer) startTickerLocked() {
+	if r.stop != nil {
+		return
+	}
 	ticker := r.newTicker(100 * time.Millisecond)
 	stop, done := make(chan struct{}), make(chan struct{})
 	r.stop, r.done = stop, done
@@ -310,7 +316,15 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 	if r.resumePlan != "" {
 		fmt.Fprintln(r.w, "Resume plan: "+r.resumePlan)
 	}
-	fmt.Fprintln(r.w, "Prompts:")
+	if r.parallel {
+		fmt.Fprintln(r.w, parallelActivitySummary(r.items))
+		if root := r.worktreeRootLocked(); root != "" {
+			fmt.Fprintln(r.w, "Worktree root: "+compactWorktreeRoot(root))
+		}
+		fmt.Fprintln(r.w, "Lanes:")
+	} else {
+		fmt.Fprintln(r.w, "Prompts:")
+	}
 	if r.markdownTotal > 0 {
 		fmt.Fprintf(r.w, "Preflight: %d of %d Markdown files included\n", len(r.items), r.markdownTotal)
 	}
@@ -319,9 +333,9 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 	}
 	for i, item := range r.items {
 		if r.parallel && item.Type != runfolder.TypeSpecification {
-			fmt.Fprintf(r.w, "%s P%d %s [%s] - %s", parallelTreePrefix(i, len(r.items)), item.Priority, item.Name, item.Lane, stateLabel(item.Status))
-			if item.Worktree != "" {
-				fmt.Fprintf(r.w, " · %s", item.Worktree)
+			fmt.Fprintf(r.w, "%s P%d %-30s %s", parallelTreePrefix(i, len(r.items)), item.Priority, parallelLaneLabel(item), parallelStatusLabel(item, r.items))
+			if leaf := filepath.Base(item.Worktree); item.Worktree != "" && leaf != "." {
+				fmt.Fprintf(r.w, " · %s", leaf)
 			}
 			fmt.Fprintln(r.w)
 			continue
@@ -337,13 +351,90 @@ func parallelTreePrefix(index, total int) string {
 	return "├─"
 }
 
+func parallelLaneLabel(item runfolder.ProgressPrompt) string {
+	if item.Lane != "" {
+		return item.Lane
+	}
+	return item.Name
+}
+
+func parallelStatusLabel(item runfolder.ProgressPrompt, items []runfolder.ProgressPrompt) string {
+	if item.Status != "pending" || len(item.DependsOn) == 0 {
+		return stateLabel(item.Status)
+	}
+	priorities := make(map[string]int, len(items))
+	for _, candidate := range items {
+		priorities[candidate.ID] = candidate.Priority
+	}
+	labels := make([]string, 0, len(item.DependsOn))
+	for _, dependency := range item.DependsOn {
+		if priority := priorities[dependency]; priority > 0 {
+			labels = append(labels, fmt.Sprintf("P%d", priority))
+		} else {
+			labels = append(labels, dependency)
+		}
+	}
+	return "waiting on " + strings.Join(labels, ", ")
+}
+
+func parallelActivitySummary(items []runfolder.ProgressPrompt) string {
+	working, waiting, merging := 0, 0, 0
+	for _, item := range items {
+		switch item.Status {
+		case "working", "active", "running", "recovering":
+			working++
+		case "waiting-to-merge":
+			merging++
+		case "pending":
+			waiting++
+		}
+	}
+	parts := []string{}
+	if working > 0 {
+		parts = append(parts, fmt.Sprintf("%d working", working))
+	}
+	if merging > 0 {
+		parts = append(parts, fmt.Sprintf("%d waiting-to-merge", merging))
+	}
+	if waiting > 0 {
+		parts = append(parts, fmt.Sprintf("%d waiting", waiting))
+	}
+	if len(parts) == 0 {
+		return "Lanes: idle"
+	}
+	return "Lanes: " + strings.Join(parts, " · ")
+}
+
+func (r *RunFolderRenderer) worktreeRootLocked() string {
+	for _, item := range r.items {
+		if item.Worktree != "" {
+			return filepath.Dir(item.Worktree)
+		}
+	}
+	return ""
+}
+
+func compactWorktreeRoot(root string) string {
+	home, err := os.UserHomeDir()
+	if err == nil && strings.HasPrefix(root, home+string(filepath.Separator)) {
+		root = "~" + strings.TrimPrefix(root, home)
+	}
+	parts := strings.Split(filepath.ToSlash(root), "/")
+	for index, part := range parts {
+		if (strings.HasPrefix(part, "seq_") || strings.HasPrefix(part, "run_")) && len(part) > 15 {
+			parts[index] = part[:15] + "…"
+		}
+	}
+	return strings.Join(parts, "/") + "/"
+}
+
 func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent) {
 	if event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" {
 		index, total := r.eventPositionLocked(event)
 		if r.parallel && event.Lane != "" {
-			fmt.Fprintf(r.w, "%s %s P%d %s [%s] - %s|%s", stateIcon(event.Status), parallelTreePrefix(index-1, total), event.Priority, event.PromptName, event.Lane, stateLabel(event.Status), compactRunFolderIdentity(event))
-			if event.Worktree != "" {
-				fmt.Fprintf(r.w, " · %s", event.Worktree)
+			fmt.Fprintf(r.w, "%s %s P%d %-30s %s|%s", stateIcon(event.Status), parallelTreePrefix(index-1, total), event.Priority, event.Lane, stateLabel(event.Status), compactRunFolderIdentity(event))
+			if leaf := filepath.Base(event.Worktree); event.Worktree != "" && leaf != "." {
+				fmt.Fprintf(r.w, " · %s", leaf)
 			}
 			writeParallelWorkerMeta(r.w, event)
 			fmt.Fprintln(r.w)
@@ -418,7 +509,15 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	if r.prHint != "" {
 		lines = append(lines, "Next action: "+r.prHint)
 	}
-	lines = append(lines, "Prompts:")
+	if r.parallel {
+		lines = append(lines, parallelActivitySummary(r.items))
+		if root := r.worktreeRootLocked(); root != "" {
+			lines = append(lines, "Worktree root: "+compactWorktreeRoot(root))
+		}
+		lines = append(lines, "Lanes:")
+	} else {
+		lines = append(lines, "Prompts:")
+	}
 	if r.markdownTotal > 0 {
 		lines = append(lines, fmt.Sprintf("Preflight: %d of %d Markdown files included", len(r.items), r.markdownTotal))
 	}
@@ -428,17 +527,21 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	for i, item := range r.items {
 		icon := colorizeStatusIcon(stateIcon(item.Status), item.Status, themeColor(r.opts.Theme))
 		duration, detail := "", r.details[item.Name]
-		if item.Name == r.active {
-			icon = colorizeStatusIcon(spinnerFrames[r.frame%len(spinnerFrames)], "active", themeColor(r.opts.Theme))
-			duration = " " + formatDuration(r.now().Sub(r.activeSince))
+		if started, active := r.activeSince[item.Name]; active {
+			frame := r.frame
+			if r.parallel {
+				frame += i
+			}
+			icon = colorizeStatusIcon(spinnerFrames[frame%len(spinnerFrames)], "active", themeColor(r.opts.Theme))
+			duration = " " + formatDuration(r.now().Sub(started))
 		} else if item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "skipped" || item.Status == "gate-blocked" {
 			duration = " " + formatDuration(detail.Duration)
 		}
 		line := fmt.Sprintf("%s [%d/%d] %s [%s] - %s%s", icon, i+1, len(r.items), item.Name, item.Type, stateLabel(item.Status), duration)
 		if r.parallel && item.Type != runfolder.TypeSpecification {
-			line = fmt.Sprintf("%s %s P%d %s [%s] - %s%s", icon, parallelTreePrefix(i, len(r.items)), item.Priority, item.Name, item.Lane, stateLabel(item.Status), duration)
-			if item.Worktree != "" {
-				line += " · " + item.Worktree
+			line = fmt.Sprintf("%s %s P%d %-30s %s%s", icon, parallelTreePrefix(i, len(r.items)), item.Priority, parallelLaneLabel(item), parallelStatusLabel(item, r.items), duration)
+			if leaf := filepath.Base(item.Worktree); item.Worktree != "" && leaf != "." {
+				line += " · " + leaf
 			}
 		}
 		if (item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "gate-blocked") && !r.parallel {
@@ -616,8 +719,10 @@ func failureReportTruncated(report *state.FailureReport) bool {
 
 func stateIcon(status string) string {
 	switch status {
-	case "active", "running", "recovering", "working", "integrating":
+	case "active", "running", "recovering", "working":
 		return "▶"
+	case "integrating":
+		return "↻"
 	case "waiting-to-merge":
 		return "◌"
 	case "skipped":
@@ -629,7 +734,7 @@ func stateIcon(status string) string {
 	case "gate-blocked":
 		return "■"
 	default:
-		return "·"
+		return "○"
 	}
 }
 func stateLabel(status string) string {
