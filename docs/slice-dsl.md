@@ -105,6 +105,7 @@ available DSL; it is not a requirement to set every optional field.
 | `priority` | Deterministic lane integration order | Positive integer. Lower values integrate first; equal values use filename order. Required for each runnable slice when `run-folder --parallel-worktrees` is used. |
 | `context_mode` | Runtime conversation continuity | `shared` (the default) resumes the preceding runtime session when the engine supports it. `fresh` starts this slice without the preceding session, establishing a deliberate clean-context boundary. The shared specification and current repository state remain available in both modes. |
 | `gate_outcome` | Capability-gate product outcome | Optional. The only supported value is `BLOCKED`. Use on an audit slice that may successfully establish an authoritative-data or prerequisite blocker. It requires the worker to return `STATUS: BLOCKED` and `NEXT_PROMPT_SAFE: no`; PromptGrinder checkpoints permitted scoped evidence, marks the sequence `product-blocked`, and does not launch later slices. |
+| `required_environment` | Host capability required before launch | Optional mapping with exactly `any_of`, a nonempty list of uppercase variable names. At least one value must be present, nonempty, and name an existing directory. Preflight checks it before sequence, worktree, or worker creation and never persists the host path. |
 | `engine` | Runtime and model selection | A string engine name, or a mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`, `approval`, `web_search`, and `images`. `max_cost` is `low`, `medium`, or `high`; `capabilities` uses `text`, `image`, `code`, or `web-search`. |
 | `working_directory` | Worker directory relative to the repository | Optional. |
 | `timeout` | Worker timeout | Optional duration such as `45m`. |
@@ -119,6 +120,25 @@ available DSL; it is not a requirement to set every optional field.
 
 Unknown fields are errors. YAML anchors and aliases are rejected. IDs, roles,
 and dependency values must be lowercase hyphen-separated slugs.
+
+### Android parallel-worktree capability example
+
+Git worktrees intentionally omit ignored `local.properties`, so Android lanes
+must declare the installed SDK as a launcher capability rather than hard-code a
+machine path:
+
+```yaml
+required_environment:
+  any_of:
+    - ANDROID_HOME
+    - ANDROID_SDK_ROOT
+```
+
+Before `validate-folder` or `run-folder`, export one of the variables to an
+existing SDK directory in the launching shell. `danger-full-access` controls
+the worker sandbox only; it does not configure or discover an Android SDK.
+PromptGrinder forwards these two safe variables to Codex workers when present,
+but it never copies ignored `local.properties` or persists SDK paths.
 
 ## Path patterns
 

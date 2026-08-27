@@ -496,6 +496,11 @@ func workerEnvironment(metadata map[string]any, parent []string) []string {
 	allowed := map[string]bool{
 		"HOME": true, "TMPDIR": true, "USER": true, "LOGNAME": true, "LANG": true,
 		"TERM": true, "COLORTERM": true, "SSH_AUTH_SOCK": true,
+		// Android SDK discovery must also work from an isolated parallel
+		// worktree, where an ignored local.properties file is intentionally not
+		// present. These are host-local toolchain paths, not credentials, and are
+		// forwarded only when the launching environment already supplied them.
+		"ANDROID_HOME": true, "ANDROID_SDK_ROOT": true,
 	}
 	values := map[string]string{}
 	for _, entry := range parent {

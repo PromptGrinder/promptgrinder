@@ -84,6 +84,12 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 		{"bad role", "role: Backend Feature", "role must be a lowercase"},
 		{"bad context mode", "context_mode: isolated", "context_mode must be one of shared or fresh"},
 		{"bad gate outcome", "gate_outcome: PASS", "gate_outcome must be BLOCKED"},
+		{"required environment scalar", "required_environment: ANDROID_HOME", "required_environment must be a mapping"},
+		{"required environment missing any of", "required_environment: {}", "required_environment.any_of must be a list"},
+		{"required environment empty any of", "required_environment:\n  any_of: []", "required_environment.any_of must be a nonempty list"},
+		{"required environment nested key", "required_environment:\n  all_of: [ANDROID_HOME]", `unknown nested key "required_environment.all_of"`},
+		{"required environment bad variable", "required_environment:\n  any_of: [android_home]", "must be an uppercase environment variable name"},
+		{"required environment duplicate", "required_environment:\n  any_of: [ANDROID_HOME, ANDROID_HOME]", `contains duplicate "ANDROID_HOME"`},
 		{"zero priority", "priority: 0", "priority must be a positive integer"},
 		{"text priority", "priority: first", "priority must be a positive integer"},
 		{"duplicate dependency", "depends_on: [task-a, task-a]", `depends_on contains duplicate "task-a"`},
@@ -135,6 +141,23 @@ func TestContractAcceptsAndRendersPositiveIntegrationPriority(t *testing.T) {
 		t.Fatalf("rendered prompt = %q", got)
 	}
 	if got := string(Render(task)); !strings.Contains(got, "## Lane\n\n- android-policy") {
+		t.Fatalf("rendered prompt = %q", got)
+	}
+}
+
+func TestContractAcceptsAndRendersRequiredEnvironment(t *testing.T) {
+	task, err := Parse("---\nrequired_environment:\n  any_of: [ANDROID_HOME, ANDROID_SDK_ROOT]\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "tasks/android.pg"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := RequiredEnvironmentAnyOf(task)
+	if err != nil || strings.Join(candidates, ",") != "ANDROID_HOME,ANDROID_SDK_ROOT" {
+		t.Fatalf("candidates=%#v err=%v", candidates, err)
+	}
+	if got := string(Render(task)); !strings.Contains(got, "## Required Environment\n\n- any of: ANDROID_HOME, ANDROID_SDK_ROOT") {
 		t.Fatalf("rendered prompt = %q", got)
 	}
 }

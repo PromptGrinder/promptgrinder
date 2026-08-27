@@ -175,15 +175,43 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 			}
 			return batch[i].prompt.Name < batch[j].prompt.Name
 		})
-		for _, result := range batch {
+		// Every lane in this batch has finished. Persist all terminal outcomes
+		// before acting on a failure, otherwise a lower-priority failed result can
+		// leave already-completed sibling lanes displayed as still working.
+		var firstFailure *parallelResult
+		for index := range batch {
+			result := &batch[index]
 			if result.err != nil {
-				return recordParallelFailure(result, options, sequence, sequenceStore, store, runState, summary, len(prompts))
+				if err := persistParallelFailure(*result, options, sequence, store, runState, len(prompts)); err != nil {
+					return err
+				}
+				if firstFailure == nil {
+					firstFailure = result
+				}
+				continue
 			}
 			if err := store.savePrompt(result.promptState); err != nil {
 				return err
 			}
 			setParallelItem(sequence, result.prompt.Name, result.worktree, result.branch, "waiting-to-merge")
-			emitProgress(options, ProgressEvent{Type: "prompt.waiting-to-merge", SequenceID: sequence.SequenceID, PromptName: result.prompt.Name, PromptType: result.prompt.Type, Status: "waiting-to-merge", Lane: result.prompt.Lane, Priority: result.prompt.Priority, Worktree: result.worktree, IntegrationState: "waiting-to-merge", Completed: len(runState.Completed), Total: len(prompts)})
+			sequence.mark(result.prompt.Name, "waiting-to-merge", result.promptState.Worker, result.promptState.FinishedAt, "")
+			identity := workeridentity.FromWorker(result.promptState.Worker)
+			emitProgress(options, ProgressEvent{Type: "prompt.waiting-to-merge", SequenceID: sequence.SequenceID, PromptName: result.prompt.Name, PromptType: result.prompt.Type, Status: "waiting-to-merge", Lane: result.prompt.Lane, Priority: result.prompt.Priority, Worktree: result.worktree, IntegrationState: "waiting-to-merge", WorkerID: result.promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, Terminal: result.promptState.Worker.TerminalAdapter, LogPath: result.promptState.Worker.LogPath, Duration: promptDuration(result.promptState), Completed: len(runState.Completed), Total: len(prompts)})
+		}
+		sequence.refreshSummary()
+		if err := sequenceStore.save(*sequence); err != nil {
+			return err
+		}
+		if firstFailure != nil {
+			runState.Status = "failed"
+			runState.Current = firstFailure.prompt.Name
+			runState.touch()
+			if err := store.saveRun(*runState); err != nil {
+				return err
+			}
+			summary.Run = *runState
+			summary.Failed = firstFailure.err
+			return firstFailure.err
 		}
 		for _, result := range batch {
 			setParallelItem(sequence, result.prompt.Name, result.worktree, result.branch, "integrating")
@@ -256,23 +284,17 @@ func setParallelItem(sequence *SequenceState, promptName, worktree, branch, inte
 	}
 }
 
-func recordParallelFailure(result parallelResult, options Options, sequence *SequenceState, sequenceStore sequenceStore, store folderStore, runState *RunState, summary *Summary, total int) error {
+func persistParallelFailure(result parallelResult, options Options, sequence *SequenceState, store folderStore, runState *RunState, total int) error {
 	result.promptState.Status = "failed"
 	result.promptState.Error = result.err.Error()
-	_ = store.savePrompt(result.promptState)
+	if err := store.savePrompt(result.promptState); err != nil {
+		return err
+	}
 	setParallelItem(sequence, result.prompt.Name, result.worktree, result.branch, "failed")
 	sequence.mark(result.prompt.Name, "failed", result.promptState.Worker, result.promptState.FinishedAt, result.err.Error())
-	sequence.refreshSummary()
-	_ = sequenceStore.save(*sequence)
-	runState.Status = "failed"
-	runState.Current = result.prompt.Name
-	runState.touch()
-	_ = store.saveRun(*runState)
-	summary.Run = *runState
-	summary.Failed = result.err
 	identity := workeridentity.FromWorker(result.promptState.Worker)
 	emitProgress(options, ProgressEvent{Type: "prompt.failed", SequenceID: sequence.SequenceID, PromptName: result.prompt.Name, PromptType: result.prompt.Type, Status: "failed", Lane: result.prompt.Lane, Priority: result.prompt.Priority, Worktree: result.worktree, IntegrationState: "failed", WorkerID: result.promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, Terminal: result.promptState.Worker.TerminalAdapter, LogPath: result.promptState.Worker.LogPath, Duration: promptDuration(result.promptState), Reason: result.err.Error(), Completed: len(runState.Completed), Total: total})
-	return result.err
+	return nil
 }
 
 func gitWorktreeAdd(repoRoot, worktree, branch, base string) error {

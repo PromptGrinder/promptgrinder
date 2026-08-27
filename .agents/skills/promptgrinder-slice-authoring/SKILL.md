@@ -53,6 +53,27 @@ inside the current parallel mode. Inspect trains from any terminal with
 individual-lane restart is not yet supported; resolve it and deliberately
 start a fresh parallel train.
 
+Android lanes must verify the Android SDK from inside their lane worktree
+before editing or validating. An ignored `local.properties` from the primary
+checkout is not copied into a new Git worktree. Launch PromptGrinder with
+`ANDROID_HOME` and `ANDROID_SDK_ROOT` exported when available; Codex workers
+inherit those safe toolchain variables. If a repository explicitly permits it,
+a worker may create and remove an ignored, ephemeral `local.properties` for
+that lane only. Never commit a machine-specific SDK path.
+
+Declare this requirement on every Android lane that needs the SDK, so failure
+occurs before PromptGrinder creates a sequence, worktree, or worker:
+
+```yaml
+required_environment:
+  any_of:
+    - ANDROID_HOME
+    - ANDROID_SDK_ROOT
+```
+
+`danger-full-access` only controls sandbox access. It does not configure an
+Android SDK, so it is not a substitute for this capability declaration.
+
 ## Resolve hard gates before a commit-each train
 
 - Complete capability and feasibility audits before creating a PromptGrinder implementation train. A blocked result means do not dispatch the train; a ready audit becomes source evidence for executable slices. `gate_outcome: BLOCKED` remains an exceptional safety mechanism for a known hard gate, not the normal workflow for discovering whether a feature should be sliced.

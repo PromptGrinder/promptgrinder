@@ -667,3 +667,38 @@ The listing is observational: it neither launches a worker nor modifies a
 worktree. A failed lane remains inspectable in its retained worktree; durable
 per-lane restart is intentionally added only once the coordinator can safely
 adopt it without competing with the owning train.
+
+For Android lanes, do not assume the primary checkout's ignored
+`local.properties` exists in every isolated worktree. Before launching a
+parallel train, export the installed SDK path in the shell that launches
+PromptGrinder:
+
+```sh
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+promptgrinder run-folder <folder> --repo . --parallel-worktrees --fresh \
+  --checkpoint --commit-each --require-clean-git --detach=false
+```
+
+The Codex adapter forwards these two safe toolchain variables when they are
+already present. It does not copy ignored local configuration between
+worktrees or persist machine-specific paths in sequence state. If a project
+explicitly allows it, a lane can instead create and remove an ignored temporary
+`local.properties`; it must never be committed. When an entire completed batch
+contains a failed lane, PromptGrinder records all siblings first: failed lanes
+remain red and successful but unintegrated lanes show `waiting-to-merge` rather
+than a stale `working` state.
+
+Make Android SDK discovery an explicit capability gate on each Android lane:
+
+```yaml
+required_environment:
+  any_of:
+    - ANDROID_HOME
+    - ANDROID_SDK_ROOT
+```
+
+`validate-folder` and `run-folder` reject a missing, empty, or non-directory
+value before creating sequence state, worktrees, or workers. This is a local
+host prerequisite, not an engine sandbox setting: `danger-full-access` grants
+worker access but does not configure an SDK.

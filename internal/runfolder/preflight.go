@@ -98,6 +98,9 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	if err := validatePrompts(remaining); err != nil {
 		issues = append(issues, err)
 	}
+	if err := validateRequiredEnvironment(remaining); err != nil {
+		issues = append(issues, err)
+	}
 	if options.CommitEach || options.RequireCleanGit {
 		if err := requireCleanBaseline(repoRoot); err != nil {
 			_, _, _, recoverable, recoveryErr := resumedRecoveryCandidate(absFolder, repoRoot, inspection.Prompts, options)
@@ -123,6 +126,60 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	}
 	result.SequenceID = sequence.SequenceID
 	return result, nil
+}
+
+// validateRequiredEnvironment checks only variables explicitly declared by a
+// slice. It intentionally neither copies ignored local configuration nor
+// records the host values in run-folder state.
+func validateRequiredEnvironment(prompts []Prompt) error {
+	issues := []string{}
+	for _, prompt := range prompts {
+		if prompt.Type == TypeSpecification {
+			continue
+		}
+		data, err := os.ReadFile(prompt.Path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", prompt.Name, err)
+		}
+		task, err := markdown.Parse(string(data))
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", prompt.Name, err)
+		}
+		candidates, err := markdown.RequiredEnvironmentAnyOf(task)
+		if err != nil {
+			return fmt.Errorf("task frontmatter %s: %w", prompt.Name, err)
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		states := make([]string, 0, len(candidates))
+		available := false
+		for _, candidate := range candidates {
+			value, present := os.LookupEnv(candidate)
+			switch {
+			case !present:
+				states = append(states, candidate+" is absent")
+			case strings.TrimSpace(value) == "":
+				states = append(states, candidate+" is empty")
+			default:
+				info, statErr := os.Stat(value)
+				if statErr != nil {
+					states = append(states, candidate+" does not name an existing directory")
+				} else if !info.IsDir() {
+					states = append(states, candidate+" points to a non-directory")
+				} else {
+					available = true
+				}
+			}
+		}
+		if !available {
+			issues = append(issues, fmt.Sprintf("%s requires one of %s to name an existing directory; %s. Export a valid value in the shell launching PromptGrinder.", prompt.Name, strings.Join(candidates, ", "), strings.Join(states, "; ")))
+		}
+	}
+	if len(issues) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(issues, "\n\n"))
 }
 
 func preflightIssues(issues []error) error {
