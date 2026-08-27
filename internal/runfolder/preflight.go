@@ -49,6 +49,9 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	if options.Template != "codex" {
 		return PreflightResult{}, fmt.Errorf("unsupported template %q: use codex", options.Template)
 	}
+	if options.ParallelWorktrees && (options.Resume || options.ResumeSequence != "" || options.Restart || options.NoResume) {
+		return PreflightResult{}, fmt.Errorf("parallel worktree runs currently start from a clean new sequence; use --fresh after resolving any prior parallel sequence")
+	}
 	absFolder, err := filepath.Abs(folder)
 	if err != nil {
 		return PreflightResult{}, err
@@ -70,6 +73,11 @@ func Preflight(folder string, options Options) (PreflightResult, error) {
 	}
 	if len(inspection.Prompts) == 0 {
 		return PreflightResult{}, fmt.Errorf("no Markdown prompts found in %s", absFolder)
+	}
+	if options.ParallelWorktrees {
+		if err := validateParallelWorktreePlan(inspection.Prompts, options); err != nil {
+			return PreflightResult{}, fmt.Errorf("run-folder parallel-worktrees preflight: %w", err)
+		}
 	}
 	result := PreflightResult{Folder: absFolder, Repository: repoRoot, Inspection: inspection}
 	remaining := inspection.Prompts

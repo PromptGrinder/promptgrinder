@@ -49,6 +49,25 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererShowsParallelWorktreeLanes(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_parallel", Folder: "tasks", ParallelWorktrees: true, FeatureBranch: "feature/google-play", Inventory: []runfolder.ProgressPrompt{
+		{Name: "01-location.pg", Type: runfolder.TypeImplement, Status: "pending", Lane: "location-policy", Priority: 1},
+		{Name: "02-storage.pg", Type: runfolder.TypeImplement, Status: "pending", Lane: "deletion-storage", Priority: 2},
+	}, Total: 2})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.started", PromptName: "01-location.pg", PromptType: runfolder.TypeImplement, Lane: "location-policy", Priority: 1, Worktree: "/tmp/lanes/location", Status: "working"})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.waiting-to-merge", PromptName: "02-storage.pg", PromptType: runfolder.TypeImplement, Lane: "deletion-storage", Priority: 2, Worktree: "/tmp/lanes/storage", Status: "waiting-to-merge"})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: "01-location.pg", PromptType: runfolder.TypeImplement, Lane: "location-policy", Priority: 1, Worktree: "/tmp/lanes/location", IntegrationState: "integrated", Status: "integrated"})
+	r.Update(runfolder.ProgressEvent{Type: "run.completed", PRHint: "Integrated feature branch is ready for review; create a PR against your intended base: gh pr create --head feature/google-play"})
+	r.Close()
+	for _, want := range []string{"Mode: parallel worktrees · foreground", "Feature branch: feature/google-play", "├─ P1 01-location.pg [location-policy] - pending", "└─ P2 02-storage.pg [deletion-storage] - pending", "01-location.pg [implement] - working", "02-storage.pg [implement] - waiting-to-merge", "✓ ├─ P1 01-location.pg [location-policy] - succeeded|unscoped|unknown-engine/default|<1s · /tmp/lanes/location", "Next action: Integrated feature branch is ready for review; create a PR against your intended base: gh pr create --head feature/google-play"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestRunFolderRendererDistinguishesCompletedCapabilityGate(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true})

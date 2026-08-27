@@ -101,6 +101,8 @@ available DSL; it is not a requirement to set every optional field.
 | `type` | Slice kind | One of `implement`, `test`, `verify`, or `review`. Required for generic names; must agree with a typed filename. |
 | `role` | Declared execution responsibility | Lowercase, hyphen-separated slug. PromptGrinder loads its description and allowed paths as an outer boundary; the slice policy can only narrow that scope. |
 | `depends_on` | Earlier prerequisite task IDs | List of `id` values. Every referenced ID must exist and occur earlier in filename order. |
+| `lane` | Parallel-worktree lane identity | Lowercase kebab-case identifier. Required for each runnable slice when `run-folder --parallel-worktrees` is used. |
+| `priority` | Deterministic lane integration order | Positive integer. Lower values integrate first; equal values use filename order. Required for each runnable slice when `run-folder --parallel-worktrees` is used. |
 | `context_mode` | Runtime conversation continuity | `shared` (the default) resumes the preceding runtime session when the engine supports it. `fresh` starts this slice without the preceding session, establishing a deliberate clean-context boundary. The shared specification and current repository state remain available in both modes. |
 | `gate_outcome` | Capability-gate product outcome | Optional. The only supported value is `BLOCKED`. Use on an audit slice that may successfully establish an authoritative-data or prerequisite blocker. It requires the worker to return `STATUS: BLOCKED` and `NEXT_PROMPT_SAFE: no`; PromptGrinder checkpoints permitted scoped evidence, marks the sequence `product-blocked`, and does not launch later slices. |
 | `engine` | Runtime and model selection | A string engine name, or a mapping with `name`, `model`, `max_cost`, `capabilities`, `profile`, `sandbox`, `approval`, `web_search`, and `images`. `max_cost` is `low`, `medium`, or `high`; `capabilities` uses `text`, `image`, `code`, or `web-search`. |
@@ -231,6 +233,43 @@ This is not a successful product delivery and is not recoverable through
 `--resume`. After the underlying prerequisite is explicitly resolved, start a
 new compatible sequence (or a deliberately fresh one) with updated gate
 evidence. Do not use `STATUS: PASS` to conceal a product blocker.
+
+## Opt-in parallel worktree lanes
+
+`run-folder` is sequential by default. Use `--parallel-worktrees` only for
+independent, clean-context slices that can be safely committed and merged:
+
+```yaml
+---
+id: android-location-policy
+type: implement
+lane: location-policy
+priority: 1
+context_mode: fresh
+allowed_paths:
+  - mobile-android/app/src/main/location/**
+---
+```
+
+The mode requires `--checkpoint --commit-each --require-clean-git`. Each
+dependency-eligible slice runs in its own Git worktree and commits only its
+permitted files there. PromptGrinder integrates completed lane branches into a
+separate coordinator worktree in ascending `priority` (then filename) order.
+Only after every merge succeeds does it fast-forward the feature branch.
+
+`depends_on` controls when a slice may start; it is not an integration rank.
+A lower-priority lane that finishes early is displayed as
+`waiting-to-merge` until every earlier integration is safe. If a lane fails or
+an isolated merge conflicts, the feature branch is not changed and the lane
+worktrees remain inspectable under the sequence state directory.
+
+Parallel lanes do not share a runtime conversation. Every runnable slice must
+declare `context_mode: fresh`, a `lane`, a positive `priority`, and non-empty
+`allowed_paths`. Initial RC.6.0 lane execution always starts from a fresh
+baseline; `--resume`, `--resume-sequence`, `--restart`, and `--no-resume` are
+intentionally rejected until lane-level recovery is durable.
+Capability gates remain sequential in this initial mode so their terminal
+product-blocked semantics are never confused with lane integration.
 
 ## Authoring and preflight
 

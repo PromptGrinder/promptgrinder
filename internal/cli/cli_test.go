@@ -1204,6 +1204,19 @@ func TestCLIRunFolderSandboxOverride(t *testing.T) {
 	}
 }
 
+func TestCLIRunFolderParallelWorktrees(t *testing.T) {
+	service := &fakeService{}
+	cmd := NewRootCommand(service, &bytes.Buffer{}, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run-folder", "tasks", "--parallel-worktrees", "--detach=false"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !service.runFolderOptions.ParallelWorktrees {
+		t.Fatalf("runFolderOptions = %#v", service.runFolderOptions)
+	}
+}
+
 func TestCLIRunAcceptsMultipleFilesWithSharedContext(t *testing.T) {
 	service := &fakeService{}
 	cmd := NewRootCommand(service, &bytes.Buffer{}, &bytes.Buffer{})
@@ -2643,7 +2656,7 @@ func TestRunFolderHelpShowsInteractiveDetachFormAndDefault(t *testing.T) {
 
 func TestCLISequences(t *testing.T) {
 	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
-	service := &fakeService{sequences: []pgruntime.SequenceProgress{{
+	service := &fakeService{sequence: pgruntime.SequenceState{SequenceID: "seq_abc123"}, sequences: []pgruntime.SequenceProgress{{
 		SequenceID:   "seq_abc123",
 		Status:       "running",
 		Total:        14,
@@ -2684,6 +2697,27 @@ func TestCLISequencesJSON(t *testing.T) {
 	}
 }
 
+func TestCLISequenceListGroupsParallelLanesUnderTrain(t *testing.T) {
+	service := &fakeService{
+		sequence: pgruntime.SequenceState{SequenceID: "seq_parallel", ParallelWorktrees: true, FeatureBranch: "feature/google-play", Items: []runfolder.SequenceItem{
+			{PromptName: "01-location.pg", Lane: "location", Priority: 1, Status: "running", Worktree: "/tmp/location", WorkerID: "wrk_location"},
+			{PromptName: "02-storage.pg", Lane: "storage", Priority: 2, Status: "pending", IntegrationState: "waiting-to-merge"},
+		}},
+		sequences: []pgruntime.SequenceProgress{{SequenceID: "seq_parallel", Status: "running", ParallelWorktrees: true, FeatureBranch: "feature/google-play", Total: 2, Pending: 2}},
+	}
+	out := &bytes.Buffer{}
+	cmd := NewRootCommand(service, out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"sequence", "list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"SEQUENCE TRAIN", "seq_parallel  running  parallel-worktrees", "├─ P1 01-location.pg [location] — running · wrk_location · /tmp/location", "└─ P2 02-storage.pg [storage] — pending · waiting-to-merge"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestCLISequencesFiltersNormalizedFolderWithSpaces(t *testing.T) {
 	root := t.TempDir()
 	folder := filepath.Join(root, "task folder")
@@ -2691,7 +2725,7 @@ func TestCLISequencesFiltersNormalizedFolderWithSpaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(root)
-	service := &fakeService{sequences: []pgruntime.SequenceProgress{
+	service := &fakeService{sequence: pgruntime.SequenceState{SequenceID: "seq_match"}, sequences: []pgruntime.SequenceProgress{
 		{SequenceID: "seq_match", Folder: folder},
 		{SequenceID: "seq_other", Folder: filepath.Join(root, "other")},
 	}}

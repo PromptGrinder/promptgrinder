@@ -39,6 +39,9 @@ type RunFolderRenderer struct {
 	sequenceID     string
 	folder         string
 	resumePlan     string
+	parallel       bool
+	featureBranch  string
+	prHint         string
 	active         string
 	activeSince    time.Time
 	frame          int
@@ -65,7 +68,7 @@ func NewRunFolderRenderer(w io.Writer, interactive bool, opts Options) *RunFolde
 func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
-	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" || event.Type == "run.completed" {
+	if event.Type == "run.started" || event.Type == "prompt.started" || event.Type == "prompt.recovering" || event.Type == "prompt.waiting-to-merge" || event.Type == "prompt.skipped" || event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" || event.Type == "run.completed" {
 		r.stopTicker()
 	}
 	r.mu.Lock()
@@ -78,6 +81,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	case "run.started":
 		r.sequenceID, r.folder = event.SequenceID, event.Folder
 		r.resumePlan = event.ResumePlan
+		r.parallel, r.featureBranch = event.ParallelWorktrees, event.FeatureBranch
 		r.items = append([]runfolder.ProgressPrompt(nil), event.Inventory...)
 		r.markdownTotal = event.MarkdownTotal
 		r.ignored = append([]string(nil), event.Ignored...)
@@ -88,7 +92,12 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 			r.renderPlainStartLocked()
 		}
 	case "prompt.started":
-		r.setStatusLocked(event.PromptName, "active", event.PromptType)
+		status := "active"
+		if r.parallel && event.Status != "" {
+			status = event.Status
+		}
+		r.setStatusLocked(event.PromptName, status, event.PromptType)
+		r.applyParallelDetailLocked(event)
 		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
 		if r.interactive {
 			r.renderDashboardLocked()
@@ -96,8 +105,18 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 		} else {
 			r.writePlainEventLocked(event)
 		}
+	case "prompt.waiting-to-merge":
+		r.setStatusLocked(event.PromptName, "waiting-to-merge", event.PromptType)
+		r.applyParallelDetailLocked(event)
+		r.details[event.PromptName] = event
+		if r.interactive {
+			r.renderDashboardLocked()
+		} else {
+			r.writePlainEventLocked(event)
+		}
 	case "prompt.recovering":
 		r.setStatusLocked(event.PromptName, "active", event.PromptType)
+		r.applyParallelDetailLocked(event)
 		r.active, r.activeSince, r.frame = event.PromptName, r.now(), 0
 		if r.interactive {
 			r.renderDashboardLocked()
@@ -108,6 +127,7 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 	case "prompt.skipped", "prompt.succeeded", "prompt.failed", "prompt.gate-blocked":
 		r.active = ""
 		r.setStatusLocked(event.PromptName, event.Status, event.PromptType)
+		r.applyParallelDetailLocked(event)
 		r.details[event.PromptName] = event
 		if r.interactive {
 			r.renderDashboardLocked()
@@ -116,8 +136,11 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 		}
 	case "run.completed":
 		r.active = ""
+		r.prHint = event.PRHint
 		if r.interactive {
 			r.renderDashboardLocked()
+		} else if r.prHint != "" {
+			fmt.Fprintln(r.w, "Next action: "+r.prHint)
 		}
 	}
 }
@@ -245,12 +268,40 @@ func (r *RunFolderRenderer) setStatusLocked(name, status string, typ runfolder.P
 	r.items = append(r.items, runfolder.ProgressPrompt{Name: name, Type: typ, Status: status})
 }
 
+func (r *RunFolderRenderer) applyParallelDetailLocked(event runfolder.ProgressEvent) {
+	for index := range r.items {
+		if r.items[index].Name != event.PromptName {
+			continue
+		}
+		if event.Lane != "" {
+			r.items[index].Lane = event.Lane
+		}
+		if event.Priority != 0 {
+			r.items[index].Priority = event.Priority
+		}
+		if event.Worktree != "" {
+			r.items[index].Worktree = event.Worktree
+		}
+		if event.IntegrationState != "" {
+			r.items[index].IntegrationState = event.IntegrationState
+		}
+		return
+	}
+}
+
 func (r *RunFolderRenderer) renderPlainStartLocked() {
 	if !r.bannerShown {
 		Banner(r.w, Options{Theme: r.opts.Theme, Plain: true})
 		r.bannerShown = true
 	}
-	fmt.Fprintln(r.w, "Mode: foreground")
+	if r.parallel {
+		fmt.Fprintln(r.w, "Mode: parallel worktrees · foreground")
+		if r.featureBranch != "" {
+			fmt.Fprintln(r.w, "Feature branch: "+r.featureBranch)
+		}
+	} else {
+		fmt.Fprintln(r.w, "Mode: foreground")
+	}
 	if r.sequenceID != "" {
 		fmt.Fprintln(r.w, "Sequence: "+r.sequenceID)
 		fmt.Fprintln(r.w, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
@@ -267,13 +318,38 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 		fmt.Fprintln(r.w, "Ignored: "+strings.Join(r.ignored, ", "))
 	}
 	for i, item := range r.items {
+		if r.parallel && item.Type != runfolder.TypeSpecification {
+			fmt.Fprintf(r.w, "%s P%d %s [%s] - %s", parallelTreePrefix(i, len(r.items)), item.Priority, item.Name, item.Lane, stateLabel(item.Status))
+			if item.Worktree != "" {
+				fmt.Fprintf(r.w, " · %s", item.Worktree)
+			}
+			fmt.Fprintln(r.w)
+			continue
+		}
 		fmt.Fprintf(r.w, "[%d/%d] %s [%s] - %s\n", i+1, len(r.items), item.Name, item.Type, stateLabel(item.Status))
 	}
+}
+
+func parallelTreePrefix(index, total int) string {
+	if index+1 == total {
+		return "└─"
+	}
+	return "├─"
 }
 
 func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent) {
 	if event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" {
 		index, total := r.eventPositionLocked(event)
+		if r.parallel && event.Lane != "" {
+			fmt.Fprintf(r.w, "%s %s P%d %s [%s] - %s|%s", stateIcon(event.Status), parallelTreePrefix(index-1, total), event.Priority, event.PromptName, event.Lane, stateLabel(event.Status), compactRunFolderIdentity(event))
+			if event.Worktree != "" {
+				fmt.Fprintf(r.w, " · %s", event.Worktree)
+			}
+			writeParallelWorkerMeta(r.w, event)
+			fmt.Fprintln(r.w)
+			writeFailureDetails(r.w, event)
+			return
+		}
 		fmt.Fprintf(r.w, "%s [%d/%d] %s|%s\n", stateIcon(event.Status), index, total, event.PromptName, compactRunFolderIdentity(event))
 		writeFailureDetails(r.w, event)
 		return
@@ -323,7 +399,14 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		fmt.Fprint(r.w, "\033[s")
 		r.dashboardSaved = true
 	}
-	lines := []string{"Mode: foreground"}
+	mode := "Mode: foreground"
+	if r.parallel {
+		mode = "Mode: parallel worktrees · foreground"
+	}
+	lines := []string{mode}
+	if r.parallel && r.featureBranch != "" {
+		lines = append(lines, "Feature branch: "+r.featureBranch)
+	}
 	if r.sequenceID != "" {
 		lines = append(lines, "Sequence: "+r.sequenceID)
 		lines = append(lines, "Status: promptgrinder sequence "+shellQuote(r.sequenceID))
@@ -331,6 +414,9 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	}
 	if r.resumePlan != "" {
 		lines = append(lines, "Resume plan: "+r.resumePlan)
+	}
+	if r.prHint != "" {
+		lines = append(lines, "Next action: "+r.prHint)
 	}
 	lines = append(lines, "Prompts:")
 	if r.markdownTotal > 0 {
@@ -345,12 +431,26 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		if item.Name == r.active {
 			icon = colorizeStatusIcon(spinnerFrames[r.frame%len(spinnerFrames)], "active", themeColor(r.opts.Theme))
 			duration = " " + formatDuration(r.now().Sub(r.activeSince))
-		} else if item.Status == "succeeded" || item.Status == "failed" || item.Status == "skipped" || item.Status == "gate-blocked" {
+		} else if item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "skipped" || item.Status == "gate-blocked" {
 			duration = " " + formatDuration(detail.Duration)
 		}
 		line := fmt.Sprintf("%s [%d/%d] %s [%s] - %s%s", icon, i+1, len(r.items), item.Name, item.Type, stateLabel(item.Status), duration)
-		if item.Status == "succeeded" || item.Status == "failed" || item.Status == "gate-blocked" {
+		if r.parallel && item.Type != runfolder.TypeSpecification {
+			line = fmt.Sprintf("%s %s P%d %s [%s] - %s%s", icon, parallelTreePrefix(i, len(r.items)), item.Priority, item.Name, item.Lane, stateLabel(item.Status), duration)
+			if item.Worktree != "" {
+				line += " · " + item.Worktree
+			}
+		}
+		if (item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "gate-blocked") && !r.parallel {
 			line = fmt.Sprintf("%s [%d/%d] %s|%s", icon, i+1, len(r.items), item.Name, compactRunFolderIdentity(detail))
+		} else if r.parallel && (item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "gate-blocked") {
+			line += "|" + compactRunFolderIdentity(detail)
+			if detail.WorkerID != "" {
+				line += " · worker " + detail.WorkerID
+			}
+			if detail.Terminal != "" {
+				line += " · terminal " + detail.Terminal
+			}
 		}
 		if (item.Status == "failed" || item.Status == "gate-blocked") && detail.LogPath != "" {
 			line += " (log: " + terminalFileLink(detail.LogPath) + ")"
@@ -362,6 +462,15 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 	}
 	for _, line := range lines {
 		fmt.Fprint(r.w, "\033[2K"+line+"\n")
+	}
+}
+
+func writeParallelWorkerMeta(w io.Writer, event runfolder.ProgressEvent) {
+	if event.WorkerID != "" {
+		fmt.Fprint(w, " · worker "+event.WorkerID)
+	}
+	if event.Terminal != "" {
+		fmt.Fprint(w, " · terminal "+event.Terminal)
 	}
 }
 
@@ -507,11 +616,13 @@ func failureReportTruncated(report *state.FailureReport) bool {
 
 func stateIcon(status string) string {
 	switch status {
-	case "active", "running", "recovering":
+	case "active", "running", "recovering", "working", "integrating":
 		return "▶"
+	case "waiting-to-merge":
+		return "◌"
 	case "skipped":
 		return "○"
-	case "succeeded", "completed":
+	case "succeeded", "completed", "integrated":
 		return "✓"
 	case "failed":
 		return "✗"
@@ -525,7 +636,13 @@ func stateLabel(status string) string {
 	switch status {
 	case "active", "running", "recovering":
 		return "active"
-	case "succeeded", "completed":
+	case "working":
+		return "working"
+	case "integrating":
+		return "integrating"
+	case "waiting-to-merge":
+		return "waiting-to-merge"
+	case "succeeded", "completed", "integrated":
 		return "succeeded"
 	case "failed":
 		return "failed"

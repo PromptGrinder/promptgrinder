@@ -84,6 +84,8 @@ func TestContractRejectsUnsupportedAndMalformedValues(t *testing.T) {
 		{"bad role", "role: Backend Feature", "role must be a lowercase"},
 		{"bad context mode", "context_mode: isolated", "context_mode must be one of shared or fresh"},
 		{"bad gate outcome", "gate_outcome: PASS", "gate_outcome must be BLOCKED"},
+		{"zero priority", "priority: 0", "priority must be a positive integer"},
+		{"text priority", "priority: first", "priority must be a positive integer"},
 		{"duplicate dependency", "depends_on: [task-a, task-a]", `depends_on contains duplicate "task-a"`},
 		{"criteria type", "acceptance_criteria: true", "must be a string or nonempty list"},
 		{"empty validation", "validation: []", "must be a string or nonempty list"},
@@ -117,6 +119,22 @@ func TestContractRendersExpectedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := string(Render(task)); !strings.Contains(got, "## Expected Paths\n\n- backend/service.go") {
+		t.Fatalf("rendered prompt = %q", got)
+	}
+}
+
+func TestContractAcceptsAndRendersPositiveIntegrationPriority(t *testing.T) {
+	task, err := Parse("---\nid: lane-a\ntype: implement\nlane: android-policy\npriority: 2\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(task, "tasks/lane-a.pg"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(Render(task)); !strings.Contains(got, "## Integration Priority\n\n- 2") {
+		t.Fatalf("rendered prompt = %q", got)
+	}
+	if got := string(Render(task)); !strings.Contains(got, "## Lane\n\n- android-policy") {
 		t.Fatalf("rendered prompt = %q", got)
 	}
 }

@@ -53,6 +53,7 @@ type Options struct {
 	CommitEach              bool
 	RequireCleanGit         bool
 	AllowConcurrentWorktree bool
+	ParallelWorktrees       bool
 	RepoPath                string
 	Template                string
 	EngineOverride          string
@@ -118,6 +119,13 @@ type WaitLauncher interface {
 	WaitPrompt(worker state.Worker) (state.Worker, error)
 }
 
+// RepositoryLauncher can run a slice in an explicitly selected repository
+// worktree. Parallel run-folder execution requires this capability so a lane
+// cannot accidentally write into the feature branch's checkout.
+type RepositoryLauncher interface {
+	LaunchPromptInRepository(repository, path, content, sessionID string) (state.Worker, error)
+}
+
 type Summary struct {
 	Run      RunState
 	Sequence *SequenceState
@@ -130,41 +138,53 @@ type Summary struct {
 }
 
 type ProgressEvent struct {
-	Type             string               `json:"type"`
-	SequenceID       string               `json:"sequence_id"`
-	PromptName       string               `json:"prompt_name,omitempty"`
-	PromptType       PromptType           `json:"prompt_type,omitempty"`
-	Status           string               `json:"status,omitempty"`
-	WorkerID         string               `json:"worker_id,omitempty"`
-	Scope            string               `json:"scope,omitempty"`
-	Engine           string               `json:"engine,omitempty"`
-	Model            string               `json:"model,omitempty"`
-	LogPath          string               `json:"log_path,omitempty"`
-	Completed        int                  `json:"completed"`
-	Total            int                  `json:"total"`
-	Folder           string               `json:"folder,omitempty"`
-	Duration         time.Duration        `json:"duration,omitempty"`
-	ExitCode         *int                 `json:"exit_code,omitempty"`
-	CompletionStatus string               `json:"completion_status,omitempty"`
-	NextPromptSafe   *bool                `json:"next_prompt_safe,omitempty"`
-	Reason           string               `json:"reason,omitempty"`
-	FailureReport    *state.FailureReport `json:"failure_report,omitempty"`
-	RecoveryAttempt  int                  `json:"recovery_attempt,omitempty"`
-	RecoveryMode     string               `json:"recovery_mode,omitempty"`
-	RecoveryArtifact string               `json:"recovery_artifact,omitempty"`
-	Inventory        []ProgressPrompt     `json:"inventory,omitempty"`
-	MarkdownTotal    int                  `json:"markdown_total,omitempty"`
-	Ignored          []string             `json:"ignored,omitempty"`
-	ResumePlan       string               `json:"resume_plan,omitempty"`
-	Adoption         *SequenceAdoption    `json:"adoption,omitempty"`
+	Type              string               `json:"type"`
+	SequenceID        string               `json:"sequence_id"`
+	PromptName        string               `json:"prompt_name,omitempty"`
+	PromptType        PromptType           `json:"prompt_type,omitempty"`
+	Status            string               `json:"status,omitempty"`
+	Lane              string               `json:"lane,omitempty"`
+	Priority          int                  `json:"priority,omitempty"`
+	Worktree          string               `json:"worktree,omitempty"`
+	IntegrationState  string               `json:"integration_state,omitempty"`
+	WorkerID          string               `json:"worker_id,omitempty"`
+	Scope             string               `json:"scope,omitempty"`
+	Engine            string               `json:"engine,omitempty"`
+	Model             string               `json:"model,omitempty"`
+	Terminal          string               `json:"terminal,omitempty"`
+	LogPath           string               `json:"log_path,omitempty"`
+	Completed         int                  `json:"completed"`
+	Total             int                  `json:"total"`
+	Folder            string               `json:"folder,omitempty"`
+	Duration          time.Duration        `json:"duration,omitempty"`
+	ExitCode          *int                 `json:"exit_code,omitempty"`
+	CompletionStatus  string               `json:"completion_status,omitempty"`
+	NextPromptSafe    *bool                `json:"next_prompt_safe,omitempty"`
+	Reason            string               `json:"reason,omitempty"`
+	FailureReport     *state.FailureReport `json:"failure_report,omitempty"`
+	RecoveryAttempt   int                  `json:"recovery_attempt,omitempty"`
+	RecoveryMode      string               `json:"recovery_mode,omitempty"`
+	RecoveryArtifact  string               `json:"recovery_artifact,omitempty"`
+	Inventory         []ProgressPrompt     `json:"inventory,omitempty"`
+	MarkdownTotal     int                  `json:"markdown_total,omitempty"`
+	Ignored           []string             `json:"ignored,omitempty"`
+	ResumePlan        string               `json:"resume_plan,omitempty"`
+	ParallelWorktrees bool                 `json:"parallel_worktrees,omitempty"`
+	FeatureBranch     string               `json:"feature_branch,omitempty"`
+	PRHint            string               `json:"pr_hint,omitempty"`
+	Adoption          *SequenceAdoption    `json:"adoption,omitempty"`
 }
 
 // ProgressPrompt is the prompt metadata needed to render an ordered run
 // inventory. Content is deliberately excluded from progress events.
 type ProgressPrompt struct {
-	Name   string     `json:"name"`
-	Type   PromptType `json:"type"`
-	Status string     `json:"status"`
+	Name             string     `json:"name"`
+	Type             PromptType `json:"type"`
+	Status           string     `json:"status"`
+	Lane             string     `json:"lane,omitempty"`
+	Priority         int        `json:"priority,omitempty"`
+	Worktree         string     `json:"worktree,omitempty"`
+	IntegrationState string     `json:"integration_state,omitempty"`
 }
 
 type persistedProgressEvent struct {
@@ -180,6 +200,8 @@ type Prompt struct {
 	Role        string
 	RolePolicy  *RolePolicy
 	DependsOn   []string
+	Lane        string
+	Priority    int
 	ContextMode ContextMode
 	GateOutcome string
 }
@@ -202,24 +224,26 @@ type RunState struct {
 }
 
 type SequenceState struct {
-	StateVersion     int                `json:"state_version,omitempty"`
-	SequenceID       string             `json:"sequence_id"`
-	Folder           string             `json:"folder"`
-	RepositoryPath   string             `json:"repository_path,omitempty"`
-	Status           string             `json:"status"`
-	Template         string             `json:"template"`
-	Engine           string             `json:"engine,omitempty"`
-	SessionID        string             `json:"session_id,omitempty"`
-	Items            []SequenceItem     `json:"items"`
-	TokenUsage       TokenUsage         `json:"token_usage"`
-	ExecutiveSummary string             `json:"executive_summary"`
-	CreatedAt        *time.Time         `json:"created_at,omitempty"`
-	StartedAt        *time.Time         `json:"started_at"`
-	UpdatedAt        *time.Time         `json:"updated_at"`
-	FinishedAt       *time.Time         `json:"finished_at,omitempty"`
-	Supervisor       *Supervisor        `json:"supervisor,omitempty"`
-	EventPath        string             `json:"event_path,omitempty"`
-	Adoptions        []SequenceAdoption `json:"adoptions,omitempty"`
+	StateVersion      int                `json:"state_version,omitempty"`
+	SequenceID        string             `json:"sequence_id"`
+	Folder            string             `json:"folder"`
+	RepositoryPath    string             `json:"repository_path,omitempty"`
+	Status            string             `json:"status"`
+	Template          string             `json:"template"`
+	Engine            string             `json:"engine,omitempty"`
+	ParallelWorktrees bool               `json:"parallel_worktrees,omitempty"`
+	FeatureBranch     string             `json:"feature_branch,omitempty"`
+	SessionID         string             `json:"session_id,omitempty"`
+	Items             []SequenceItem     `json:"items"`
+	TokenUsage        TokenUsage         `json:"token_usage"`
+	ExecutiveSummary  string             `json:"executive_summary"`
+	CreatedAt         *time.Time         `json:"created_at,omitempty"`
+	StartedAt         *time.Time         `json:"started_at"`
+	UpdatedAt         *time.Time         `json:"updated_at"`
+	FinishedAt        *time.Time         `json:"finished_at,omitempty"`
+	Supervisor        *Supervisor        `json:"supervisor,omitempty"`
+	EventPath         string             `json:"event_path,omitempty"`
+	Adoptions         []SequenceAdoption `json:"adoptions,omitempty"`
 }
 
 type SequenceAdoption struct {
@@ -254,6 +278,11 @@ type SequenceItem struct {
 	PromptName       string               `json:"prompt_name"`
 	PromptID         string               `json:"prompt_id,omitempty"`
 	DependsOn        []string             `json:"depends_on,omitempty"`
+	Lane             string               `json:"lane,omitempty"`
+	Priority         int                  `json:"priority,omitempty"`
+	Worktree         string               `json:"worktree,omitempty"`
+	LaneBranch       string               `json:"lane_branch,omitempty"`
+	IntegrationState string               `json:"integration_state,omitempty"`
 	ContextMode      ContextMode          `json:"context_mode,omitempty"`
 	GateOutcome      string               `json:"gate_outcome,omitempty"`
 	PromptHash       string               `json:"prompt_hash,omitempty"`
@@ -421,7 +450,9 @@ func inspectPrompt(promptPath, name string) (Prompt, error) {
 	}
 	role, _ := task.Metadata["role"].(string)
 	gateOutcome, _ := task.Metadata["gate_outcome"].(string)
-	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"]), ContextMode: contextModeValue(task.Metadata["context_mode"]), GateOutcome: gateOutcome}, nil
+	priority, _ := task.Metadata["priority"].(int)
+	lane, _ := task.Metadata["lane"].(string)
+	return Prompt{Path: promptPath, Name: name, ID: id, Type: promptType, Role: role, DependsOn: stringListValue(task.Metadata["depends_on"]), Lane: lane, Priority: priority, ContextMode: contextModeValue(task.Metadata["context_mode"]), GateOutcome: gateOutcome}, nil
 }
 
 func contextModeValue(value any) ContextMode {
@@ -530,6 +561,12 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 }
 
 func Run(folder string, options Options, launcher Launcher) (summary Summary, runErr error) {
+	// A parallel plan always establishes a new, exact feature-branch baseline.
+	// Resuming lane worktrees will be added only with durable lane recovery
+	// state; silently treating an old sequential state as a lane plan is unsafe.
+	if options.ParallelWorktrees {
+		options.Fresh = true
+	}
 	preflight, err := Preflight(folder, options)
 	if err != nil {
 		return Summary{}, err
@@ -632,9 +669,13 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		if status == "" || status == "running" {
 			status = "pending"
 		}
-		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, Type: prompt.Type, Status: status})
+		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, Type: prompt.Type, Status: status, Lane: prompt.Lane, Priority: prompt.Priority})
 	}
-	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, ResumePlan: resumePlan, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
+	featureBranch := ""
+	if options.ParallelWorktrees {
+		featureBranch, _ = gitCurrentBranch(repoRoot)
+	}
+	emitProgress(options, ProgressEvent{Type: "run.started", SequenceID: sequence.SequenceID, Folder: folder, Inventory: inventory, MarkdownTotal: inspection.MarkdownTotal, Ignored: inspection.Ignored, ResumePlan: resumePlan, ParallelWorktrees: options.ParallelWorktrees, FeatureBranch: featureBranch, Completed: sequence.Progress().Succeeded, Total: len(prompts)})
 	if err := store.ensure(); err != nil {
 		return summary, err
 	}
@@ -669,6 +710,17 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 				completed[item.PromptName] = true
 			}
 		}
+	}
+	if options.ParallelWorktrees {
+		if err := runParallelWorktrees(repoRoot, specContext, prompts, options, launcher, &sequence, sequenceStore, store, &runState, &summary); err != nil {
+			return summary, err
+		}
+		prHint := ""
+		if sequence.FeatureBranch != "" {
+			prHint = "Integrated feature branch is ready for review; create a PR against your intended base: gh pr create --head " + sequence.FeatureBranch
+		}
+		emitProgress(options, ProgressEvent{Type: "run.completed", SequenceID: sequence.SequenceID, Folder: folder, Status: "completed", PRHint: prHint, Completed: len(runState.Completed), Total: len(prompts)})
+		return summary, nil
 	}
 	for _, prompt := range prompts {
 		if completed[prompt.Name] {
@@ -1748,27 +1800,29 @@ func sequenceStatus(items []SequenceItem) string {
 }
 
 type SequenceProgress struct {
-	SequenceID     string     `json:"sequence_id"`
-	Folder         string     `json:"folder"`
-	Status         string     `json:"status"`
-	Total          int        `json:"total"`
-	Succeeded      int        `json:"succeeded"`
-	Failed         int        `json:"failed"`
-	Interrupted    int        `json:"interrupted"`
-	Cancelled      int        `json:"cancelled"`
-	ProductBlocked int        `json:"product_blocked"`
-	Pending        int        `json:"pending"`
-	Current        string     `json:"current"`
-	Next           string     `json:"next"`
-	LastWorkerID   string     `json:"last_worker_id"`
-	CreatedAt      *time.Time `json:"created_at,omitempty"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	UpdatedAt      *time.Time `json:"updated_at"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	SequenceID        string     `json:"sequence_id"`
+	Folder            string     `json:"folder"`
+	Status            string     `json:"status"`
+	ParallelWorktrees bool       `json:"parallel_worktrees,omitempty"`
+	FeatureBranch     string     `json:"feature_branch,omitempty"`
+	Total             int        `json:"total"`
+	Succeeded         int        `json:"succeeded"`
+	Failed            int        `json:"failed"`
+	Interrupted       int        `json:"interrupted"`
+	Cancelled         int        `json:"cancelled"`
+	ProductBlocked    int        `json:"product_blocked"`
+	Pending           int        `json:"pending"`
+	Current           string     `json:"current"`
+	Next              string     `json:"next"`
+	LastWorkerID      string     `json:"last_worker_id"`
+	CreatedAt         *time.Time `json:"created_at,omitempty"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at"`
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
 }
 
 func (s SequenceState) Progress() SequenceProgress {
-	progress := SequenceProgress{SequenceID: s.SequenceID, Folder: s.Folder, Status: s.Status, Total: len(s.Items), CreatedAt: s.CreatedAt, StartedAt: s.StartedAt, UpdatedAt: s.UpdatedAt, FinishedAt: s.FinishedAt}
+	progress := SequenceProgress{SequenceID: s.SequenceID, Folder: s.Folder, Status: s.Status, ParallelWorktrees: s.ParallelWorktrees, FeatureBranch: s.FeatureBranch, Total: len(s.Items), CreatedAt: s.CreatedAt, StartedAt: s.StartedAt, UpdatedAt: s.UpdatedAt, FinishedAt: s.FinishedAt}
 	for _, item := range s.Items {
 		switch item.Status {
 		case "succeeded", "skipped":
@@ -2323,6 +2377,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 		fmt.Sprintf("checkpoint=%t", options.Checkpoint),
 		fmt.Sprintf("commit_each=%t", options.CommitEach),
 		fmt.Sprintf("require_clean_git=%t", options.RequireCleanGit),
+		fmt.Sprintf("parallel_worktrees=%t", options.ParallelWorktrees),
 	}
 	engines := []string{}
 	for _, prompt := range prompts {
@@ -2338,7 +2393,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 		if err != nil {
 			return SequenceState{}, err
 		}
-		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), ContextMode: prompt.ContextMode, GateOutcome: prompt.GateOutcome, PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
+		items = append(items, SequenceItem{PromptPath: prompt.Path, PromptName: prompt.Name, PromptID: prompt.ID, DependsOn: append([]string(nil), prompt.DependsOn...), Lane: prompt.Lane, Priority: prompt.Priority, ContextMode: prompt.ContextMode, GateOutcome: prompt.GateOutcome, PromptHash: rawHash, PolicyHash: policyHash, ContentHash: hash, Status: "pending"})
 		engineName, taskEngine, err := effectivePromptEngine(prompt.Path, cfg, options.EngineOverride)
 		if err != nil {
 			return SequenceState{}, err
@@ -2354,7 +2409,7 @@ func buildSequence(folder, repoRoot string, prompts []Prompt, options Options) (
 	}
 	sum := sha256.Sum256([]byte(strings.Join(hashInput, "\n")))
 	id := "seq_" + hex.EncodeToString(sum[:])[:16]
-	return SequenceState{StateVersion: sequenceStateVersion, SequenceID: id, Folder: folder, RepositoryPath: repoRoot, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
+	return SequenceState{StateVersion: sequenceStateVersion, SequenceID: id, Folder: folder, RepositoryPath: repoRoot, Status: "running", Template: options.Template, Engine: sequenceEngineLabel(engines, options.EngineOverride), ParallelWorktrees: options.ParallelWorktrees, Items: items, CreatedAt: &now, StartedAt: &now, UpdatedAt: &now}, nil
 }
 
 func sequenceConfig(repoRoot string, options Options) (config.Config, error) {

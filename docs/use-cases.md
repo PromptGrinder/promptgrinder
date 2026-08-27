@@ -639,3 +639,25 @@ completed capability gate and its product outcome, while an undeclared
 `STATUS: BLOCKED` continues to be a failed worker. A product-blocked sequence
 cannot auto-recover or resume. Resolve the prerequisite and deliberately start
 a new compatible or fresh sequence.
+
+## UC-20 — inspect a run-folder train and its parallel lanes
+
+Use either command from any terminal to discover the durable parent sequence
+ID and its children:
+
+```sh
+promptgrinder sequences
+promptgrinder sequence list
+```
+
+Both commands render every run-folder sequence as a train. Sequential runs
+list their ordered slices. Parallel-worktree runs also show the feature branch,
+lane, priority, worker ID, worktree path, and integration state such as
+`working`, `waiting-to-merge`, or `integrated`. JSON callers retain the
+top-level sequence progress data, including `parallel_worktrees` and
+`feature_branch`.
+
+The listing is observational: it neither launches a worker nor modifies a
+worktree. A failed lane remains inspectable in its retained worktree; durable
+per-lane restart is intentionally added only once the coordinator can safely
+adopt it without competing with the owning train.

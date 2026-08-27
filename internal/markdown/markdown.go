@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -20,7 +21,7 @@ type Task struct {
 const FrontmatterContractVersion = 3
 
 var (
-	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "context_mode": true, "gate_outcome": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
+	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "lane": true, "priority": true, "context_mode": true, "gate_outcome": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
 	engineKeys    = map[string]bool{"name": true, "model": true, "max_cost": true, "capabilities": true, "profile": true, "sandbox": true, "approval": true, "web_search": true, "images": true}
 	secretPattern = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(sk-[a-z0-9_-]{8,}|(?:api[_ -]?key|[a-z0-9_]*(?:token|password|secret))\s*[:=]\s*\S+))`)
 )
@@ -147,6 +148,18 @@ func Validate(task Task, source string) error {
 				return fail("depends_on contains duplicate %q", value)
 			}
 			seen[value] = true
+		}
+	}
+	if raw, ok := task.Metadata["priority"]; ok {
+		value, ok := raw.(int)
+		if !ok || value < 1 {
+			return fail("priority must be a positive integer")
+		}
+	}
+	if raw, ok := task.Metadata["lane"]; ok {
+		value, ok := raw.(string)
+		if !ok || !regexp.MustCompile(`^[a-z][a-z0-9-]*$`).MatchString(value) {
+			return fail("lane must be a lowercase kebab-case identifier")
 		}
 	}
 	if raw, ok := task.Metadata["engine"].(map[string]any); ok {
@@ -309,7 +322,7 @@ func pathList(raw any, field string, requiredNonempty, present bool) ([]string, 
 // Render returns the exact AI instruction bytes: a deterministic semantic preamble followed by the untouched body.
 func Render(task Task) []byte {
 	var b bytes.Buffer
-	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"context_mode", "Context Mode"}, {"gate_outcome", "Gate Outcome"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"expected_paths", "Expected Paths"}, {"validation", "Validation"}}
+	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"lane", "Lane"}, {"priority", "Integration Priority"}, {"context_mode", "Context Mode"}, {"gate_outcome", "Gate Outcome"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"expected_paths", "Expected Paths"}, {"validation", "Validation"}}
 	started := false
 	for _, section := range sections {
 		raw, ok := task.Metadata[section.key]
@@ -317,12 +330,21 @@ func Render(task Task) []byte {
 			continue
 		}
 		var values []string
-		if value, ok := raw.(string); ok {
+		switch value := raw.(type) {
+		case string:
 			values = []string{value}
-		} else {
-			for _, item := range raw.([]any) {
-				values = append(values, item.(string))
+		case int:
+			values = []string{strconv.Itoa(value)}
+		case []any:
+			for _, item := range value {
+				text, ok := item.(string)
+				if !ok {
+					continue
+				}
+				values = append(values, text)
 			}
+		default:
+			continue
 		}
 		if !started {
 			fmt.Fprintf(&b, "# Task Semantics (v%d)\n", FrontmatterContractVersion)
