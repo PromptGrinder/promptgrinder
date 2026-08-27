@@ -12,10 +12,46 @@ train. Copy it into the target repository, replace every placeholder, then add
 only the slices the feature needs; it is a baseline, not a required two-slice
 limit.
 
+For an explicitly parallel feature, start from
+`templates/parallel-worktree-train/` instead. It is valid only with
+`run-folder --parallel-worktrees`; retain sequential execution unless isolated
+lanes provide a real benefit.
+
 1. Inspect the repository and define independently verifiable vertical outcomes.
 2. Prefer typed numbered files such as `10-implement-*.md`, `20-test-*.md`, and `30-verify-*.md`. An ordering number can have an uppercase suffix, such as `08A-implement-*.md`. Existing descriptive `NN[A-Z]*-*.md` filenames are runnable when frontmatter declares a stable `id` and explicit `type`. Use `00[A-Z]*-specification*.md` only for shared non-runnable context.
 3. Keep the folder free of stale Markdown files; `run-folder` treats numbered task files as the execution sequence. Generated reports, handoffs, and evidence must not begin with a runnable number (for example, use `capability-audit-report.md`, not `01-capability-audit-report.md`). Validate the final folder after each generated artifact is added.
 4. Make each slice build on committed output from the previous slice. State prerequisites and boundaries explicitly.
+
+## Author parallel worktree lanes
+
+Use this mode only when each lane can own a non-empty, repository-relative
+write scope and be validated independently. Every runnable lane must declare:
+
+- `lane`: a unique lowercase kebab-case identity;
+- `priority`: a positive integer; lower priorities integrate first and equal
+  priorities use filename order;
+- `context_mode: fresh`: lane workers cannot share an engine session;
+- non-empty `allowed_paths`, plus `forbidden_paths` for adjacent lane-owned
+  surfaces where useful.
+
+`depends_on` controls launch eligibility, not merge rank. A dependent lane
+starts only after its prerequisite has integrated through the coordinator.
+Independent lanes may start together; a completed later-priority lane is
+expected to show `waiting-to-merge` until earlier integrations finish.
+
+Run the completed train only with:
+
+```sh
+promptgrinder run-folder <folder> --repo . --parallel-worktrees --fresh \
+  --checkpoint --commit-each --require-clean-git --detach=false
+```
+
+PromptGrinder uses separate lane and coordinator worktrees and fast-forwards
+the feature branch only after safe integration. Do not place a capability gate
+inside the current parallel mode. Inspect trains from any terminal with
+`promptgrinder sequence list`. A failed lane remains inspectable, but durable
+individual-lane restart is not yet supported; resolve it and deliberately
+start a fresh parallel train.
 
 ## Resolve hard gates before a commit-each train
 

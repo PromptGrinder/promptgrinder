@@ -90,6 +90,12 @@ verification slice, safe path/validation placeholders, and the required
 completion contract; replace every placeholder and add only the slices the
 feature needs.
 
+For an isolated parallel feature, use the bundled
+[`parallel-worktree-train`](.agents/skills/promptgrinder-slice-authoring/templates/parallel-worktree-train)
+template. `promptgrinder discover` also creates the generic local baseline at
+`.promptgrinder/templates/parallel-slice-template.pg`; copy it into a slice
+folder and replace its project-specific role, paths, validations, and outcome.
+
 For example, prepare a new `project archive` feature as three bounded slices:
 
 ```sh

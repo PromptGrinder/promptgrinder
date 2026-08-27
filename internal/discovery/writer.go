@@ -25,6 +25,51 @@ func (YamlWriter) Marshal(v any) ([]byte, error) {
 
 type ProjectManifestWriter struct{ YAML YamlWriter }
 
+const parallelSliceTemplate = `---
+id: <feature>-<lane>
+type: implement
+role: <registered-role>
+depends_on: []
+lane: <lowercase-kebab-lane>
+priority: 1
+context_mode: fresh
+working_directory: .
+timeout: 45m
+engine:
+  name: codex
+  model: <approved-model>
+  sandbox: workspace-write
+acceptance_criteria:
+  - <observable lane outcome>
+allowed_paths:
+  - <repository-relative-owned-path>/**
+forbidden_paths:
+  - <adjacent-path-owned-by-another-lane>/**
+validation:
+  - <focused-command>
+  - git diff --check
+---
+
+# <Feature> — <lane> lane
+
+Read the shared specification, applicable project skills, and committed
+prerequisite evidence. Own only this lane's stated outcome. Do not change
+another lane's paths or run Git commits when the outer train uses
+--commit-each.
+
+This template is for:
+
+    promptgrinder run-folder <folder> --parallel-worktrees --fresh \
+      --checkpoint --commit-each --require-clean-git --detach=false
+
+Every parallel runnable slice needs a unique lane, positive priority,
+context_mode: fresh, and non-empty allowed_paths. Dependencies control launch
+eligibility; priority controls coordinator merge order.
+
+STATUS: PASS|PARTIAL|BLOCKED
+NEXT_PROMPT_SAFE: yes|no
+`
+
 func (w ProjectManifestWriter) Files(manifest ProjectManifest, roles []Role) ([]File, error) {
 	if w.YAML == (YamlWriter{}) {
 		w.YAML = YamlWriter{}
@@ -41,6 +86,7 @@ func (w ProjectManifestWriter) Files(manifest ProjectManifest, roles []Role) ([]
 		}
 		files = append(files, File{Path: filepath.ToSlash(filepath.Join(".promptgrinder", "roles", role.ID+".yaml")), Content: content})
 	}
+	files = append(files, File{Path: ".promptgrinder/templates/parallel-slice-template.pg", Content: []byte(parallelSliceTemplate)})
 	return files, nil
 }
 
@@ -69,7 +115,7 @@ func WritePlan(root string, plan Plan) error {
 			return fmt.Errorf("inspect target %q: %w", f.Path, statErr)
 		}
 	}
-	for _, dir := range []string{".promptgrinder", ".promptgrinder/roles", ".promptgrinder/context"} {
+	for _, dir := range []string{".promptgrinder", ".promptgrinder/roles", ".promptgrinder/context", ".promptgrinder/templates"} {
 		target, err := safeTarget(abs, dir)
 		if err != nil {
 			return err
@@ -80,7 +126,7 @@ func WritePlan(root string, plan Plan) error {
 			return statErr
 		}
 	}
-	for _, dir := range []string{".promptgrinder", ".promptgrinder/roles", ".promptgrinder/context"} {
+	for _, dir := range []string{".promptgrinder", ".promptgrinder/roles", ".promptgrinder/context", ".promptgrinder/templates"} {
 		if err := os.Mkdir(filepath.Join(abs, filepath.FromSlash(dir)), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("create %q: %w", dir, err)
 		}

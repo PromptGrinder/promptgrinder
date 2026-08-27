@@ -1,0 +1,34 @@
+---
+id: <feature>-lane-b
+type: implement
+role: <registered-role>
+depends_on: []
+lane: <lane-b>
+priority: 2
+context_mode: fresh
+working_directory: .
+timeout: 45m
+engine:
+  name: codex
+  model: <approved-model>
+  sandbox: workspace-write
+acceptance_criteria:
+  - <observable lane-b outcome>
+allowed_paths:
+  - <owned-path-b>/**
+forbidden_paths:
+  - <owned-path-a>/**
+validation:
+  - <focused-lane-b-command>
+  - git diff --check
+---
+
+# Implement <lane-b>
+
+Read `00-specification.md`, applicable repository instructions and skills, and
+committed prerequisite evidence. Implement only this lane. Do not modify
+another lane's paths or perform Git commits when the outer train uses
+`--commit-each`.
+
+STATUS: PASS|PARTIAL|BLOCKED
+NEXT_PROMPT_SAFE: yes|no
