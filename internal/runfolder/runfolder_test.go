@@ -905,6 +905,11 @@ func TestParallelWorktreesRunIndependentLanesAndIntegrateByPriority(t *testing.T
 	if len(summary.Sequence.Items) != 2 || summary.Sequence.Items[0].IntegrationState != "integrated" || summary.Sequence.Items[1].IntegrationState != "integrated" {
 		t.Fatalf("sequence items = %#v", summary.Sequence.Items)
 	}
+	for _, item := range summary.Sequence.Items {
+		if item.IntegrationSHA == "" {
+			t.Fatalf("integrated lane is missing coordinator merge SHA: %#v", item)
+		}
+	}
 	if clean, err := gitClean(dir); err != nil || !clean {
 		t.Fatalf("feature branch must be clean after integration: clean=%t err=%v", clean, err)
 	}

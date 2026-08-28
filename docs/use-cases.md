@@ -662,6 +662,10 @@ in its header and shows only each lane worktree's leaf on its row. Every
 working lane has its own spinner and elapsed clock. Pending dependencies are
 dim, completed lanes waiting for priority integration are amber, integration is
 blue, and successful/failed lanes retain the established green/red colours.
+Completed lane rows omit the redundant success label and show the real
+coordinator merge relationship as `lane-worktree → feature-branch@<short-SHA>`.
+That SHA is the isolated coordinator's merge commit, not the worker's local
+checkpoint commit.
 
 The listing is observational: it neither launches a worker nor modifies a
 worktree. A failed lane remains inspectable in its retained worktree; durable

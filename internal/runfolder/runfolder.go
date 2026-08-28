@@ -147,6 +147,7 @@ type ProgressEvent struct {
 	Priority          int                  `json:"priority,omitempty"`
 	Worktree          string               `json:"worktree,omitempty"`
 	IntegrationState  string               `json:"integration_state,omitempty"`
+	IntegrationSHA    string               `json:"integration_sha,omitempty"`
 	WorkerID          string               `json:"worker_id,omitempty"`
 	Scope             string               `json:"scope,omitempty"`
 	Engine            string               `json:"engine,omitempty"`
@@ -187,6 +188,7 @@ type ProgressPrompt struct {
 	DependsOn        []string   `json:"depends_on,omitempty"`
 	Worktree         string     `json:"worktree,omitempty"`
 	IntegrationState string     `json:"integration_state,omitempty"`
+	IntegrationSHA   string     `json:"integration_sha,omitempty"`
 }
 
 type persistedProgressEvent struct {
@@ -285,6 +287,7 @@ type SequenceItem struct {
 	Worktree         string               `json:"worktree,omitempty"`
 	LaneBranch       string               `json:"lane_branch,omitempty"`
 	IntegrationState string               `json:"integration_state,omitempty"`
+	IntegrationSHA   string               `json:"integration_sha,omitempty"`
 	ContextMode      ContextMode          `json:"context_mode,omitempty"`
 	GateOutcome      string               `json:"gate_outcome,omitempty"`
 	PromptHash       string               `json:"prompt_hash,omitempty"`

@@ -218,13 +218,18 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 			if err := gitMerge(coordinatorWorktree, result.branch); err != nil {
 				return fmt.Errorf("integrate lane %s in isolated coordinator worktree %s: %w", result.prompt.Name, coordinatorWorktree, err)
 			}
+			integrationSHA, err := gitSHA(coordinatorWorktree)
+			if err != nil {
+				return fmt.Errorf("record integration commit for lane %s: %w", result.prompt.Name, err)
+			}
 			setParallelItem(sequence, result.prompt.Name, result.worktree, result.branch, "integrated")
+			setParallelIntegrationSHA(sequence, result.prompt.Name, integrationSHA)
 			sequence.mark(result.prompt.Name, "succeeded", result.promptState.Worker, result.promptState.FinishedAt, "")
 			completed[result.prompt.ID] = true
 			delete(remaining, result.prompt.ID)
 			runState.Completed = append(runState.Completed, result.prompt.Name)
 			identity := workeridentity.FromWorker(result.promptState.Worker)
-			emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: result.prompt.Name, PromptType: result.prompt.Type, Status: "integrated", Lane: result.prompt.Lane, Priority: result.prompt.Priority, Worktree: result.worktree, IntegrationState: "integrated", WorkerID: result.promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, Terminal: result.promptState.Worker.TerminalAdapter, LogPath: result.promptState.Worker.LogPath, Duration: promptDuration(result.promptState), Completed: len(runState.Completed), Total: len(prompts)})
+			emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: result.prompt.Name, PromptType: result.prompt.Type, Status: "integrated", Lane: result.prompt.Lane, Priority: result.prompt.Priority, Worktree: result.worktree, IntegrationState: "integrated", IntegrationSHA: integrationSHA, WorkerID: result.promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, Terminal: result.promptState.Worker.TerminalAdapter, LogPath: result.promptState.Worker.LogPath, Duration: promptDuration(result.promptState), Completed: len(runState.Completed), Total: len(prompts)})
 		}
 		sequence.refreshSummary()
 		if err := sequenceStore.save(*sequence); err != nil {
@@ -279,6 +284,15 @@ func setParallelItem(sequence *SequenceState, promptName, worktree, branch, inte
 			sequence.Items[index].Worktree = worktree
 			sequence.Items[index].LaneBranch = branch
 			sequence.Items[index].IntegrationState = integrationState
+			return
+		}
+	}
+}
+
+func setParallelIntegrationSHA(sequence *SequenceState, promptName, integrationSHA string) {
+	for index := range sequence.Items {
+		if sequence.Items[index].PromptName == promptName {
+			sequence.Items[index].IntegrationSHA = integrationSHA
 			return
 		}
 	}

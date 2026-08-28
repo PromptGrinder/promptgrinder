@@ -291,6 +291,9 @@ func (r *RunFolderRenderer) applyParallelDetailLocked(event runfolder.ProgressEv
 		if event.IntegrationState != "" {
 			r.items[index].IntegrationState = event.IntegrationState
 		}
+		if event.IntegrationSHA != "" {
+			r.items[index].IntegrationSHA = event.IntegrationSHA
+		}
 		return
 	}
 }
@@ -333,9 +336,12 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 	}
 	for i, item := range r.items {
 		if r.parallel && item.Type != runfolder.TypeSpecification {
-			fmt.Fprintf(r.w, "%s P%d %-30s %s", parallelTreePrefix(i, len(r.items)), item.Priority, parallelLaneLabel(item), parallelStatusLabel(item, r.items))
+			fmt.Fprintf(r.w, "%s P%d %-30s", parallelTreePrefix(i, len(r.items)), item.Priority, parallelLaneLabel(item))
+			if status := parallelStatusLabel(item, r.items); status != "" {
+				fmt.Fprint(r.w, " | "+status)
+			}
 			if leaf := filepath.Base(item.Worktree); item.Worktree != "" && leaf != "." {
-				fmt.Fprintf(r.w, " · %s", leaf)
+				fmt.Fprintf(r.w, " | %s", leaf)
 			}
 			fmt.Fprintln(r.w)
 			continue
@@ -359,6 +365,14 @@ func parallelLaneLabel(item runfolder.ProgressPrompt) string {
 }
 
 func parallelStatusLabel(item runfolder.ProgressPrompt, items []runfolder.ProgressPrompt) string {
+	if item.Status == "succeeded" || item.Status == "completed" || item.Status == "integrated" {
+		// The green tick already communicates success. Keep completed lane rows
+		// compact so their duration and worker identity remain visible.
+		return ""
+	}
+	if item.Status == "active" || item.Status == "running" || item.Status == "working" || item.Status == "recovering" {
+		return ""
+	}
 	if item.Status != "pending" || len(item.DependsOn) == 0 {
 		return stateLabel(item.Status)
 	}
@@ -375,6 +389,20 @@ func parallelStatusLabel(item runfolder.ProgressPrompt, items []runfolder.Progre
 		}
 	}
 	return "waiting on " + strings.Join(labels, ", ")
+}
+
+func parallelMergeLabel(item runfolder.ProgressPrompt, featureBranch string) string {
+	if item.IntegrationState != "integrated" || item.IntegrationSHA == "" || featureBranch == "" || item.Worktree == "" {
+		return ""
+	}
+	return filepath.Base(item.Worktree) + " → " + featureBranch + "@" + shortSHA(item.IntegrationSHA)
+}
+
+func shortSHA(value string) string {
+	if len(value) > 7 {
+		return value[:7]
+	}
+	return value
 }
 
 func parallelActivitySummary(items []runfolder.ProgressPrompt) string {
@@ -432,9 +460,15 @@ func (r *RunFolderRenderer) writePlainEventLocked(event runfolder.ProgressEvent)
 	if event.Type == "prompt.succeeded" || event.Type == "prompt.failed" || event.Type == "prompt.gate-blocked" {
 		index, total := r.eventPositionLocked(event)
 		if r.parallel && event.Lane != "" {
-			fmt.Fprintf(r.w, "%s %s P%d %-30s %s|%s", stateIcon(event.Status), parallelTreePrefix(index-1, total), event.Priority, event.Lane, stateLabel(event.Status), compactRunFolderIdentity(event))
-			if leaf := filepath.Base(event.Worktree); event.Worktree != "" && leaf != "." {
-				fmt.Fprintf(r.w, " · %s", leaf)
+			fmt.Fprintf(r.w, "%s %s P%d %-30s", stateIcon(event.Status), parallelTreePrefix(index-1, total), event.Priority, event.Lane)
+			if status := parallelStatusLabel(runfolder.ProgressPrompt{Status: event.Status}, nil); status != "" {
+				fmt.Fprint(r.w, " "+status)
+			}
+			fmt.Fprint(r.w, " | "+compactParallelIdentity(event))
+			if event.IntegrationSHA != "" && r.featureBranch != "" {
+				fmt.Fprintf(r.w, " | %s → %s@%s", filepath.Base(event.Worktree), r.featureBranch, shortSHA(event.IntegrationSHA))
+			} else if leaf := filepath.Base(event.Worktree); event.Worktree != "" && leaf != "." {
+				fmt.Fprintf(r.w, " | %s", leaf)
 			}
 			writeParallelWorkerMeta(r.w, event)
 			fmt.Fprintln(r.w)
@@ -539,20 +573,28 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 		}
 		line := fmt.Sprintf("%s [%d/%d] %s [%s] - %s%s", icon, i+1, len(r.items), item.Name, item.Type, stateLabel(item.Status), duration)
 		if r.parallel && item.Type != runfolder.TypeSpecification {
-			line = fmt.Sprintf("%s %s P%d %-30s %s%s", icon, parallelTreePrefix(i, len(r.items)), item.Priority, parallelLaneLabel(item), parallelStatusLabel(item, r.items), duration)
-			if leaf := filepath.Base(item.Worktree); item.Worktree != "" && leaf != "." {
-				line += " · " + leaf
+			line = fmt.Sprintf("%s %s P%d %-30s", icon, parallelTreePrefix(i, len(r.items)), item.Priority, parallelLaneLabel(item))
+			if status := parallelStatusLabel(item, r.items); status != "" {
+				line += " | " + status
+			}
+			if duration != "" {
+				line += " | " + strings.TrimSpace(duration)
+			}
+			if merge := parallelMergeLabel(item, r.featureBranch); merge != "" {
+				line += " | " + merge
+			} else if leaf := filepath.Base(item.Worktree); item.Worktree != "" && leaf != "." {
+				line += " | " + leaf
 			}
 		}
 		if (item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "gate-blocked") && !r.parallel {
 			line = fmt.Sprintf("%s [%d/%d] %s|%s", icon, i+1, len(r.items), item.Name, compactRunFolderIdentity(detail))
 		} else if r.parallel && (item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "gate-blocked") {
-			line += "|" + compactRunFolderIdentity(detail)
+			line += " | " + compactParallelIdentity(detail)
 			if detail.WorkerID != "" {
-				line += " · worker " + detail.WorkerID
+				line += " | worker " + detail.WorkerID
 			}
 			if detail.Terminal != "" {
-				line += " · terminal " + detail.Terminal
+				line += " | terminal " + detail.Terminal
 			}
 		}
 		if (item.Status == "failed" || item.Status == "gate-blocked") && detail.LogPath != "" {
@@ -570,10 +612,10 @@ func (r *RunFolderRenderer) renderDashboardLocked() {
 
 func writeParallelWorkerMeta(w io.Writer, event runfolder.ProgressEvent) {
 	if event.WorkerID != "" {
-		fmt.Fprint(w, " · worker "+event.WorkerID)
+		fmt.Fprint(w, " | worker "+event.WorkerID)
 	}
 	if event.Terminal != "" {
-		fmt.Fprint(w, " · terminal "+event.Terminal)
+		fmt.Fprint(w, " | terminal "+event.Terminal)
 	}
 }
 
@@ -589,6 +631,20 @@ func compactRunFolderIdentity(event runfolder.ProgressEvent) string {
 		model = "default"
 	}
 	return scope + "|" + engine + "/" + model + "|" + formatDuration(event.Duration)
+}
+
+func compactParallelIdentity(event runfolder.ProgressEvent) string {
+	scope, engine, model := event.Scope, event.Engine, event.Model
+	if scope == "" {
+		scope = "unscoped"
+	}
+	if engine == "" {
+		engine = "unknown-engine"
+	}
+	if model == "" {
+		model = "default"
+	}
+	return scope + " | " + engine + "/" + model
 }
 
 func terminalFileLink(path string) string {
