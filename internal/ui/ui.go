@@ -92,8 +92,16 @@ func (r *SharedProgressRenderer) Update(progress pgruntime.SharedRunProgress) {
 func colorizeStatusIcon(icon, status, successColor string) string {
 	color := ""
 	switch status {
-	case "active", "running", "succeeded", "completed":
+	case "active", "running", "working", "succeeded", "completed", "integrated":
 		color = successColor
+	case "pending", "waiting", "skipped":
+		color = "\033[90m"
+	case "waiting-to-merge":
+		color = "\033[33m"
+	case "integrating":
+		color = "\033[34m"
+	case "gate-blocked":
+		color = "\033[35m"
 	case "failed":
 		color = "\033[31m"
 	}

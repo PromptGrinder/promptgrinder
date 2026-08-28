@@ -1022,6 +1022,7 @@ Examples:
 	var runFolderDetach bool
 	var runFolderRecoveryAttempts int
 	var runFolderAllowConcurrentWorktree bool
+	var runFolderParallelWorktrees bool
 	var runFolderSupervisorID string
 	var runFolderSupervisorLog string
 	buildRunFolderOptions := func(cmd *cobra.Command) pgruntime.RunFolderOptions {
@@ -1075,6 +1076,7 @@ Examples:
 			CommitEach:              runFolderCommitEach,
 			RequireCleanGit:         runFolderRequireCleanGit,
 			AllowConcurrentWorktree: runFolderAllowConcurrentWorktree,
+			ParallelWorktrees:       runFolderParallelWorktrees,
 			RepoPath:                runFolderRepo,
 			Template:                runFolderTemplate,
 			EngineOverride:          runFolderEngine,
@@ -1101,6 +1103,7 @@ Examples:
 		cmd.Flags().BoolVar(&runFolderIncludeSpecification, "include-specification", false, "execute specification prompts instead of using them only as context")
 		cmd.Flags().IntVar(&runFolderRecoveryAttempts, "recovery-attempts", 0, "retry a recoverable failed slice this many times (0-3)")
 		cmd.Flags().BoolVar(&runFolderAllowConcurrentWorktree, "allow-concurrent-worktree", false, "allow another PromptGrinder batch to use the same git worktree")
+		cmd.Flags().BoolVar(&runFolderParallelWorktrees, "parallel-worktrees", false, "run eligible fresh-context slices in isolated worktrees and integrate by priority")
 		if includeDetach {
 			detachDefault := service.Defaults().Config.RunFolderDetach
 			runFolderDetach = detachDefault
@@ -1288,11 +1291,7 @@ Examples:
 				fmt.Fprintln(stdout, "No sequences found.")
 				return nil
 			}
-			fmt.Fprintf(stdout, "%-18s %-12s %-8s %-8s %-8s %-20s %-20s %-20s %-20s CURRENT\n", "SEQUENCE", "STATUS", "DONE", "FAILED", "PENDING", "CREATED (UTC)", "STARTED (UTC)", "UPDATED (UTC)", "FINISHED (UTC)")
-			for _, item := range items {
-				fmt.Fprintf(stdout, "%-18s %-12s %-8s %-8d %-8d %-20s %-20s %-20s %-20s %s\n", item.SequenceID, item.Status, fmt.Sprintf("%d/%d", item.Succeeded, item.Total), item.Failed, item.Pending, formatTime(item.CreatedAt), formatTime(item.StartedAt), formatTime(item.UpdatedAt), formatTime(item.FinishedAt), valueOrDash(item.Current))
-			}
-			return nil
+			return printSequenceList(stdout, items, service.Sequence)
 		},
 	}
 	sequences.Flags().BoolVar(&sequencesJSON, "json", false, "print machine-readable JSON")
@@ -1320,6 +1319,18 @@ Examples:
 		},
 	}
 	sequenceCmd.Flags().BoolVar(&sequenceJSON, "json", false, "print machine-readable JSON")
+	sequenceList := &cobra.Command{
+		Use:   "list",
+		Short: "List sequence trains with their slices or parallel lanes.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			items, err := service.Sequences()
+			if err != nil {
+				return err
+			}
+			return printSequenceList(stdout, items, service.Sequence)
+		},
+	}
 	sequenceCancel := &cobra.Command{
 		Use:   "cancel <sequence-id>",
 		Short: "Cancel an active sequence and preserve resumable checkpoints.",
@@ -1333,7 +1344,7 @@ Examples:
 			return nil
 		},
 	}
-	sequenceCmd.AddCommand(sequenceCancel)
+	sequenceCmd.AddCommand(sequenceList, sequenceCancel)
 	root.AddCommand(sequenceCmd)
 
 	var terminalsJSON bool
@@ -3296,6 +3307,47 @@ func printSequence(stdout io.Writer, sequence pgruntime.SequenceState) {
 			fmt.Fprintf(stdout, "     Recovery mode: %s\n", item.RecoveryMode)
 		}
 	}
+}
+
+// printSequenceList renders the train as the durable parent and its slices as
+// children. It intentionally works for sequential folders too: only a
+// parallel sequence receives lane and integration annotations.
+func printSequenceList(stdout io.Writer, items []pgruntime.SequenceProgress, load func(string) (pgruntime.SequenceState, error)) error {
+	fmt.Fprintln(stdout, "SEQUENCE TRAIN")
+	for _, progress := range items {
+		mode := "sequential"
+		if progress.ParallelWorktrees {
+			mode = "parallel-worktrees"
+		}
+		branch := valueOrDash(progress.FeatureBranch)
+		fmt.Fprintf(stdout, "%s  %s  %s  done %d/%d  failed %d  pending %d  branch %s\n", progress.SequenceID, progress.Status, mode, progress.Succeeded, progress.Total, progress.Failed, progress.Pending, branch)
+		sequence, err := load(progress.SequenceID)
+		if err != nil {
+			return err
+		}
+		for index, item := range sequence.Items {
+			prefix := "├─"
+			if index+1 == len(sequence.Items) {
+				prefix = "└─"
+			}
+			label := item.PromptName
+			if sequence.ParallelWorktrees {
+				label = fmt.Sprintf("P%d %s [%s]", item.Priority, item.PromptName, valueOrDash(item.Lane))
+			}
+			fmt.Fprintf(stdout, "  %s %s — %s", prefix, label, item.Status)
+			if item.IntegrationState != "" {
+				fmt.Fprintf(stdout, " · %s", item.IntegrationState)
+			}
+			if item.WorkerID != "" {
+				fmt.Fprintf(stdout, " · %s", item.WorkerID)
+			}
+			if item.Worktree != "" {
+				fmt.Fprintf(stdout, " · %s", item.Worktree)
+			}
+			fmt.Fprintln(stdout)
+		}
+	}
+	return nil
 }
 
 func printSequenceFailureReport(stdout io.Writer, report *state.FailureReport) {

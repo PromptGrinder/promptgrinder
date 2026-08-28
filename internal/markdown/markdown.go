@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -20,9 +21,10 @@ type Task struct {
 const FrontmatterContractVersion = 3
 
 var (
-	topLevelKeys  = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "context_mode": true, "gate_outcome": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
-	engineKeys    = map[string]bool{"name": true, "model": true, "max_cost": true, "capabilities": true, "profile": true, "sandbox": true, "approval": true, "web_search": true, "images": true}
-	secretPattern = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(sk-[a-z0-9_-]{8,}|(?:api[_ -]?key|[a-z0-9_]*(?:token|password|secret))\s*[:=]\s*\S+))`)
+	topLevelKeys               = map[string]bool{"id": true, "type": true, "role": true, "depends_on": true, "lane": true, "priority": true, "context_mode": true, "gate_outcome": true, "required_environment": true, "engine": true, "working_directory": true, "timeout": true, "labels": true, "env": true, "sandbox": true, "approval": true, "web_search": true, "images": true, "acceptance_criteria": true, "allowed_paths": true, "forbidden_paths": true, "expected_paths": true, "validation": true}
+	engineKeys                 = map[string]bool{"name": true, "model": true, "max_cost": true, "capabilities": true, "profile": true, "sandbox": true, "approval": true, "web_search": true, "images": true}
+	secretPattern              = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(sk-[a-z0-9_-]{8,}|(?:api[_ -]?key|[a-z0-9_]*(?:token|password|secret))\s*[:=]\s*\S+))`)
+	environmentVariablePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 )
 
 func Parse(text string) (Task, error) {
@@ -133,6 +135,9 @@ func Validate(task Task, source string) error {
 			return fail("gate_outcome must be BLOCKED")
 		}
 	}
+	if _, err := RequiredEnvironmentAnyOf(task); err != nil {
+		return fail("%v", err)
+	}
 	if raw, ok := task.Metadata["depends_on"]; ok {
 		values, err := optionalStringList(raw, "depends_on")
 		if err != nil {
@@ -147,6 +152,18 @@ func Validate(task Task, source string) error {
 				return fail("depends_on contains duplicate %q", value)
 			}
 			seen[value] = true
+		}
+	}
+	if raw, ok := task.Metadata["priority"]; ok {
+		value, ok := raw.(int)
+		if !ok || value < 1 {
+			return fail("priority must be a positive integer")
+		}
+	}
+	if raw, ok := task.Metadata["lane"]; ok {
+		value, ok := raw.(string)
+		if !ok || !regexp.MustCompile(`^[a-z][a-z0-9-]*$`).MatchString(value) {
+			return fail("lane must be a lowercase kebab-case identifier")
 		}
 	}
 	if raw, ok := task.Metadata["engine"].(map[string]any); ok {
@@ -218,6 +235,43 @@ func Validate(task Task, source string) error {
 		}
 	}
 	return nil
+}
+
+// RequiredEnvironmentAnyOf returns the explicitly declared host environment
+// variables of which at least one must be usable before a slice can run.
+// It validates only the frontmatter shape; callers decide what usable means.
+func RequiredEnvironmentAnyOf(task Task) ([]string, error) {
+	raw, present := task.Metadata["required_environment"]
+	if !present {
+		return nil, nil
+	}
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("required_environment must be a mapping with any_of")
+	}
+	for _, key := range sortedKeys(values) {
+		if key != "any_of" {
+			return nil, fmt.Errorf("unknown nested key %q", "required_environment."+key)
+		}
+	}
+	candidates, err := optionalStringList(values["any_of"], "required_environment.any_of")
+	if err != nil || len(candidates) == 0 {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("required_environment.any_of must be a nonempty list of environment variable names")
+	}
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		if !environmentVariablePattern.MatchString(candidate) {
+			return nil, fmt.Errorf("required_environment.any_of value %q must be an uppercase environment variable name", candidate)
+		}
+		if seen[candidate] {
+			return nil, fmt.Errorf("required_environment.any_of contains duplicate %q", candidate)
+		}
+		seen[candidate] = true
+	}
+	return candidates, nil
 }
 
 func validSlug(value string) bool {
@@ -309,7 +363,7 @@ func pathList(raw any, field string, requiredNonempty, present bool) ([]string, 
 // Render returns the exact AI instruction bytes: a deterministic semantic preamble followed by the untouched body.
 func Render(task Task) []byte {
 	var b bytes.Buffer
-	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"context_mode", "Context Mode"}, {"gate_outcome", "Gate Outcome"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"expected_paths", "Expected Paths"}, {"validation", "Validation"}}
+	sections := []struct{ key, heading string }{{"id", "Task ID"}, {"type", "Task Type"}, {"role", "Role"}, {"depends_on", "Dependencies"}, {"lane", "Lane"}, {"priority", "Integration Priority"}, {"context_mode", "Context Mode"}, {"gate_outcome", "Gate Outcome"}, {"required_environment", "Required Environment"}, {"acceptance_criteria", "Acceptance Criteria"}, {"allowed_paths", "Allowed Paths"}, {"forbidden_paths", "Forbidden Paths"}, {"expected_paths", "Expected Paths"}, {"validation", "Validation"}}
 	started := false
 	for _, section := range sections {
 		raw, ok := task.Metadata[section.key]
@@ -317,12 +371,30 @@ func Render(task Task) []byte {
 			continue
 		}
 		var values []string
-		if value, ok := raw.(string); ok {
+		switch value := raw.(type) {
+		case string:
 			values = []string{value}
-		} else {
-			for _, item := range raw.([]any) {
-				values = append(values, item.(string))
+		case int:
+			values = []string{strconv.Itoa(value)}
+		case []any:
+			for _, item := range value {
+				text, ok := item.(string)
+				if !ok {
+					continue
+				}
+				values = append(values, text)
 			}
+		case map[string]any:
+			if section.key != "required_environment" {
+				continue
+			}
+			candidates, err := RequiredEnvironmentAnyOf(task)
+			if err != nil {
+				continue
+			}
+			values = []string{"any of: " + strings.Join(candidates, ", ")}
+		default:
+			continue
 		}
 		if !started {
 			fmt.Fprintf(&b, "# Task Semantics (v%d)\n", FrontmatterContractVersion)

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,36 @@ type launchCall struct {
 	Path      string
 	Content   string
 	SessionID string
+}
+
+type repositoryWritingLauncher struct {
+	mu       sync.Mutex
+	calls    []string
+	fail     string
+	failures map[string]bool
+}
+
+func (l *repositoryWritingLauncher) LaunchPrompt(path, content, sessionID string) (state.Worker, error) {
+	return state.Worker{}, fmt.Errorf("parallel execution must use repository-aware launch")
+}
+
+func (l *repositoryWritingLauncher) LaunchPromptInRepository(repo, path, content, sessionID string) (state.Worker, error) {
+	id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	l.mu.Lock()
+	l.calls = append(l.calls, repo)
+	l.mu.Unlock()
+	if id == l.fail || l.failures[id] {
+		return state.Worker{ID: "wrk_" + id, Status: state.StatusFailed}, fmt.Errorf("synthetic lane failure")
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "lanes"), 0o755); err != nil {
+		return state.Worker{}, err
+	}
+	if err := os.WriteFile(filepath.Join(repo, "lanes", id+".txt"), []byte(id), 0o644); err != nil {
+		return state.Worker{}, err
+	}
+	zero := 0
+	nextSafe := true
+	return state.Worker{ID: "wrk_" + id, Status: state.StatusSucceeded, ExitCode: &zero, EngineResult: &state.EngineResult{Summary: "STATUS: PASS\nNEXT_PROMPT_SAFE: yes", CompletionStatus: "PASS", NextPromptSafe: &nextSafe}}, nil
 }
 
 type recordingNotifier struct{ notifications []Notification }
@@ -635,6 +666,121 @@ func TestPreflightReportsRoleAndDirtyBaselineIssuesTogether(t *testing.T) {
 	}
 }
 
+func TestPreflightRequiredEnvironmentAcceptsEitherExistingDirectory(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		set  func(*testing.T, string)
+	}{
+		{"android home", func(t *testing.T, directory string) {
+			t.Setenv("ANDROID_HOME", directory)
+			unsetTestEnvironment(t, "ANDROID_SDK_ROOT")
+		}},
+		{"android sdk root", func(t *testing.T, directory string) {
+			unsetTestEnvironment(t, "ANDROID_HOME")
+			t.Setenv("ANDROID_SDK_ROOT", directory)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := initGitRepo(t)
+			writePromptFile(t, dir, "10-implement-android.pg", "---\nrequired_environment:\n  any_of: [ANDROID_HOME, ANDROID_SDK_ROOT]\n---\nandroid")
+			directory := t.TempDir()
+			test.set(t, directory)
+			if _, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPreflightRequiredEnvironmentReportsMissingAndInvalidValues(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-android.pg", "---\nrequired_environment:\n  any_of: [ANDROID_HOME, ANDROID_SDK_ROOT]\n---\nandroid")
+	unsetTestEnvironment(t, "ANDROID_HOME")
+	unsetTestEnvironment(t, "ANDROID_SDK_ROOT")
+	result, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected missing environment failure")
+	}
+	for _, want := range []string{"10-implement-android.pg", "ANDROID_HOME", "ANDROID_SDK_ROOT", "is absent", "Export a valid value in the shell launching PromptGrinder"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
+		}
+	}
+	if result.SequenceID != "" {
+		t.Fatalf("preflight created sequence identity %q", result.SequenceID)
+	}
+	t.Setenv("ANDROID_HOME", "")
+	t.Setenv("ANDROID_SDK_ROOT", "")
+	_, err = Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("empty environment error = %v", err)
+	}
+
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANDROID_HOME", file)
+	result, err = Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "points to a non-directory") {
+		t.Fatalf("invalid directory error = %v", err)
+	}
+	if result.SequenceID != "" {
+		t.Fatalf("preflight created sequence identity %q", result.SequenceID)
+	}
+}
+
+func TestPreflightRequiredEnvironmentChecksOnlyDeclaringSlices(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-backend.pg", "---\n---\nbackend")
+	writePromptFile(t, dir, "20-implement-android.pg", "---\nrequired_environment:\n  any_of: [ANDROID_HOME, ANDROID_SDK_ROOT]\n---\nandroid")
+	unsetTestEnvironment(t, "ANDROID_HOME")
+	unsetTestEnvironment(t, "ANDROID_SDK_ROOT")
+	_, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "20-implement-android.pg") || strings.Contains(err.Error(), "10-implement-backend.pg requires") {
+		t.Fatalf("mixed capability error = %v", err)
+	}
+	writePromptFile(t, dir, "20-implement-android.pg", "---\n---\nandroid")
+	if _, err := Preflight(dir, Options{RepoPath: dir, HomeDir: t.TempDir()}); err != nil {
+		t.Fatalf("legacy prompts must preflight without capability requirements: %v", err)
+	}
+}
+
+func TestRunRequiredEnvironmentFailsBeforeSequenceWorktreeOrWorker(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-android.pg", "---\nid: android\ntype: implement\nlane: android\npriority: 1\ncontext_mode: fresh\nallowed_paths: [lanes/**]\nrequired_environment:\n  any_of: [ANDROID_HOME, ANDROID_SDK_ROOT]\n---\nandroid")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "android slice")
+	unsetTestEnvironment(t, "ANDROID_HOME")
+	unsetTestEnvironment(t, "ANDROID_SDK_ROOT")
+	launcher := &repositoryWritingLauncher{}
+	_, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true, ParallelWorktrees: true}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "ANDROID_HOME") {
+		t.Fatalf("run error = %v", err)
+	}
+	if len(launcher.calls) != 0 {
+		t.Fatalf("workers launched despite failed capability preflight: %#v", launcher.calls)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "state", "run-folders")); !os.IsNotExist(statErr) {
+		t.Fatalf("sequence or worktree state was created: %v", statErr)
+	}
+}
+
+func unsetTestEnvironment(t *testing.T, key string) {
+	t.Helper()
+	previous, present := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if present {
+			_ = os.Setenv(key, previous)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
+}
+
 func TestCommitEachTellsWorkerNotToCommit(t *testing.T) {
 	dir := initGitRepo(t)
 	writePromptFile(t, dir, "10-implement-a.md", "task")
@@ -711,6 +857,111 @@ func TestEngineFailurePersistsOrderedCompletionFields(t *testing.T) {
 	data, marshalErr := json.Marshal(summary.Sequence)
 	if marshalErr != nil || !strings.Contains(string(data), `"failure_report"`) || !strings.Contains(string(data), `"blocking_checks"`) {
 		t.Fatalf("sequence JSON = %s, err = %v", data, marshalErr)
+	}
+}
+
+func TestInspectAndSequencePersistIntegrationPriority(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-lane.pg", "---\nid: lane-a\ntype: implement\nlane: android-policy\npriority: 2\n---\nfirst")
+	prompts, err := Discover(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 1 || prompts[0].Lane != "android-policy" || prompts[0].Priority != 2 {
+		t.Fatalf("prompts = %#v", prompts)
+	}
+	sequence, err := buildSequence(dir, dir, prompts, Options{HomeDir: home, Template: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sequence.Items) != 1 || sequence.Items[0].Lane != "android-policy" || sequence.Items[0].Priority != 2 {
+		t.Fatalf("sequence = %#v", sequence.Items)
+	}
+}
+
+func TestParallelWorktreesRunIndependentLanesAndIntegrateByPriority(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-location.pg", "---\nid: location\ntype: implement\nlane: location-policy\npriority: 2\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\nlocation")
+	writePromptFile(t, dir, "20-implement-storage.pg", "---\nid: storage\ntype: implement\nlane: deletion-storage\npriority: 1\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\nstorage")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	launcher := &repositoryWritingLauncher{}
+
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true, ParallelWorktrees: true}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Sequence.Status != "completed" {
+		t.Fatalf("sequence status = %q", summary.Sequence.Status)
+	}
+	if len(launcher.calls) != 2 || launcher.calls[0] == dir || launcher.calls[1] == dir || launcher.calls[0] == launcher.calls[1] {
+		t.Fatalf("lane worktree calls = %#v", launcher.calls)
+	}
+	for _, file := range []string{"10-implement-location.txt", "20-implement-storage.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, "lanes", file)); err != nil {
+			t.Fatalf("integrated %s: %v", file, err)
+		}
+	}
+	if len(summary.Sequence.Items) != 2 || summary.Sequence.Items[0].IntegrationState != "integrated" || summary.Sequence.Items[1].IntegrationState != "integrated" {
+		t.Fatalf("sequence items = %#v", summary.Sequence.Items)
+	}
+	for _, item := range summary.Sequence.Items {
+		if item.IntegrationSHA == "" {
+			t.Fatalf("integrated lane is missing coordinator merge SHA: %#v", item)
+		}
+	}
+	if clean, err := gitClean(dir); err != nil || !clean {
+		t.Fatalf("feature branch must be clean after integration: clean=%t err=%v", clean, err)
+	}
+}
+
+func TestParallelWorktreesRequireIsolatedFreshCheckpointableLanes(t *testing.T) {
+	dir := initGitRepo(t)
+	writePromptFile(t, dir, "10-implement-a.pg", "---\nid: a\ntype: implement\nlane: lane-a\npriority: 1\ncontext_mode: fresh\nallowed_paths: [src/**]\n---\na")
+	for _, options := range []Options{
+		{ParallelWorktrees: true, Checkpoint: true, CommitEach: true},
+		{ParallelWorktrees: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true, Resume: true},
+	} {
+		if _, err := Preflight(dir, options); err == nil {
+			t.Fatalf("preflight unexpectedly passed for %#v", options)
+		}
+	}
+}
+
+func TestParallelWorktreeFailureRetainsLanesWithoutChangingFeatureBranch(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.pg", "---\nid: a\ntype: implement\nlane: lane-a\npriority: 1\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\na")
+	writePromptFile(t, dir, "20-implement-b.pg", "---\nid: b\ntype: implement\nlane: lane-b\npriority: 2\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\nb")
+	writePromptFile(t, dir, "30-implement-c.pg", "---\nid: c\ntype: implement\nlane: lane-c\npriority: 3\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\nc")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	baseline := strings.TrimSpace(string(gitOutput(t, dir, "rev-parse", "HEAD")))
+	summary, err := Run(dir, Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true, ParallelWorktrees: true}, &repositoryWritingLauncher{failures: map[string]bool{"10-implement-a": true, "30-implement-c": true}})
+	if err == nil || !strings.Contains(err.Error(), "synthetic lane failure") {
+		t.Fatalf("error = %v", err)
+	}
+	if summary.Sequence.Status != "failed" {
+		t.Fatalf("sequence status = %q", summary.Sequence.Status)
+	}
+	failed, completedSibling, laterFailure := summary.Sequence.Items[0], summary.Sequence.Items[1], summary.Sequence.Items[2]
+	if failed.Status != "failed" || failed.IntegrationState != "failed" || failed.WorkerID != "wrk_10-implement-a" {
+		t.Fatalf("failed lane was not persisted: %#v", failed)
+	}
+	if completedSibling.Status != "waiting-to-merge" || completedSibling.IntegrationState != "waiting-to-merge" || completedSibling.WorkerID != "wrk_20-implement-b" {
+		t.Fatalf("completed sibling was not persisted before failure return: %#v", completedSibling)
+	}
+	if laterFailure.Status != "failed" || laterFailure.IntegrationState != "failed" || laterFailure.WorkerID != "wrk_30-implement-c" {
+		t.Fatalf("later failed sibling was not persisted before failure return: %#v", laterFailure)
+	}
+	if got := strings.TrimSpace(string(gitOutput(t, dir, "rev-parse", "HEAD"))); got != baseline {
+		t.Fatalf("feature branch changed: got %s want %s", got, baseline)
+	}
+	if clean, cleanErr := gitClean(dir); cleanErr != nil || !clean {
+		t.Fatalf("feature branch must remain clean: clean=%t err=%v", clean, cleanErr)
+	}
+	root := filepath.Join(home, "state", "run-folders", summary.Sequence.SequenceID, "parallel-worktrees", safeName(summary.Run.RunID))
+	if _, statErr := os.Stat(filepath.Join(root, "b")); statErr != nil {
+		t.Fatalf("successful lane worktree was not retained: %v", statErr)
 	}
 }
 

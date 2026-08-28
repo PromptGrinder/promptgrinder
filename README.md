@@ -90,6 +90,12 @@ verification slice, safe path/validation placeholders, and the required
 completion contract; replace every placeholder and add only the slices the
 feature needs.
 
+For an isolated parallel feature, use the bundled
+[`parallel-worktree-train`](.agents/skills/promptgrinder-slice-authoring/templates/parallel-worktree-train)
+template. `promptgrinder discover` also creates the generic local baseline at
+`.promptgrinder/templates/parallel-slice-template.pg`; copy it into a slice
+folder and replace its project-specific role, paths, validations, and outcome.
+
 For example, prepare a new `project archive` feature as three bounded slices:
 
 ```sh
@@ -466,7 +472,10 @@ b8e112d2 PromptGrinder: complete 08B-android-obsolete-scoring-orchestration-clea
    successful task in Git.
 
 `run` accepts independent work orders. `run --shared-context` and `run-folder`
-execute sequential work. A failed sequential task stops the sequence.
+execute sequential work by default. Opt-in `run-folder --parallel-worktrees`
+runs declared fresh-context lanes in isolated Git worktrees and integrates them
+in explicit priority order; see [the slice DSL](docs/slice-dsl.md#opt-in-parallel-worktree-lanes).
+A failed sequential task stops the sequence.
 PromptGrinder does not provide a command that pushes commits, creates pull
 requests, publishes releases, or merges branches.
 
@@ -848,7 +857,7 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.5.2` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.6.0` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);

@@ -80,8 +80,8 @@ func TestGeneratedContentIsDeterministicAndMinimal(t *testing.T) {
 	if !reflect.DeepEqual(first.Files, second.Files) {
 		t.Fatal("identical repository produced different file content")
 	}
-	if len(first.Files) != 4 {
-		t.Fatalf("files = %d, want manifest plus three roles", len(first.Files))
+	if len(first.Files) != 5 {
+		t.Fatalf("files = %d, want manifest plus three roles and template", len(first.Files))
 	}
 	project := string(first.Files[0].Content)
 	for _, want := range []string{"name: deterministic repo", "languages:\n  - Java", "frameworks:\n  - Spring Boot", "generated_by: promptgrinder discover"} {
@@ -118,10 +118,10 @@ func TestDiscoverWithoutSupportedEvidenceCreatesEmptyProjectStructure(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Roles) != 0 || !reflect.DeepEqual(result.Files, []string{".promptgrinder/project.yaml"}) {
+	if len(result.Roles) != 0 || !reflect.DeepEqual(result.Files, []string{".promptgrinder/project.yaml", ".promptgrinder/templates/parallel-slice-template.pg"}) {
 		t.Fatalf("result = %+v", result)
 	}
-	for _, dir := range []string{"roles", "context"} {
+	for _, dir := range []string{"roles", "context", "templates"} {
 		if info, err := os.Stat(filepath.Join(root, ".promptgrinder", dir)); err != nil || !info.IsDir() {
 			t.Fatalf("%s directory: %v", dir, err)
 		}
@@ -135,8 +135,11 @@ func TestDiscoverWritesOnlyPromptGrinderAndLeavesIdenticalFilesUntouched(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Files) != 3 {
+	if len(result.Files) != 4 {
 		t.Fatalf("files = %v", result.Files)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".promptgrinder", "templates", "parallel-slice-template.pg")); err != nil {
+		t.Fatalf("parallel slice template: %v", err)
 	}
 	if info, err := os.Stat(filepath.Join(root, ".promptgrinder", "context")); err != nil || !info.IsDir() {
 		t.Fatalf("context directory: %v", err)

@@ -142,9 +142,11 @@ func TestWorkerEnvironmentUsesAllowlistAndExplicitMetadata(t *testing.T) {
 		"OPENAI_API_KEY=must-not-copy",
 		"LANG=parent-locale",
 		"LC_ALL=en_US.UTF-8",
+		"ANDROID_HOME=/Users/test/Library/Android/sdk",
+		"ANDROID_SDK_ROOT=/Users/test/Library/Android/sdk",
 	})
 	joined := strings.Join(got, "\n")
-	for _, expected := range []string{"HOME=/Users/test", "LANG=task-locale", "LC_ALL=en_US.UTF-8", "TASK_VALUE=explicit"} {
+	for _, expected := range []string{"HOME=/Users/test", "LANG=task-locale", "LC_ALL=en_US.UTF-8", "TASK_VALUE=explicit", "ANDROID_HOME=/Users/test/Library/Android/sdk", "ANDROID_SDK_ROOT=/Users/test/Library/Android/sdk"} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("environment missing %q: %v", expected, got)
 		}

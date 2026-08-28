@@ -1430,6 +1430,15 @@ func (l promptLauncher) LaunchPrompt(path, content, sessionID string) (state.Wor
 	return result.Worker, result.Err
 }
 
+func (l promptLauncher) LaunchPromptInRepository(repoPath, path, content, sessionID string) (state.Worker, error) {
+	manager := l.manager
+	manager.RepositoryOverride = repoPath
+	manager.CodexSessionID = sessionID
+	manager.CaptureCodexSession = true
+	result := manager.LaunchContent(path, content)
+	return result.Worker, result.Err
+}
+
 func (l promptLauncher) WaitPrompt(worker state.Worker) (state.Worker, error) {
 	if worker.TerminalAdapter == "dry-run" {
 		return worker, fmt.Errorf("run-folder requires workers to finish before continuing; dry-run workers do not execute")
