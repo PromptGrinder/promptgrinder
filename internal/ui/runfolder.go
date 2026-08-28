@@ -162,10 +162,12 @@ func (r *RunFolderRenderer) Finish(success bool) {
 	r.finished = true
 	if r.hasProductBlockedLocked() {
 		fmt.Fprintln(r.w, "Result: product-blocked")
+		r.renderParallelSubwayLocked(false)
 		return
 	}
 	if success {
 		fmt.Fprintln(r.w, "Result: succeeded")
+		r.renderParallelSubwayLocked(true)
 		return
 	}
 	failed := r.latestFailureLocked()
@@ -186,9 +188,82 @@ func (r *RunFolderRenderer) Finish(success bool) {
 	} else {
 		fmt.Fprintf(r.w, "Result: %s\n", label)
 	}
+	r.renderParallelSubwayLocked(false)
 	if r.folder != "" {
 		fmt.Fprintln(r.w, "Resume: promptgrinder run-folder "+shellQuote(r.folder)+" --resume")
 	}
+}
+
+// renderParallelSubwayLocked renders only after the train has stopped. It is
+// an ASCII overview of lane integration, not a substitute for git history.
+func (r *RunFolderRenderer) renderParallelSubwayLocked(featureFastForwarded bool) {
+	if !r.parallel {
+		return
+	}
+	integrated := make([]runfolder.ProgressPrompt, 0, len(r.items))
+	for _, item := range r.items {
+		if item.IntegrationState == "integrated" {
+			integrated = append(integrated, item)
+		}
+	}
+	if len(integrated) == 0 && len(r.items) == 0 {
+		return
+	}
+	fmt.Fprintln(r.w, "Git subway:")
+	if len(integrated) > 0 {
+		target := "integration (retained)"
+		if featureFastForwarded && r.featureBranch != "" {
+			target = r.featureBranch
+		}
+		mergeSHA := shortSHA(integrated[len(integrated)-1].IntegrationSHA)
+		for index, item := range integrated {
+			connector := "---+"
+			switch {
+			case len(integrated) == 1:
+				connector = "----->"
+			case index == 0:
+				connector = "---\\"
+			case index == len(integrated)-1:
+				connector = "---/"
+			}
+			line := fmt.Sprintf("  %-28s %s%s", parallelLaneLabel(item), r.subwayMarker(item.Status), connector)
+			if len(integrated) == 1 || index == (len(integrated)-1)/2 {
+				line += " " + target
+				if mergeSHA != "" {
+					line += "@" + mergeSHA
+				}
+			}
+			fmt.Fprintln(r.w, line)
+		}
+	}
+	for _, item := range r.items {
+		if item.Type == runfolder.TypeSpecification || item.IntegrationState == "integrated" {
+			continue
+		}
+		state := parallelStatusLabel(item, r.items)
+		if state == "" {
+			state = "in progress"
+		}
+		fmt.Fprintf(r.w, "  %-28s %s %s\n", parallelLaneLabel(item), r.subwayMarker(item.Status), state)
+	}
+}
+
+func (r *RunFolderRenderer) subwayMarker(status string) string {
+	marker, colorStatus := ".", "pending"
+	switch status {
+	case "succeeded", "completed", "integrated":
+		marker, colorStatus = "o", "succeeded"
+	case "waiting-to-merge":
+		marker, colorStatus = "o", "waiting-to-merge"
+	case "failed", "gate-blocked":
+		marker, colorStatus = "x", "failed"
+	case "active", "running", "working", "recovering":
+		marker, colorStatus = "*", "active"
+	}
+	if r.opts.Plain {
+		return marker
+	}
+	return colorizeStatusIcon(marker, colorStatus, themeColor(r.opts.Theme))
 }
 
 func (r *RunFolderRenderer) latestFailureLocked() runfolder.ProgressEvent {

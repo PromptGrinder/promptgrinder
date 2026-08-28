@@ -71,6 +71,41 @@ func TestRunFolderRendererShowsParallelWorktreeLanes(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererPrintsParallelSubwayAfterFailedTrain(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_parallel", Folder: "tasks", ParallelWorktrees: true, FeatureBranch: "feature/google-play", Inventory: []runfolder.ProgressPrompt{
+		{Name: "01-location.pg", Type: runfolder.TypeImplement, Status: "pending", Lane: "location-policy", Priority: 1},
+		{Name: "02-audit.pg", Type: runfolder.TypeVerify, Status: "pending", Lane: "play-audit", Priority: 2},
+	}, Total: 2})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: "01-location.pg", PromptType: runfolder.TypeImplement, Lane: "location-policy", Priority: 1, Worktree: "/tmp/lanes/location", IntegrationState: "integrated", IntegrationSHA: "1234567890abcdef", Status: "integrated"})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "02-audit.pg", PromptType: runfolder.TypeVerify, Lane: "play-audit", Priority: 2, Worktree: "/tmp/lanes/audit", Status: "failed", Reason: "validation failed"})
+	r.Finish(false)
+	r.Close()
+	for _, want := range []string{"Result: failed — validation failed", "Git subway:", "location-policy", "o-----> integration (retained)@1234567", "play-audit", "x failed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("subway output missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.ContainsAny(out.String(), "\r\x1b") {
+		t.Fatalf("plain subway contains terminal controls: %q", out.String())
+	}
+}
+
+func TestRunFolderRendererPrintsFeatureBranchInSuccessfulParallelSubway(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_parallel", ParallelWorktrees: true, FeatureBranch: "feature/google-play", Inventory: []runfolder.ProgressPrompt{{Name: "01-location.pg", Type: runfolder.TypeImplement, Status: "pending", Lane: "location-policy", Priority: 1}}, Total: 1})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.succeeded", PromptName: "01-location.pg", PromptType: runfolder.TypeImplement, Lane: "location-policy", Priority: 1, Worktree: "/tmp/lanes/location", IntegrationState: "integrated", IntegrationSHA: "1234567890abcdef", Status: "integrated"})
+	r.Finish(true)
+	r.Close()
+	for _, want := range []string{"Result: succeeded", "Git subway:", "o-----> feature/google-play@1234567"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("successful subway output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestRunFolderRendererAnimatesEveryWorkingParallelLaneAndShowsDependencies(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	var out bytes.Buffer

@@ -667,6 +667,12 @@ coordinator merge relationship as `lane-worktree → feature-branch@<short-SHA>`
 That SHA is the isolated coordinator's merge commit, not the worker's local
 checkpoint commit.
 
+After a parallel train stops, the terminal also prints an ASCII `Git subway`.
+Green `o` marks integrated lanes, red `x` marks failed lanes, amber `o` marks
+completed lanes still waiting to merge, and dim `.` marks pending work. A
+failed train points integrated lanes at its retained coordinator integration
+branch; only a successful fast-forward points at the feature branch.
+
 The listing is observational: it neither launches a worker nor modifies a
 worktree. A failed lane remains inspectable in its retained worktree; durable
 per-lane restart is intentionally added only once the coordinator can safely
