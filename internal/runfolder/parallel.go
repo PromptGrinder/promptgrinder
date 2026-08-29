@@ -12,6 +12,7 @@ import (
 
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/workeridentity"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 // validateParallelWorktreePlan keeps the opt-in mode deliberately narrow. A
@@ -193,6 +194,7 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 
 			worktree := item.Worktree
 			branch := item.LaneBranch
+			var repairBaseline *workerpathpolicy.Snapshot
 			if options.Resume && item.Status == "failed" {
 				if err := validateRetainedLane(item); err != nil {
 					return fmt.Errorf("recover failed lane %s: %w", prompt.Name, err)
@@ -200,7 +202,16 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 			} else {
 				worktree = filepath.Join(root, safeName(prompt.ID))
 				branch = "promptgrinder/lane/" + safeName(sequence.SequenceID) + "/" + safeName(runState.RunID) + "/" + safeName(prompt.ID)
-				if err := gitWorktreeAdd(repoRoot, worktree, branch, coordinatorBranch); err != nil {
+				if options.Resume && pathExists(worktree) {
+					if err := validateInterruptedLane(worktree, branch); err != nil {
+						return fmt.Errorf("recover interrupted lane %s: %w", prompt.Name, err)
+					}
+					head, err := gitSHA(worktree)
+					if err != nil {
+						return fmt.Errorf("capture interrupted lane baseline for %s: %w", prompt.Name, err)
+					}
+					repairBaseline = &workerpathpolicy.Snapshot{Version: 1, Head: head, Entries: map[string]string{}, CreatedAt: time.Now().UTC()}
+				} else if err := gitWorktreeAdd(repoRoot, worktree, branch, coordinatorBranch); err != nil {
 					return fmt.Errorf("create lane worktree for %s: %w", prompt.Name, err)
 				}
 			}
@@ -210,7 +221,7 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				state, runErr := runPrompt(worktree, prompt, specContext, "", "", options, laneLauncher{repository: worktree, launcher: repositoryLauncher, waiter: waitLauncher(launcher)}, nil)
+				state, runErr := runPrompt(worktree, prompt, specContext, "", "", options, laneLauncher{repository: worktree, launcher: repositoryLauncher, waiter: waitLauncher(launcher)}, repairBaseline)
 				results <- parallelResult{prompt: prompt, promptState: state, worktree: worktree, branch: branch, err: runErr}
 			}()
 		}
@@ -319,8 +330,8 @@ func retainedParallelCoordinator(sequence SequenceState, targetBranch string) (r
 	if !sequence.ParallelWorktrees {
 		return "", "", "", fmt.Errorf("sequence %s is not a parallel worktree sequence", sequence.SequenceID)
 	}
-	if sequence.Status != "failed" && sequence.Status != "interrupted" {
-		return "", "", "", fmt.Errorf("parallel sequence %s has status %q; only failed or interrupted sequences can resume", sequence.SequenceID, sequence.Status)
+	if sequence.Status != "failed" && sequence.Status != "interrupted" && sequence.Status != "running" {
+		return "", "", "", fmt.Errorf("parallel sequence %s has status %q; only failed, interrupted, or explicitly resumed running sequences can resume", sequence.SequenceID, sequence.Status)
 	}
 	if sequence.FeatureBranch == "" || sequence.FeatureBranch != targetBranch {
 		return "", "", "", fmt.Errorf("parallel sequence %s belongs to feature branch %q, not checked-out branch %q", sequence.SequenceID, sequence.FeatureBranch, targetBranch)
@@ -362,6 +373,22 @@ func retainedParallelCoordinator(sequence SequenceState, targetBranch string) (r
 		return "", "", "", fmt.Errorf("retained coordinator is on branch %q, expected prefix %q", branch, expectedPrefix)
 	}
 	return root, worktree, branch, nil
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func validateInterruptedLane(worktree, expectedBranch string) error {
+	branch, err := gitCurrentBranch(worktree)
+	if err != nil {
+		return fmt.Errorf("inspect retained lane branch: %w", err)
+	}
+	if branch != expectedBranch {
+		return fmt.Errorf("retained worktree %s is on branch %q, expected %q", worktree, branch, expectedBranch)
+	}
+	return nil
 }
 
 func validateRetainedLane(item SequenceItem) error {
