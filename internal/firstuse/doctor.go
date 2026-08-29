@@ -15,6 +15,7 @@ import (
 
 	"promptgrinder/internal/buildinfo"
 	"promptgrinder/internal/config"
+	"promptgrinder/internal/engine/codex"
 	"promptgrinder/internal/terminal"
 
 	"gopkg.in/yaml.v3"
@@ -112,7 +113,15 @@ func Doctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		version, err := options.Run(versionCtx, codexPath, "--version")
 		cancel()
 		if err == nil && strings.TrimSpace(string(version)) != "" {
+			assessment := codex.AssessVersion(string(version))
 			codexCheck.Evidence["version"] = RedactText(strings.TrimSpace(string(version)))
+			codexCheck.Evidence["compatibility"] = assessment.Status
+			if assessment.Status != codex.VersionQualified {
+				codexCheck.Status = Warning
+				codexCheck.Required = false
+				codexCheck.Summary = "Codex CLI is installed but outside PromptGrinder's qualified compatibility band."
+				codexCheck.Remediation = assessment.Reason + ". Update PromptGrinder when available, or explicitly opt in with " + codex.AllowUnqualifiedVersionEnvironment + "=1."
+			}
 		} else {
 			codexCheck.Status = Warning
 			codexCheck.Required = false

@@ -190,7 +190,11 @@ func (r *RunFolderRenderer) Finish(success bool) {
 	}
 	r.renderParallelSubwayLocked(false)
 	if r.folder != "" {
-		fmt.Fprintln(r.w, "Resume: promptgrinder run-folder "+shellQuote(r.folder)+" --resume")
+		command := "Resume: promptgrinder run-folder " + shellQuote(r.folder)
+		if r.parallel {
+			command += " --parallel-worktrees --checkpoint --commit-each --require-clean-git"
+		}
+		fmt.Fprintln(r.w, command+" --resume")
 	}
 }
 

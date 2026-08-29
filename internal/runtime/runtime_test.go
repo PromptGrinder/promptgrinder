@@ -790,6 +790,10 @@ func TestRunPromptFolderCapabilityGateCompletesThroughRuntimeHandoff(t *testing.
 	home := t.TempDir()
 	store := state.NewStore(home)
 	fakeEngine := testsupport.FakeExecutable(t, "codex-gate", `#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+  echo "codex-cli 0.150.1"
+  exit 0
+fi
 printf '%s\n' '{"type":"thread.started","thread_id":"thread-gate"}'
 printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Audit complete\nSTATUS: BLOCKED\nNEXT_PROMPT_SAFE: no"}}'
 `)
@@ -852,6 +856,10 @@ func TestRunPromptFolderUndeclaredBlockedCompletionFailsThroughRuntimeHandoff(t 
 	home := t.TempDir()
 	store := state.NewStore(home)
 	fakeEngine := testsupport.FakeExecutable(t, "codex-blocked", `#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+  echo "codex-cli 0.150.1"
+  exit 0
+fi
 printf '%s\n' '{"type":"thread.started","thread_id":"thread-blocked"}'
 printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Audit complete\nSTATUS: BLOCKED\nNEXT_PROMPT_SAFE: no"}}'
 `)

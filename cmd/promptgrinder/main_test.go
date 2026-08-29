@@ -32,7 +32,7 @@ func TestCompiledCLIValidateRenderMatchesFakeCodexPrompt(t *testing.T) {
 
 	capture := filepath.Join(dir, "captured prompt")
 	fake := filepath.Join(dir, "fake codex")
-	script := "#!/bin/sh\nlast=''\nfor arg in \"$@\"; do last=$arg; done\nprintf %s \"$last\" > \"" + capture + "\"\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"fake-session\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"STATUS: PASS\\nNEXT_PROMPT_SAFE: yes\"}}'\n"
+	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.150.1'; exit 0; fi\nlast=''\nfor arg in \"$@\"; do last=$arg; done\nprintf %s \"$last\" > \"" + capture + "\"\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"fake-session\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"STATUS: PASS\\nNEXT_PROMPT_SAFE: yes\"}}'\n"
 	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

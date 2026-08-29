@@ -399,7 +399,7 @@ func nonExecutingCodex(t *testing.T) string {
 func markedFailingCodex(t *testing.T) (string, string) {
 	t.Helper()
 	marker := filepath.Join(t.TempDir(), "unexpected invocation")
-	script := "#!/bin/sh\nprintf invoked > " + shellQuote(marker) + "\nexit 99\n"
+	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.150.1'; exit 0; fi\nprintf invoked > " + shellQuote(marker) + "\nexit 99\n"
 	return testsupport.FakeExecutable(t, "codex", script), marker
 }
 
@@ -447,6 +447,10 @@ Keep literal shell text unchanged: $HOME $(touch forbidden) ; [brackets] *.
 	}
 	script := `#!/bin/sh
 set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo "codex-cli 0.150.1"
+  exit 0
+fi
 : "${PG_ACCEPT_RECORD:?}"
 /bin/pwd > "$PG_ACCEPT_RECORD/cwd"
 /usr/bin/env | /usr/bin/sort > "$PG_ACCEPT_RECORD/env"

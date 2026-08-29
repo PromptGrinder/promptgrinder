@@ -566,10 +566,10 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 }
 
 func Run(folder string, options Options, launcher Launcher) (summary Summary, runErr error) {
-	// A parallel plan always establishes a new, exact feature-branch baseline.
-	// Resuming lane worktrees will be added only with durable lane recovery
-	// state; silently treating an old sequential state as a lane plan is unsafe.
-	if options.ParallelWorktrees {
+	// A new parallel plan establishes an exact feature-branch baseline. An
+	// explicit resume instead adopts only the durable worktrees and integration
+	// branch recorded by that exact parallel sequence.
+	if options.ParallelWorktrees && !options.Resume {
 		options.Fresh = true
 	}
 	preflight, err := Preflight(folder, options)

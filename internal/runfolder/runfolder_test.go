@@ -920,11 +920,80 @@ func TestParallelWorktreesRequireIsolatedFreshCheckpointableLanes(t *testing.T) 
 	writePromptFile(t, dir, "10-implement-a.pg", "---\nid: a\ntype: implement\nlane: lane-a\npriority: 1\ncontext_mode: fresh\nallowed_paths: [src/**]\n---\na")
 	for _, options := range []Options{
 		{ParallelWorktrees: true, Checkpoint: true, CommitEach: true},
-		{ParallelWorktrees: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true, Resume: true},
+		{ParallelWorktrees: true, Checkpoint: true, CommitEach: true, RequireCleanGit: true, ResumeSequence: "seq_old"},
 	} {
 		if _, err := Preflight(dir, options); err == nil {
 			t.Fatalf("preflight unexpectedly passed for %#v", options)
 		}
+	}
+}
+
+func TestParallelWorktreeResumeRetriesFailedLaneAndReusesWaitingSiblings(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.pg", "---\nid: a\ntype: implement\nlane: lane-a\npriority: 1\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\na")
+	writePromptFile(t, dir, "20-implement-b.pg", "---\nid: b\ntype: implement\nlane: lane-b\npriority: 2\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\nb")
+	writePromptFile(t, dir, "30-implement-c.pg", "---\nid: c\ntype: implement\nlane: lane-c\npriority: 3\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\nc")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	options := Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true, ParallelWorktrees: true}
+	firstLauncher := &repositoryWritingLauncher{failures: map[string]bool{"10-implement-a": true}}
+	first, err := Run(dir, options, firstLauncher)
+	if err == nil {
+		t.Fatal("expected first parallel run to fail")
+	}
+	beforeB, beforeC := first.Sequence.Items[1], first.Sequence.Items[2]
+	if beforeB.Status != "waiting-to-merge" || beforeC.Status != "waiting-to-merge" {
+		t.Fatalf("retained siblings = %#v", first.Sequence.Items)
+	}
+
+	secondLauncher := &repositoryWritingLauncher{}
+	options.Resume = true
+	second, err := Run(dir, options, secondLauncher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Sequence.SequenceID != first.Sequence.SequenceID || !second.Resumed {
+		t.Fatalf("resume identity = %s resumed=%t, want %s", second.Sequence.SequenceID, second.Resumed, first.Sequence.SequenceID)
+	}
+	if len(secondLauncher.calls) != 1 || secondLauncher.calls[0] != first.Sequence.Items[0].Worktree {
+		t.Fatalf("resume launched %#v; only failed lane %s should rerun", secondLauncher.calls, first.Sequence.Items[0].Worktree)
+	}
+	if second.Sequence.Items[1].WorkerID != beforeB.WorkerID || second.Sequence.Items[2].WorkerID != beforeC.WorkerID {
+		t.Fatalf("waiting sibling worker evidence changed: before=%#v after=%#v", []SequenceItem{beforeB, beforeC}, second.Sequence.Items[1:])
+	}
+	for _, item := range second.Sequence.Items {
+		if item.Status != "succeeded" || item.IntegrationState != "integrated" || item.IntegrationSHA == "" {
+			t.Fatalf("lane was not integrated after resume: %#v", item)
+		}
+	}
+	for _, file := range []string{"10-implement-a.txt", "20-implement-b.txt", "30-implement-c.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, "lanes", file)); err != nil {
+			t.Fatalf("integrated %s: %v", file, err)
+		}
+	}
+}
+
+func TestParallelWorktreeResumeRefusesDirtyRetainedLane(t *testing.T) {
+	dir, home := initGitRepo(t), t.TempDir()
+	writePromptFile(t, dir, "10-implement-a.pg", "---\nid: a\ntype: implement\nlane: lane-a\npriority: 1\ncontext_mode: fresh\nallowed_paths: [lanes/**]\n---\na")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+	options := Options{RepoPath: dir, HomeDir: home, Checkpoint: true, CommitEach: true, RequireCleanGit: true, ParallelWorktrees: true}
+	first, err := Run(dir, options, &repositoryWritingLauncher{failures: map[string]bool{"10-implement-a": true}})
+	if err == nil {
+		t.Fatal("expected first parallel run to fail")
+	}
+	dirtyPath := filepath.Join(first.Sequence.Items[0].Worktree, "retained-user-work.txt")
+	if err := os.WriteFile(dirtyPath, []byte("preserve me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	options.Resume = true
+	_, err = Run(dir, options, &repositoryWritingLauncher{})
+	if err == nil || !strings.Contains(err.Error(), "has uncommitted changes") {
+		t.Fatalf("resume error = %v", err)
+	}
+	if data, readErr := os.ReadFile(dirtyPath); readErr != nil || string(data) != "preserve me" {
+		t.Fatalf("dirty retained work was altered: data=%q err=%v", data, readErr)
 	}
 }
 

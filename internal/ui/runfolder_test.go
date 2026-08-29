@@ -82,7 +82,7 @@ func TestRunFolderRendererPrintsParallelSubwayAfterFailedTrain(t *testing.T) {
 	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "02-audit.pg", PromptType: runfolder.TypeVerify, Lane: "play-audit", Priority: 2, Worktree: "/tmp/lanes/audit", Status: "failed", Reason: "validation failed"})
 	r.Finish(false)
 	r.Close()
-	for _, want := range []string{"Result: failed — validation failed", "Git subway:", "location-policy", "o-----> integration (retained)@1234567", "play-audit", "x failed"} {
+	for _, want := range []string{"Result: failed — validation failed", "Git subway:", "location-policy", "o-----> integration (retained)@1234567", "play-audit", "x failed", "Resume: promptgrinder run-folder tasks --parallel-worktrees --checkpoint --commit-each --require-clean-git --resume"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("subway output missing %q:\n%s", want, out.String())
 		}

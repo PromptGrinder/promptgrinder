@@ -285,10 +285,13 @@ worktrees remain inspectable under the sequence state directory.
 
 Parallel lanes do not share a runtime conversation. Every runnable slice must
 declare `context_mode: fresh`, a `lane`, a positive `priority`, and non-empty
-`allowed_paths`. Initial RC.6.0 lane execution always starts from a fresh
-baseline; `--resume`, `--resume-sequence`, `--restart`, and `--no-resume` are
-intentionally rejected until lane-level recovery is durable.
-Capability gates remain sequential in this initial mode so their terminal
+`allowed_paths`. After a failed or interrupted train, rerun the same command
+with `--resume`. PromptGrinder reuses successful `waiting-to-merge` lanes,
+retries failed lanes in their retained worktrees, and continues dependency
+scheduling after deterministic integration. It refuses recovery if a retained
+lane or coordinator worktree is missing, dirty, or checked out on a different
+branch. `--resume-sequence`, `--restart`, and `--no-resume` remain unsupported
+in parallel mode. Capability gates remain sequential so their terminal
 product-blocked semantics are never confused with lane integration.
 
 ## Authoring and preflight
