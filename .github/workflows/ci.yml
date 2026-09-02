@@ -102,6 +102,10 @@ jobs:
           go build -trimpath -o "$RUNNER_TEMP/promptgrinder-example-bin/promptgrinder" ./cmd/promptgrinder
           cat > "$RUNNER_TEMP/promptgrinder-example-bin/codex" <<'EOF'
           #!/bin/sh
+          if [ "${1:-}" = "--version" ]; then
+            echo "codex-cli 0.150.1"
+            exit 0
+          fi
           : > "$RUNNER_TEMP/codex-was-invoked"
           echo "error: dry-run invoked the CI Codex stub" >&2
           exit 99
@@ -176,6 +180,10 @@ jobs:
           esac
           cat > "$output/codex" <<'EOF'
           #!/bin/sh
+          if [ "${1:-}" = "--version" ]; then
+            echo "codex-cli 0.150.1"
+            exit 0
+          fi
           : > "$RUNNER_TEMP/artifact-codex-was-invoked"
           echo "error: artifact smoke test invoked Codex" >&2
           exit 99
