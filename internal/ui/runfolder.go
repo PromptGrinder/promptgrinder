@@ -83,6 +83,18 @@ func (r *RunFolderRenderer) Update(event runfolder.ProgressEvent) {
 		r.resumePlan = event.ResumePlan
 		r.parallel, r.featureBranch = event.ParallelWorktrees, event.FeatureBranch
 		r.items = append([]runfolder.ProgressPrompt(nil), event.Inventory...)
+		for _, item := range r.items {
+			if item.WorkerID == "" && item.Duration == 0 && item.LogPath == "" {
+				continue
+			}
+			r.details[item.Name] = runfolder.ProgressEvent{
+				PromptName: item.Name, PromptType: item.Type, Status: item.Status,
+				Lane: item.Lane, Priority: item.Priority, Worktree: item.Worktree,
+				IntegrationState: item.IntegrationState, IntegrationSHA: item.IntegrationSHA,
+				WorkerID: item.WorkerID, Scope: item.Scope, Engine: item.Engine, Model: item.Model,
+				LogPath: item.LogPath, Duration: item.Duration,
+			}
+		}
 		r.markdownTotal = event.MarkdownTotal
 		r.ignored = append([]string(nil), event.Ignored...)
 		r.started = true
@@ -419,8 +431,18 @@ func (r *RunFolderRenderer) renderPlainStartLocked() {
 			if status := parallelStatusLabel(item, r.items); status != "" {
 				fmt.Fprint(r.w, " | "+status)
 			}
-			if leaf := filepath.Base(item.Worktree); item.Worktree != "" && leaf != "." {
+			detail := r.details[item.Name]
+			if item.Duration > 0 {
+				fmt.Fprint(r.w, " | "+formatDuration(item.Duration))
+			}
+			if merge := parallelMergeLabel(item, r.featureBranch); merge != "" {
+				fmt.Fprint(r.w, " | "+merge)
+			} else if leaf := filepath.Base(item.Worktree); item.Worktree != "" && leaf != "." {
 				fmt.Fprintf(r.w, " | %s", leaf)
+			}
+			if item.Status == "succeeded" || item.Status == "integrated" || item.Status == "failed" || item.Status == "gate-blocked" {
+				fmt.Fprint(r.w, " | "+compactParallelIdentity(detail))
+				writeParallelWorkerMeta(r.w, detail)
 			}
 			fmt.Fprintln(r.w)
 			continue

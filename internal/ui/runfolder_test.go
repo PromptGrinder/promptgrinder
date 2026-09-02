@@ -106,6 +106,27 @@ func TestRunFolderRendererPrintsFeatureBranchInSuccessfulParallelSubway(t *testi
 	}
 }
 
+func TestRunFolderRendererUsesPersistedParallelInventoryOnResume(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, true, Options{Theme: ThemeMinimal})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_parallel", Folder: "tasks", ParallelWorktrees: true, FeatureBranch: "feature/google-play", Inventory: []runfolder.ProgressPrompt{
+		{Name: "01-location.pg", Type: runfolder.TypeImplement, Status: "succeeded", Lane: "location-policy", Priority: 1, Worktree: "/tmp/lanes/location", IntegrationState: "integrated", IntegrationSHA: "1234567890abcdef", WorkerID: "wrk_location", Scope: "android-ui", Engine: "codex", Model: "gpt-5.6-sol", Duration: 12 * time.Minute},
+		{Name: "02-storage.pg", Type: runfolder.TypeImplement, Status: "succeeded", Lane: "storage-policy", Priority: 2, Worktree: "/tmp/lanes/storage", IntegrationState: "integrated", IntegrationSHA: "fedcba0987654321", WorkerID: "wrk_storage", Scope: "backend-feature", Engine: "codex", Model: "gpt-5.6-terra", Duration: 8 * time.Minute},
+	}, Total: 2})
+	r.Update(runfolder.ProgressEvent{Type: "run.completed", PRHint: "create a PR"})
+	r.Finish(true)
+	r.Close()
+	got := out.String()
+	for _, want := range []string{"location → feature/google-play@1234567", "storage → feature/google-play@fedcba0", "android-ui | codex/gpt-5.6-sol", "backend-feature | codex/gpt-5.6-terra", "12m", "8m"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("resumed inventory missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "in progress") || strings.Contains(got, "unscoped | unknown-engine/default") {
+		t.Fatalf("resumed inventory lost persisted state:\n%s", got)
+	}
+}
+
 func TestRunFolderRendererAnimatesEveryWorkingParallelLaneAndShowsDependencies(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	var out bytes.Buffer

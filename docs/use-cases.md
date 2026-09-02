@@ -326,6 +326,11 @@ continues in priority order. Recovery fails closed if any retained lane or the
 coordinator is missing, dirty, or on an unexpected branch. Parallel recovery
 does not reset, clean, or discard retained work.
 
+When a parallel sequence is resumed, its foreground inventory and final Git
+subway are reconstructed from persisted lane state. Already integrated lanes
+therefore retain their worktree-to-feature-branch merge SHA, elapsed time, and
+worker identity instead of being displayed as new, unscoped, or in progress.
+
 ### UC-21: Inspect sequence history
 
 Use `promptgrinder sequence <id|current>` for prompt-level progress and
