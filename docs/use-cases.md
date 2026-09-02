@@ -43,13 +43,13 @@ Terminal.app, iTerm2, and headless execution. Codex supports `run` and
 Other operating systems, terminals, and engines are not qualified or supported
 until explicitly documented.
 
-Codex CLI 0.150.x is the qualified RC.6.1 command-line contract. `doctor`
-shows the detected version and warns when it is older, newer, or unparsable.
-Worker launch then refuses that unqualified version before any worker is
-created. To deliberately test a different Codex release, set
-`PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1` in the launching shell. That
-override is deliberate and unsupported: it does not make a changed Codex CLI
-contract qualified.
+Codex CLI 0.150.x is the known-qualified RC.6.2 command-line contract.
+`doctor` shows the detected version and, outside that band, runs a non-mutating
+adapter probe using `codex exec --help` and `codex exec resume --help`. A newer,
+older, or unparsable CLI that exposes PromptGrinder's required command flags is
+allowed as **provisional**; a missing command or flag blocks worker creation
+with the failed capability named in the diagnostic. This is a contract check,
+not a claim that every provisional CLI has had full release qualification.
 
 ## Work-order authoring and validation
 

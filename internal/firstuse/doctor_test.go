@@ -67,7 +67,7 @@ func TestDoctorTreatsMissingOptionalRuntimeAsInventoryWarning(t *testing.T) {
 	}
 }
 
-func TestDoctorWarnsForUnqualifiedCodexVersionWithoutFailingCapabilityInventory(t *testing.T) {
+func TestDoctorReportsProvisionalCodexVersionWhenAdapterProbePasses(t *testing.T) {
 	home := t.TempDir()
 	exe := fakeExecutable(t, "promptgrinder")
 	tool := fakeExecutable(t, "tool")
@@ -76,16 +76,22 @@ func TestDoctorWarnsForUnqualifiedCodexVersionWithoutFailingCapabilityInventory(
 		LookPath: func(string) (string, error) { return tool, nil },
 		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			if reflect.DeepEqual(args, []string{"--version"}) {
-				return []byte("codex-cli 0.151.0"), nil
+				return []byte("codex-cli 0.152.0"), nil
+			}
+			if reflect.DeepEqual(args, []string{"exec", "--help"}) {
+				return []byte("exec --cd --sandbox --json --dangerously-bypass-approvals-and-sandbox"), nil
+			}
+			if reflect.DeepEqual(args, []string{"exec", "resume", "--help"}) {
+				return []byte("resume --config --json --dangerously-bypass-approvals-and-sandbox"), nil
 			}
 			return []byte("logged in"), nil
 		},
 	})
 	check := findCheck(t, report, "tool.codex")
-	if check.Status != Warning || check.Required || fmt.Sprint(check.Evidence["compatibility"]) != "unqualified" {
+	if check.Status != Warning || check.Required || fmt.Sprint(check.Evidence["compatibility"]) != "provisional" {
 		t.Fatalf("Codex compatibility check = %#v", check)
 	}
-	if !strings.Contains(check.Remediation, "PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1") {
+	if !strings.Contains(check.Remediation, "provisional Codex CLI") {
 		t.Fatalf("remediation = %q", check.Remediation)
 	}
 }

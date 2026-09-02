@@ -117,10 +117,20 @@ func Doctor(ctx context.Context, options DoctorOptions) DoctorReport {
 			codexCheck.Evidence["version"] = RedactText(strings.TrimSpace(string(version)))
 			codexCheck.Evidence["compatibility"] = assessment.Status
 			if assessment.Status != codex.VersionQualified {
+				probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
+				probeErr := codex.ProbeInstalledCLI(probeCtx, codexPath, options.Run)
+				probeCancel()
 				codexCheck.Status = Warning
 				codexCheck.Required = false
-				codexCheck.Summary = "Codex CLI is installed but outside PromptGrinder's qualified compatibility band."
-				codexCheck.Remediation = assessment.Reason + ". Update PromptGrinder when available, or explicitly opt in with " + codex.AllowUnqualifiedVersionEnvironment + "=1."
+				if probeErr == nil {
+					codexCheck.Evidence["compatibility"] = codex.VersionProvisional
+					codexCheck.Summary = "Codex CLI is outside the known-qualified band but passed the non-mutating adapter capability probe."
+					codexCheck.Remediation = "You can run PromptGrinder with this provisional Codex CLI. Keep the diagnostic output with any compatibility report."
+				} else {
+					codexCheck.Evidence["capability_probe"] = "failed"
+					codexCheck.Summary = "Codex CLI is outside the known-qualified band and did not pass the adapter capability probe."
+					codexCheck.Remediation = assessment.Reason + ". Install a compatible Codex CLI release or update PromptGrinder. Probe detail: " + RedactText(probeErr.Error())
+				}
 			}
 		} else {
 			codexCheck.Status = Warning
