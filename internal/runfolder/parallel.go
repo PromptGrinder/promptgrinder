@@ -12,6 +12,7 @@ import (
 
 	"promptgrinder/internal/state"
 	"promptgrinder/internal/workeridentity"
+	"promptgrinder/internal/workerpathpolicy"
 )
 
 // validateParallelWorktreePlan keeps the opt-in mode deliberately narrow. A
@@ -90,21 +91,41 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 	if err != nil {
 		return fmt.Errorf("parallel worktree execution requires a checked-out feature branch: %w", err)
 	}
-	sequence.FeatureBranch = targetBranch
-	runKey := safeName(runState.RunID)
-	root := filepath.Join(options.HomeDir, "state", "run-folders", sequence.SequenceID, "parallel-worktrees", runKey)
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return err
-	}
-	coordinatorBranch := "promptgrinder/integration/" + safeName(sequence.SequenceID) + "/" + runKey
-	coordinatorWorktree := filepath.Join(root, "integration")
-	if err := gitWorktreeAdd(repoRoot, coordinatorWorktree, coordinatorBranch, baseSHA); err != nil {
-		return fmt.Errorf("create isolated integration worktree: %w", err)
+	var root, coordinatorBranch, coordinatorWorktree string
+	if options.Resume {
+		root, coordinatorWorktree, coordinatorBranch, err = retainedParallelCoordinator(*sequence, targetBranch)
+		if err != nil {
+			return err
+		}
+		sequence.Status = "running"
+		sequence.FinishedAt = nil
+		sequence.touch()
+		runState.Status = "running"
+		runState.Current = ""
+		runState.touch()
+	} else {
+		sequence.FeatureBranch = targetBranch
+		runKey := safeName(runState.RunID)
+		root = filepath.Join(options.HomeDir, "state", "run-folders", sequence.SequenceID, "parallel-worktrees", runKey)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return err
+		}
+		coordinatorBranch = "promptgrinder/integration/" + safeName(sequence.SequenceID) + "/" + runKey
+		coordinatorWorktree = filepath.Join(root, "integration")
+		if err := gitWorktreeAdd(repoRoot, coordinatorWorktree, coordinatorBranch, baseSHA); err != nil {
+			return fmt.Errorf("create isolated integration worktree: %w", err)
+		}
 	}
 
 	completed := make(map[string]bool, len(prompts))
 	for _, prompt := range prompts {
 		if prompt.Type != TypeSpecification {
+			continue
+		}
+		item := sequenceItem(*sequence, prompt.Name)
+		if options.Resume && item.Status == "skipped" {
+			completed[prompt.ID] = true
+			runState.Completed = appendUnique(runState.Completed, prompt.Name)
 			continue
 		}
 		now := time.Now().UTC()
@@ -114,7 +135,7 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 		}
 		sequence.mark(prompt.Name, "skipped", state.Worker{}, nil, "")
 		completed[prompt.ID] = true
-		runState.Completed = append(runState.Completed, prompt.Name)
+		runState.Completed = appendUnique(runState.Completed, prompt.Name)
 		emitProgress(options, ProgressEvent{Type: "prompt.skipped", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "skipped", Lane: prompt.Lane, Priority: prompt.Priority, Completed: len(runState.Completed), Total: len(prompts)})
 	}
 	if err := sequenceStore.save(*sequence); err != nil {
@@ -123,9 +144,22 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 
 	remaining := make(map[string]Prompt)
 	for _, prompt := range prompts {
-		if prompt.Type != TypeSpecification {
-			remaining[prompt.ID] = prompt
+		if prompt.Type == TypeSpecification {
+			continue
 		}
+		item := sequenceItem(*sequence, prompt.Name)
+		if options.Resume && item.Status == "succeeded" && item.IntegrationState == "integrated" {
+			completed[prompt.ID] = true
+			runState.Completed = appendUnique(runState.Completed, prompt.Name)
+			continue
+		}
+		remaining[prompt.ID] = prompt
+	}
+	if err := store.saveRun(*runState); err != nil {
+		return err
+	}
+	if err := sequenceStore.save(*sequence); err != nil {
+		return err
 	}
 	for len(remaining) > 0 {
 		ready := make([]Prompt, 0)
@@ -148,10 +182,38 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 		var workers sync.WaitGroup
 		for _, prompt := range ready {
 			prompt := prompt
-			worktree := filepath.Join(root, safeName(prompt.ID))
-			branch := "promptgrinder/lane/" + safeName(sequence.SequenceID) + "/" + runKey + "/" + safeName(prompt.ID)
-			if err := gitWorktreeAdd(repoRoot, worktree, branch, coordinatorBranch); err != nil {
-				return fmt.Errorf("create lane worktree for %s: %w", prompt.Name, err)
+			item := sequenceItem(*sequence, prompt.Name)
+			if options.Resume && item.Status == "waiting-to-merge" && item.IntegrationState == "waiting-to-merge" {
+				promptState, loadErr := sequenceStore.loadPromptState(sequence.SequenceID, prompt.Name)
+				if loadErr != nil {
+					return fmt.Errorf("load retained successful lane %s: %w", prompt.Name, loadErr)
+				}
+				results <- parallelResult{prompt: prompt, promptState: promptState, worktree: item.Worktree, branch: item.LaneBranch}
+				continue
+			}
+
+			worktree := item.Worktree
+			branch := item.LaneBranch
+			var repairBaseline *workerpathpolicy.Snapshot
+			if options.Resume && item.Status == "failed" {
+				if err := validateRetainedLane(item); err != nil {
+					return fmt.Errorf("recover failed lane %s: %w", prompt.Name, err)
+				}
+			} else {
+				worktree = filepath.Join(root, safeName(prompt.ID))
+				branch = "promptgrinder/lane/" + safeName(sequence.SequenceID) + "/" + safeName(runState.RunID) + "/" + safeName(prompt.ID)
+				if options.Resume && pathExists(worktree) {
+					if err := validateInterruptedLane(worktree, branch); err != nil {
+						return fmt.Errorf("recover interrupted lane %s: %w", prompt.Name, err)
+					}
+					head, err := gitSHA(worktree)
+					if err != nil {
+						return fmt.Errorf("capture interrupted lane baseline for %s: %w", prompt.Name, err)
+					}
+					repairBaseline = &workerpathpolicy.Snapshot{Version: 1, Head: head, Entries: map[string]string{}, CreatedAt: time.Now().UTC()}
+				} else if err := gitWorktreeAdd(repoRoot, worktree, branch, coordinatorBranch); err != nil {
+					return fmt.Errorf("create lane worktree for %s: %w", prompt.Name, err)
+				}
 			}
 			setParallelItem(sequence, prompt.Name, worktree, branch, "working")
 			sequence.mark(prompt.Name, "running", state.Worker{}, nil, "")
@@ -159,7 +221,7 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				state, runErr := runPrompt(worktree, prompt, specContext, "", "", options, laneLauncher{repository: worktree, launcher: repositoryLauncher, waiter: waitLauncher(launcher)}, nil)
+				state, runErr := runPrompt(worktree, prompt, specContext, "", "", options, laneLauncher{repository: worktree, launcher: repositoryLauncher, waiter: waitLauncher(launcher)}, repairBaseline)
 				results <- parallelResult{prompt: prompt, promptState: state, worktree: worktree, branch: branch, err: runErr}
 			}()
 		}
@@ -227,7 +289,7 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 			sequence.mark(result.prompt.Name, "succeeded", result.promptState.Worker, result.promptState.FinishedAt, "")
 			completed[result.prompt.ID] = true
 			delete(remaining, result.prompt.ID)
-			runState.Completed = append(runState.Completed, result.prompt.Name)
+			runState.Completed = appendUnique(runState.Completed, result.prompt.Name)
 			identity := workeridentity.FromWorker(result.promptState.Worker)
 			emitProgress(options, ProgressEvent{Type: "prompt.succeeded", SequenceID: sequence.SequenceID, PromptName: result.prompt.Name, PromptType: result.prompt.Type, Status: "integrated", Lane: result.prompt.Lane, Priority: result.prompt.Priority, Worktree: result.worktree, IntegrationState: "integrated", IntegrationSHA: integrationSHA, WorkerID: result.promptState.WorkerID, Scope: identity.Scope, Engine: identity.Engine, Model: identity.Model, Terminal: result.promptState.Worker.TerminalAdapter, LogPath: result.promptState.Worker.LogPath, Duration: promptDuration(result.promptState), Completed: len(runState.Completed), Total: len(prompts)})
 		}
@@ -262,6 +324,104 @@ func runParallelWorktrees(repoRoot, specContext string, prompts []Prompt, option
 	}
 	summary.Run = *runState
 	return nil
+}
+
+func retainedParallelCoordinator(sequence SequenceState, targetBranch string) (root, worktree, branch string, err error) {
+	if !sequence.ParallelWorktrees {
+		return "", "", "", fmt.Errorf("sequence %s is not a parallel worktree sequence", sequence.SequenceID)
+	}
+	if sequence.Status != "failed" && sequence.Status != "interrupted" && sequence.Status != "running" {
+		return "", "", "", fmt.Errorf("parallel sequence %s has status %q; only failed, interrupted, or explicitly resumed running sequences can resume", sequence.SequenceID, sequence.Status)
+	}
+	if sequence.FeatureBranch == "" || sequence.FeatureBranch != targetBranch {
+		return "", "", "", fmt.Errorf("parallel sequence %s belongs to feature branch %q, not checked-out branch %q", sequence.SequenceID, sequence.FeatureBranch, targetBranch)
+	}
+	for _, item := range sequence.Items {
+		if item.Worktree == "" {
+			continue
+		}
+		if err := validateRetainedLane(item); err != nil {
+			return "", "", "", fmt.Errorf("validate retained lane %s: %w", item.PromptName, err)
+		}
+		candidate := filepath.Dir(item.Worktree)
+		if root == "" {
+			root = candidate
+		} else if root != candidate {
+			return "", "", "", fmt.Errorf("retained lanes disagree on parallel worktree root: %s and %s", root, candidate)
+		}
+	}
+	if root == "" {
+		return "", "", "", fmt.Errorf("parallel sequence %s has no retained lane worktrees", sequence.SequenceID)
+	}
+	worktree = filepath.Join(root, "integration")
+	if _, err := os.Stat(worktree); err != nil {
+		return "", "", "", fmt.Errorf("retained coordinator worktree %s is unavailable: %w", worktree, err)
+	}
+	clean, err := gitClean(worktree)
+	if err != nil {
+		return "", "", "", fmt.Errorf("inspect retained coordinator worktree %s: %w", worktree, err)
+	}
+	if !clean {
+		return "", "", "", fmt.Errorf("retained coordinator worktree %s has uncommitted changes; resolve them before resuming", worktree)
+	}
+	branch, err = gitCurrentBranch(worktree)
+	if err != nil {
+		return "", "", "", fmt.Errorf("inspect retained coordinator branch: %w", err)
+	}
+	expectedPrefix := "promptgrinder/integration/" + safeName(sequence.SequenceID) + "/"
+	if !strings.HasPrefix(branch, expectedPrefix) {
+		return "", "", "", fmt.Errorf("retained coordinator is on branch %q, expected prefix %q", branch, expectedPrefix)
+	}
+	return root, worktree, branch, nil
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func validateInterruptedLane(worktree, expectedBranch string) error {
+	branch, err := gitCurrentBranch(worktree)
+	if err != nil {
+		return fmt.Errorf("inspect retained lane branch: %w", err)
+	}
+	if branch != expectedBranch {
+		return fmt.Errorf("retained worktree %s is on branch %q, expected %q", worktree, branch, expectedBranch)
+	}
+	return nil
+}
+
+func validateRetainedLane(item SequenceItem) error {
+	if item.Worktree == "" || item.LaneBranch == "" {
+		return fmt.Errorf("missing retained worktree or lane branch")
+	}
+	if _, err := os.Stat(item.Worktree); err != nil {
+		return fmt.Errorf("retained worktree %s is unavailable: %w", item.Worktree, err)
+	}
+	clean, err := gitClean(item.Worktree)
+	if err != nil {
+		return fmt.Errorf("inspect retained worktree %s: %w", item.Worktree, err)
+	}
+	if !clean {
+		return fmt.Errorf("retained worktree %s has uncommitted changes; resolve them before resuming", item.Worktree)
+	}
+	branch, err := gitCurrentBranch(item.Worktree)
+	if err != nil {
+		return fmt.Errorf("inspect retained lane branch: %w", err)
+	}
+	if branch != item.LaneBranch {
+		return fmt.Errorf("retained worktree %s is on branch %q, expected %q", item.Worktree, branch, item.LaneBranch)
+	}
+	return nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func waitLauncher(launcher Launcher) WaitLauncher {

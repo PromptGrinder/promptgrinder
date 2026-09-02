@@ -4,6 +4,19 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.6.1 candidate
+
+- Added a Codex CLI compatibility gate: RC.6.1 qualifies the 0.150.x command
+  contract and rejects an older, newer, or unparsable CLI before workers start.
+  `promptgrinder doctor` reports the detected compatibility status; deliberate
+  testing of another CLI release requires the explicit unsupported
+  `PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1` override.
+- Corrected Codex `--search` command construction for the current CLI, where
+  the global option must precede `exec`.
+- Made failed parallel-worktree sequences resumable with `--resume` when their
+  retained worktrees and integration coordinator are provably intact. Completed
+  lanes stay untouched; dirty or ambiguous retained lanes remain fail-closed.
+
 ### v1.0.0-rc.5.2 candidate
 
 - Documented the qualified runtime and terminal boundary prominently: macOS on

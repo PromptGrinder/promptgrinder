@@ -40,7 +40,7 @@ func TestCodexAdapterFakeExecutableReceivesExactContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	capture := filepath.Join(t.TempDir(), "context.txt")
-	fake := testsupport.FakeExecutable(t, "codex", "#!/bin/sh\nprintf '%s' \"$1\" > \""+capture+"\"\n")
+	fake := testsupport.FakeExecutable(t, "codex", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.150.1'; exit 0; fi\nprintf '%s' \"$1\" > \""+capture+"\"\n")
 	cfg := config.Config{
 		HomeDir: home, Engine: "codex", CodexExecutable: fake,
 		CodexSandbox: "workspace-write", CodexApproval: "never",

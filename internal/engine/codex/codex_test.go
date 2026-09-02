@@ -266,8 +266,8 @@ func TestBuildCommandMapsFrontmatter(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"exec", "--cd", "/repo/backend", "--sandbox", "read-only", "--json",
-		"--model", "gpt-5.5", "--profile", "backend", "--search",
+		"--search", "exec", "--cd", "/repo/backend", "--sandbox", "read-only", "--json",
+		"--model", "gpt-5.5", "--profile", "backend",
 		"--image", "/repo/tasks/screenshot.png", "--image", "/tmp/absolute.png",
 	}
 	assertArgs(t, spec.Args, want)
@@ -291,8 +291,8 @@ func TestBuildCommandMapsV2EngineMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"exec", "--cd", "/repo/backend", "--sandbox", "read-only", "--json",
-		"--model", "gpt-5.5", "--profile", "backend", "--search",
+		"--search", "exec", "--cd", "/repo/backend", "--sandbox", "read-only", "--json",
+		"--model", "gpt-5.5", "--profile", "backend",
 		"--image", "/repo/tasks/screenshot.png",
 	}
 	assertArgs(t, spec.Args, want)

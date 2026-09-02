@@ -18,6 +18,10 @@ if [ "$1" = "app-server" ]; then
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"gpt-5","model":"gpt-5","inputModalities":["text","image"]},{"id":"gpt-5.5","model":"gpt-5.5","inputModalities":["text","image"]},{"id":"gpt-5.6-sol","model":"gpt-5.6-sol","inputModalities":["text","image"]}]}}'
   exit 0
 fi
+if [ "$1" = "--version" ]; then
+  echo "codex-cli 0.150.1"
+  exit 0
+fi
 echo "error: fake Codex must not be executed by this test" >&2
 exit 99
 `)

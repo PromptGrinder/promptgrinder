@@ -3,6 +3,7 @@ package firstuse
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -63,6 +64,29 @@ func TestDoctorTreatsMissingOptionalRuntimeAsInventoryWarning(t *testing.T) {
 	check := findCheck(t, report, "tool.antigravity")
 	if check.Status != Warning || check.Required || !report.OK {
 		t.Fatalf("optional runtime check = %#v, report = %#v", check, report)
+	}
+}
+
+func TestDoctorWarnsForUnqualifiedCodexVersionWithoutFailingCapabilityInventory(t *testing.T) {
+	home := t.TempDir()
+	exe := fakeExecutable(t, "promptgrinder")
+	tool := fakeExecutable(t, "tool")
+	report := Doctor(context.Background(), DoctorOptions{
+		HomeDir: home, Terminal: "headless", GOOS: "darwin", GOARCH: "arm64", Executable: exe,
+		LookPath: func(string) (string, error) { return tool, nil },
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if reflect.DeepEqual(args, []string{"--version"}) {
+				return []byte("codex-cli 0.151.0"), nil
+			}
+			return []byte("logged in"), nil
+		},
+	})
+	check := findCheck(t, report, "tool.codex")
+	if check.Status != Warning || check.Required || fmt.Sprint(check.Evidence["compatibility"]) != "unqualified" {
+		t.Fatalf("Codex compatibility check = %#v", check)
+	}
+	if !strings.Contains(check.Remediation, "PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1") {
+		t.Fatalf("remediation = %q", check.Remediation)
 	}
 }
 

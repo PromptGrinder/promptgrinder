@@ -179,16 +179,22 @@ type ProgressEvent struct {
 // ProgressPrompt is the prompt metadata needed to render an ordered run
 // inventory. Content is deliberately excluded from progress events.
 type ProgressPrompt struct {
-	Name             string     `json:"name"`
-	ID               string     `json:"id,omitempty"`
-	Type             PromptType `json:"type"`
-	Status           string     `json:"status"`
-	Lane             string     `json:"lane,omitempty"`
-	Priority         int        `json:"priority,omitempty"`
-	DependsOn        []string   `json:"depends_on,omitempty"`
-	Worktree         string     `json:"worktree,omitempty"`
-	IntegrationState string     `json:"integration_state,omitempty"`
-	IntegrationSHA   string     `json:"integration_sha,omitempty"`
+	Name             string        `json:"name"`
+	ID               string        `json:"id,omitempty"`
+	Type             PromptType    `json:"type"`
+	Status           string        `json:"status"`
+	Lane             string        `json:"lane,omitempty"`
+	Priority         int           `json:"priority,omitempty"`
+	DependsOn        []string      `json:"depends_on,omitempty"`
+	Worktree         string        `json:"worktree,omitempty"`
+	IntegrationState string        `json:"integration_state,omitempty"`
+	IntegrationSHA   string        `json:"integration_sha,omitempty"`
+	WorkerID         string        `json:"worker_id,omitempty"`
+	Scope            string        `json:"scope,omitempty"`
+	Engine           string        `json:"engine,omitempty"`
+	Model            string        `json:"model,omitempty"`
+	LogPath          string        `json:"log_path,omitempty"`
+	Duration         time.Duration `json:"duration,omitempty"`
 }
 
 type persistedProgressEvent struct {
@@ -566,10 +572,10 @@ func ResolveSequenceID(folder string, options Options) (string, error) {
 }
 
 func Run(folder string, options Options, launcher Launcher) (summary Summary, runErr error) {
-	// A parallel plan always establishes a new, exact feature-branch baseline.
-	// Resuming lane worktrees will be added only with durable lane recovery
-	// state; silently treating an old sequential state as a lane plan is unsafe.
-	if options.ParallelWorktrees {
+	// A new parallel plan establishes an exact feature-branch baseline. An
+	// explicit resume instead adopts only the durable worktrees and integration
+	// branch recorded by that exact parallel sequence.
+	if options.ParallelWorktrees && !options.Resume {
 		options.Fresh = true
 	}
 	preflight, err := Preflight(folder, options)
@@ -665,16 +671,23 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 		}
 	}
 	inventory := make([]ProgressPrompt, 0, len(prompts))
-	itemStatuses := make(map[string]string, len(sequence.Items))
+	itemStates := make(map[string]SequenceItem, len(sequence.Items))
 	for _, item := range sequence.Items {
-		itemStatuses[item.PromptName] = item.Status
+		itemStates[item.PromptName] = item
 	}
 	for _, prompt := range prompts {
-		status := itemStatuses[prompt.Name]
+		item := itemStates[prompt.Name]
+		status := item.Status
 		if status == "" || status == "running" {
 			status = "pending"
 		}
-		inventory = append(inventory, ProgressPrompt{Name: prompt.Name, ID: prompt.ID, Type: prompt.Type, Status: status, Lane: prompt.Lane, Priority: prompt.Priority, DependsOn: append([]string(nil), prompt.DependsOn...)})
+		inventory = append(inventory, ProgressPrompt{
+			Name: prompt.Name, ID: prompt.ID, Type: prompt.Type, Status: status,
+			Lane: prompt.Lane, Priority: prompt.Priority, DependsOn: append([]string(nil), prompt.DependsOn...),
+			Worktree: item.Worktree, IntegrationState: item.IntegrationState, IntegrationSHA: item.IntegrationSHA,
+			WorkerID: item.WorkerID, Scope: item.Scope, Engine: item.Engine, Model: item.Model, LogPath: item.LogPath,
+			Duration: sequenceItemDuration(item),
+		})
 	}
 	featureBranch := ""
 	if options.ParallelWorktrees {
@@ -756,7 +769,7 @@ func Run(folder string, options Options, launcher Launcher) (summary Summary, ru
 			emitProgress(options, ProgressEvent{Type: "prompt.skipped", SequenceID: sequence.SequenceID, PromptName: prompt.Name, PromptType: prompt.Type, Status: "skipped", Completed: len(runState.Completed), Total: len(prompts)})
 			continue
 		}
-		resumingFailedItem := summary.Resumed && itemStatuses[prompt.Name] == "failed"
+		resumingFailedItem := summary.Resumed && itemStates[prompt.Name].Status == "failed"
 		sequence.mark(prompt.Name, "running", state.Worker{}, nil, "")
 		sequence.refreshSummary()
 		if err := sequenceStore.save(sequence); err != nil {
@@ -1615,6 +1628,13 @@ func (s *SequenceState) touch() {
 func (s *SequenceState) refreshSummary() {
 	s.TokenUsage = totalTokenUsage(s.Items)
 	s.ExecutiveSummary = buildExecutiveSummary(s.Items)
+}
+
+func sequenceItemDuration(item SequenceItem) time.Duration {
+	if item.StartedAt == nil || item.FinishedAt == nil || item.FinishedAt.Before(*item.StartedAt) {
+		return 0
+	}
+	return item.FinishedAt.Sub(*item.StartedAt)
 }
 
 func (s *SequenceState) mark(promptName, status string, worker state.Worker, finishedAt *time.Time, errorMessage string) {

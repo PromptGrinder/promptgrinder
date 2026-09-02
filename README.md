@@ -11,6 +11,14 @@ run workers in **Terminal.app**, **iTerm2**, or **headless** mode. The built-in
 **Codex CLI** engine supports one-off `run` and ordered `run-folder` workflows;
 named workers additionally support the **Codex** and **Antigravity** adapters.
 
+RC.6.1 qualifies Codex CLI **0.150.x**. PromptGrinder refuses an unqualified
+Codex version before launching work so a changed CLI contract cannot fail a
+train halfway through. `promptgrinder doctor` reports the detected version and
+compatibility status. To deliberately test another version, set
+`PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1` in the shell that launches
+PromptGrinder; this is an explicit, unsupported opt-in rather than a claim of
+compatibility.
+
 Linux and Windows, other terminal applications, and other AI engines are not
 qualified or supported for this release candidate. Run `promptgrinder doctor`
 to inspect the available local engines and terminal adapters before starting
@@ -857,18 +865,20 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.6.0` release candidate targets macOS on Apple silicon and Intel
+The `v1.0.0-rc.6.1` release candidate targets macOS on Apple silicon and Intel
 and includes the orchestration capabilities documented above:
 
 - macOS on Apple silicon (`darwin/arm64`);
 - macOS on Intel (`darwin/amd64`);
-- Codex for one-off `run` and `run-folder` execution;
+- Codex CLI 0.150.x for one-off `run` and `run-folder` execution;
 - Codex and Antigravity adapters for named-worker execution;
 - Terminal.app, iTerm2, and headless execution.
 
-Exact qualified macOS, Codex, Terminal.app, and iTerm2 versions remain pending
-clean-machine qualification. Linux and Windows may be technically compilable
-in part, but they are untested and unsupported for this release candidate.
+Exact qualified macOS, Terminal.app, and iTerm2 versions remain pending
+clean-machine qualification. Codex CLI versions outside 0.150.x require the
+explicit unsupported `PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1`
+override. Linux and Windows may be technically compilable in part, but they
+are untested and unsupported for this release candidate.
 Source builds require the Go version declared in [`go.mod`](go.mod).
 
 ## Development

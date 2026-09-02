@@ -56,6 +56,9 @@ func (e Engine) Describe() engine.Descriptor {
 }
 
 func (e Engine) Validate(ctx execution.Context) error {
+	if _, err := ValidateInstalledVersion(context.Background(), e.command(), nil); err != nil {
+		return err
+	}
 	_, err := e.buildCommand(ctx)
 	return err
 }
@@ -625,7 +628,14 @@ func commandFromContext(ctx execution.Context, executable string) (CommandSpec, 
 	if err != nil {
 		return CommandSpec{}, err
 	}
-	args := []string{"exec"}
+	args := []string{}
+	// Codex exposes --search as a global option. It must precede the exec
+	// subcommand; placing it after exec makes current Codex releases reject the
+	// worker before the prompt is read.
+	if options.WebSearch && options.SessionID == "" {
+		args = append(args, "--search")
+	}
+	args = append(args, "exec")
 	if options.SessionID != "" {
 		args = append(args, "resume")
 		if options.Sandbox == "danger-full-access" {
@@ -648,9 +658,6 @@ func commandFromContext(ctx execution.Context, executable string) (CommandSpec, 
 	}
 	if options.Profile != "" && options.SessionID == "" {
 		args = append(args, "--profile", options.Profile)
-	}
-	if options.WebSearch && options.SessionID == "" {
-		args = append(args, "--search")
 	}
 	for _, image := range options.Images {
 		args = append(args, "--image", image)

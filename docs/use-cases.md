@@ -43,6 +43,14 @@ Terminal.app, iTerm2, and headless execution. Codex supports `run` and
 Other operating systems, terminals, and engines are not qualified or supported
 until explicitly documented.
 
+Codex CLI 0.150.x is the qualified RC.6.1 command-line contract. `doctor`
+shows the detected version and warns when it is older, newer, or unparsable.
+Worker launch then refuses that unqualified version before any worker is
+created. To deliberately test a different Codex release, set
+`PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1` in the launching shell. That
+override is deliberate and unsupported: it does not make a changed Codex CLI
+contract qualified.
+
 ## Work-order authoring and validation
 
 ### UC-05: Validate a work order safely
@@ -309,6 +317,19 @@ required-clean-baseline failures remain fail-closed; a non-passing completion
 is retried only within the same slice and still blocks later slices until it
 reaches `PASS`/safe. Inspect retained evidence and repair the hard-stop
 failures before using `--resume`.
+
+For `run-folder --parallel-worktrees`, repeat the original checkpointable
+parallel command with `--resume`. The exact failed or interrupted sequence is
+reopened: successful sibling lanes already marked `waiting-to-merge` are not
+relaunched, failed lanes retry in their recorded worktrees, and integration
+continues in priority order. Recovery fails closed if any retained lane or the
+coordinator is missing, dirty, or on an unexpected branch. Parallel recovery
+does not reset, clean, or discard retained work.
+
+When a parallel sequence is resumed, its foreground inventory and final Git
+subway are reconstructed from persisted lane state. Already integrated lanes
+therefore retain their worktree-to-feature-branch merge SHA, elapsed time, and
+worker identity instead of being displayed as new, unscoped, or in progress.
 
 ### UC-21: Inspect sequence history
 
