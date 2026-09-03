@@ -11,13 +11,13 @@ run workers in **Terminal.app**, **iTerm2**, or **headless** mode. The built-in
 **Codex CLI** engine supports one-off `run` and ordered `run-folder` workflows;
 named workers additionally support the **Codex** and **Antigravity** adapters.
 
-RC.6.1 qualifies Codex CLI **0.150.x**. PromptGrinder refuses an unqualified
-Codex version before launching work so a changed CLI contract cannot fail a
-train halfway through. `promptgrinder doctor` reports the detected version and
-compatibility status. To deliberately test another version, set
-`PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1` in the shell that launches
-PromptGrinder; this is an explicit, unsupported opt-in rather than a claim of
-compatibility.
+RC.6.2 has a known-qualified Codex CLI **0.150.x** band, but does not reject a
+newer CLI version solely because it has not appeared in a PromptGrinder
+release. Outside that band PromptGrinder runs a read-only capability probe of
+`codex exec` and `codex exec resume`; a CLI that supplies the adapter's
+required flags runs as **provisional**. A failed probe blocks before workers
+are created. `promptgrinder doctor` reports the detected version and probe
+status.
 
 Linux and Windows, other terminal applications, and other AI engines are not
 qualified or supported for this release candidate. Run `promptgrinder doctor`
