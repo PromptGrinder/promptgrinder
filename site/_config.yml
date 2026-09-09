@@ -1,0 +1,9 @@
+title: PromptGrinder
+description: Deterministic, reviewable engineering workflows for AI coding agents.
+url: "https://promptgrinder.github.io"
+baseurl: "/promptgrinder"
+markdown: kramdown
+permalink: pretty
+exclude:
+  - Gemfile
+  - Gemfile.lock

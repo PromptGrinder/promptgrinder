@@ -4,6 +4,9 @@
 
 **Run AI prompts as deterministic, reviewable engineering workflows.**
 
+> **New to PromptGrinder?** Read the [practical guide to turning a feature idea
+> into a safe AI delivery train](site/blog/how-to-use-promptgrinder.md).
+
 ## Supported today
 
 PromptGrinder currently supports **macOS** on Apple silicon and Intel. It can
