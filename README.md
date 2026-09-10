@@ -9,23 +9,53 @@
 
 ## Supported today
 
-PromptGrinder currently supports **macOS** on Apple silicon and Intel. It can
-run workers in **Terminal.app**, **iTerm2**, or **headless** mode. The built-in
-**Codex CLI** engine supports one-off `run` and ordered `run-folder` workflows;
-named workers additionally support the **Codex** and **Antigravity** adapters.
+### Operating systems
 
-RC.6.2 has a known-qualified Codex CLI **0.150.x** band, but does not reject a
-newer CLI version solely because it has not appeared in a PromptGrinder
-release. Outside that band PromptGrinder runs a read-only capability probe of
-`codex exec` and `codex exec resume`; a CLI that supplies the adapter's
-required flags runs as **provisional**. A failed probe blocks before workers
-are created. `promptgrinder doctor` reports the detected version and probe
-status.
+| Surface | Status | Notes |
+| --- | --- | --- |
+| macOS on Apple silicon (`darwin/arm64`) | Supported RC surface | Built and exercised by the release workflow. |
+| macOS on Intel (`darwin/amd64`) | Supported RC surface | Cross-built and inspected by the release workflow. |
+| Linux | Not qualified | May compile in part; it is not a supported release surface. |
+| Windows | Not qualified | May compile in part; it is not a supported release surface. |
 
-Linux and Windows, other terminal applications, and other AI engines are not
-qualified or supported for this release candidate. Run `promptgrinder doctor`
-to inspect the available local engines and terminal adapters before starting
-work.
+### Execution surfaces
+
+| Surface | Status | Notes |
+| --- | --- | --- |
+| Headless | Supported | The recommended surface for automation and CI-style runs. |
+| Terminal.app | Supported on macOS | PromptGrinder opens and manages only its own identified tabs. |
+| iTerm2 | Supported on macOS | Same owned-tab safety model as Terminal.app. |
+| Other terminal applications | Not supported | PromptGrinder does not claim a generic terminal-emulation adapter. |
+
+### Engines and workflows
+
+| Engine | `run` / `run-folder` | Named workers | Notes |
+| --- | --- | --- | --- |
+| Codex CLI | Supported | Supported | Default engine; supports structured output, model selection, sandbox settings, token reporting when supplied by Codex, and session resume where the CLI advertises it. |
+| Antigravity (`agy`) | — | Supported | Uses documented non-interactive JSON mode; install and configure it separately. Session resume is not advertised. |
+| Other engines | Not supported | Not supported | An engine needs a PromptGrinder adapter before it can be selected. |
+
+### Codex CLI compatibility
+
+| Codex CLI state | PromptGrinder behavior |
+| --- | --- |
+| `0.150.x` | Known-qualified RC.6.2 band. |
+| Older, newer, or unparsable version that passes the non-mutating `codex exec` and `codex exec resume` capability probe | Allowed as **provisional**. |
+| Missing CLI or missing adapter capability | Blocked before workers are created, with the failed capability named. |
+
+### Models and MCP servers
+
+| Surface | Status | Notes |
+| --- | --- | --- |
+| Models exposed by the active Codex account | Supported through repository policy | PromptGrinder validates selections against the runtime's live model catalog; it does not hard-code a global list of models. |
+| Model cost and capability policy | Supported | Repositories can allow named models and assign `low`, `medium`, or `high` cost tiers plus `text`, `code`, `image`, and `web-search` capabilities. |
+| MCP servers configured in Codex or another selected engine | Engine-owned | They may be available to that engine, but PromptGrinder does not configure, authenticate, discover, or certify individual MCP servers. |
+| PromptGrinder-native MCP client/server management | Future work | MCP is a tool interoperability protocol, not a portable contract for agent CLI flags, sessions, or sandbox behavior. |
+
+Run `promptgrinder doctor` to inspect the available local engine and terminal
+adapters before starting work. Use `promptgrinder engines` and
+`promptgrinder engines describe <engine>` for the machine-readable adapter
+capability view.
 
 ## Quick start
 
@@ -868,21 +898,10 @@ capability before adapter preflight or process launch.
 
 ## Platform support
 
-The `v1.0.0-rc.6.1` release candidate targets macOS on Apple silicon and Intel
-and includes the orchestration capabilities documented above:
-
-- macOS on Apple silicon (`darwin/arm64`);
-- macOS on Intel (`darwin/amd64`);
-- Codex CLI 0.150.x for one-off `run` and `run-folder` execution;
-- Codex and Antigravity adapters for named-worker execution;
-- Terminal.app, iTerm2, and headless execution.
-
-Exact qualified macOS, Terminal.app, and iTerm2 versions remain pending
-clean-machine qualification. Codex CLI versions outside 0.150.x require the
-explicit unsupported `PROMPTGRINDER_ALLOW_UNQUALIFIED_CODEX_VERSION=1`
-override. Linux and Windows may be technically compilable in part, but they
-are untested and unsupported for this release candidate.
-Source builds require the Go version declared in [`go.mod`](go.mod).
+The support matrices above are the current RC.6.2 product boundary. Exact
+macOS and interactive-terminal versions remain pending clean-machine
+qualification. Source builds require the Go version declared in
+[`go.mod`](go.mod).
 
 ## Development
 
