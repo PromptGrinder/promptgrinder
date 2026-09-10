@@ -129,6 +129,36 @@ Before a costly run, validate the folder and the local environment:
 
 PromptGrinder RC.6.2 uses capability-based Codex compatibility. Known versions are qualified; newer versions can run provisionally when they pass a safe adapter probe. That avoids blocking a train merely because a CLI version number changed, while still refusing to launch workers if PromptGrinder’s required command contract is unavailable.
 
+## What the result looks like in Git
+
+PromptGrinder does not leave successful work trapped in an agent transcript.
+With `--checkpoint --commit-each`, each completed slice becomes a focused,
+reviewable commit on the feature branch.
+
+The following is a fictionalized example based on the shape of a real
+PromptGrinder checkpoint train. Commit IDs and feature names are deliberately
+invented, but the ordered `PromptGrinder: complete …` history is the intended
+result:
+
+    $ git log --oneline --decorate feature/reviewable-role-setup
+    e91a7c4 (HEAD -> feature/reviewable-role-setup) PromptGrinder: complete 60-final-verify-role-reviews.pg
+    a60b12e PromptGrinder: complete 40-implement-interactive-role-review.pg
+    79d4fa1 PromptGrinder: complete 30-store-role-review-cli.pg
+    4c8e2b9 PromptGrinder: complete 20-refine-role-recommendations.pg
+    b17fd63 PromptGrinder: complete 10-create-role-review-domain.pg
+    0de4c8a docs: add reviewable role-setup specification and train
+
+That history tells a reviewer more than “an agent made a change.” It shows a
+sequence: the domain was established, refinement was added, the CLI was
+connected, the interactive surface was implemented, and the final verification
+completed. A failure after the third checkpoint does not erase the first three
+outcomes or force the team to reconstruct them from conversation history.
+
+The commit is created by PromptGrinder, not by the worker. Workers should not
+be instructed to run `git add` or `git commit` when the supervisor owns
+`--commit-each`; that keeps the commit boundary aligned with path-policy and
+completion evidence.
+
 ## Recover from failure by fixing the cause
 
 The useful recovery unit is the last safe slice, not a giant agent conversation. With `--checkpoint` and `--commit-each`, a successful slice records evidence and becomes a focused commit before the next slice runs.
