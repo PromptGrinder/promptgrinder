@@ -4,6 +4,13 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
+### v1.0.0-rc.6.3 candidate
+
+- Made foreground execution the default for `run-folder`, including ordered and
+  parallel-worktree trains. Use the explicit `--detach` opt-in to start a local
+  background supervisor instead. The standalone `run` command already ran in
+  the invoking terminal and remains unchanged.
+
 ### v1.0.0-rc.6.1 candidate
 
 - Added a Codex CLI compatibility gate: RC.6.1 qualifies the 0.150.x command

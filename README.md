@@ -351,8 +351,7 @@ frontmatter, path-policy, ordering, and completion-report contract.
 promptgrinder run-folder tasks/project-archive \
   --repo . \
   --require-clean-git \
-  --commit-each \
-  --detach
+  --commit-each
 ```
 
 `run-folder` requires the slice folder and executes recognized Markdown files
@@ -609,18 +608,18 @@ Independent `run` commands retain their existing engine behavior.
 
 Sequence human and JSON output includes UTC created, started, updated, and
 finished timestamps; older records without those fields remain readable.
-Detached startup prints the sequence ID and a copyable `promptgrinder sequence
-<id>` command, and distinguishes starting, running, preflight failure, and an
-immediate terminal result. The effective detach default is shown by
-`promptgrinder run-folder --help`; use `--detach=false` for interactive execution.
-Detached completion and failure notifications are deterministic
-local events under `PROMPTGRINDER_HOME`; they require no network or GUI access.
-Foreground execution stays in the invoking terminal, prints the full prompt
+Foreground execution is the default and stays in the invoking terminal. It prints the full prompt
 inventory before launch, and shows live status, elapsed time, worker IDs, logs,
 and immediate failure reasons. It uses the same `|`, `/`, `-`, and `\\` spinner
 as foreground shared `run` work. Failed rows display a copyable absolute worker
 log path, with a local file hyperlink in terminals that support it. `--plain` keeps the same information without
 colors, animation, or terminal control sequences.
+
+Use `--detach` only when a local detached supervisor should return control to
+the shell. Detached startup prints the sequence ID and a copyable
+`promptgrinder sequence <id>` command, and completion/failure notifications are
+deterministic local events under `PROMPTGRINDER_HOME`; they require no network or
+GUI access.
 
 Run-folder state is stored below `PROMPTGRINDER_HOME/state/run-folders/<sequence-id>`;
 it is not written into the repository. With `--commit-each` or

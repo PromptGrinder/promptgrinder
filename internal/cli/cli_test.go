@@ -2639,18 +2639,21 @@ func TestCLISequenceCancel(t *testing.T) {
 	}
 }
 
-func TestRunFolderHelpShowsInteractiveDetachFormAndDefault(t *testing.T) {
+func TestRunFolderHelpShowsExplicitBackgroundDetachFormAndForegroundDefault(t *testing.T) {
 	out := &bytes.Buffer{}
-	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{RunFolderDetach: true}}}
+	service := &fakeService{defaultsReport: config.DefaultsReport{Config: config.Config{RunFolderDetach: false}}}
 	cmd := NewRootCommand(service, out, &bytes.Buffer{})
 	cmd.SetArgs([]string{"run-folder", "--help"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--detach", "--detach=false", "default true", "--resume-sequence"} {
+	for _, want := range []string{"--detach", "background instead of this terminal", "--resume-sequence"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help missing %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "default true") || strings.Contains(out.String(), "--detach=false") {
+		t.Fatalf("help still presents detached execution as the default:\n%s", out.String())
 	}
 }
 

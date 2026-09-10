@@ -24,7 +24,7 @@ Run the completed train from the repository root:
 
 ```sh
 promptgrinder run-folder <folder> --repo . --checkpoint --commit-each \
-  --require-clean-git --detach=false
+  --require-clean-git
 ```
 
 Every runnable slice must end with the exact completion contract already shown

@@ -1107,7 +1107,7 @@ Examples:
 		if includeDetach {
 			detachDefault := service.Defaults().Config.RunFolderDetach
 			runFolderDetach = detachDefault
-			cmd.Flags().BoolVar(&runFolderDetach, "detach", detachDefault, "run in background; use --detach=false for this terminal")
+			cmd.Flags().BoolVar(&runFolderDetach, "detach", detachDefault, "run in the background instead of this terminal")
 		}
 	}
 	runFolder := &cobra.Command{

@@ -7,7 +7,7 @@ Run it from the repository root:
 
 ```sh
 promptgrinder run-folder <folder> --repo . --parallel-worktrees --fresh \
-  --checkpoint --commit-each --require-clean-git --detach=false
+  --checkpoint --commit-each --require-clean-git
 ```
 
 `depends_on` controls eligibility to start; `priority` controls integration

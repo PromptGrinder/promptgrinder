@@ -302,7 +302,7 @@ scope is important:
 ```sh
 promptgrinder validate tasks/ranking-v4/10-implement-ranking-history.pg
 promptgrinder validate --render tasks/ranking-v4/10-implement-ranking-history.pg
-promptgrinder run-folder tasks/ranking-v4 --repo . --commit-each --require-clean-git --detach=false
+promptgrinder run-folder tasks/ranking-v4 --repo . --commit-each --require-clean-git
 ```
 
 With `--commit-each`, PromptGrinder owns commits. Do not ask workers to run
