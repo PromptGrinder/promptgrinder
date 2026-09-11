@@ -103,6 +103,7 @@ func (e Engine) Build(ctx execution.Context, prompt []byte, executablePath strin
 
 func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResult {
 	result := state.EngineResult{}
+	runtimeFailure := ""
 	if model := reportedModel(log); model != "" {
 		result.Diagnostics = map[string]any{"model": model}
 	}
@@ -117,7 +118,11 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 		var event struct {
 			Type     string `json:"type"`
 			ThreadID string `json:"thread_id"`
-			Usage    struct {
+			Message  string `json:"message"`
+			Error    struct {
+				Message string `json:"message"`
+			} `json:"error"`
+			Usage struct {
 				InputTokens           *int64 `json:"input_tokens"`
 				CachedInputTokens     *int64 `json:"cached_input_tokens"`
 				OutputTokens          *int64 `json:"output_tokens"`
@@ -151,10 +156,32 @@ func (e Engine) ParseResult(ctx execution.Context, log []byte) state.EngineResul
 		if event.Type == "item.completed" && event.Item.Type == "agent_message" && strings.TrimSpace(event.Item.Text) != "" {
 			result.Summary = strings.TrimSpace(event.Item.Text)
 		}
+		if runtimeFailure == "" && (event.Type == "error" || event.Type == "turn.failed") {
+			runtimeFailure = strings.TrimSpace(event.Message)
+			if runtimeFailure == "" {
+				runtimeFailure = strings.TrimSpace(event.Error.Message)
+			}
+		}
 	}
 	result.CompletionStatus, result.NextPromptSafe, result.CompletionReason = state.ParseOrderedCompletionReport(result.Summary)
 	result.FailureReport = state.ParseFailureReport(result.Summary)
+	if result.FailureReport == nil && runtimeFailure != "" {
+		result.FailureReport = codexRuntimeFailureReport(runtimeFailure)
+	}
 	return result
+}
+
+// codexRuntimeFailureReport converts a concise Codex runtime error into the
+// engine-neutral evidence that run-folder persists and renders. It does not
+// reinterpret an agent-authored completion report.
+func codexRuntimeFailureReport(message string) *state.FailureReport {
+	report := &state.FailureReport{Category: "worker-crash", Summary: message}
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "model") && strings.Contains(lower, "capacity") {
+		report.Category = "model-capacity"
+		report.NextAction = "Retry later, or select another repository-approved model."
+	}
+	return report
 }
 
 var reportedModelPattern = regexp.MustCompile(`(?m)^model:[ \t]+([A-Za-z0-9][A-Za-z0-9._/-]*)[ \t]*$`)

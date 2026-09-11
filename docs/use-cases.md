@@ -217,6 +217,12 @@ scrape terminal output. An undeclared `STATUS: BLOCKED` is displayed as a
 blocked result with its diagnostic, while it remains an ordinary failed worker
 for sequencing purposes.
 
+Codex runtime failures are also structured when the CLI reports them in its
+JSONL output. For example, model saturation is rendered as `model capacity`
+with Codex's concise message and a retry-or-select-an-approved-model action,
+rather than only a generic shell exit status. It remains a failed slice; no
+model is silently substituted.
+
 ### UC-17a: Select a model within cost and capability policy
 
 Declare repository-approved models in `.promptgrinder/models.yaml` with a

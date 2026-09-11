@@ -10,6 +10,9 @@ All notable changes are recorded here. This project uses semantic versioning.
   parallel-worktree trains. Use the explicit `--detach` opt-in to start a local
   background supervisor instead. The standalone `run` command already ran in
   the invoking terminal and remains unchanged.
+- Surface Codex JSONL runtime errors in foreground and sequence output. Model
+  capacity now reports its actual message and a safe retry/select-model action
+  instead of an opaque headless shell exit status.
 
 ### v1.0.0-rc.6.1 candidate
 
