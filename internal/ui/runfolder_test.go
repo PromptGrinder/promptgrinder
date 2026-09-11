@@ -49,6 +49,17 @@ func TestRunFolderRendererPlainLifecycleFailureAndResume(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererLabelsCompletionContractFailure(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_contract", Folder: "tasks", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement.md", Type: runfolder.TypeImplement, Status: "pending"}}, Total: 1})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-implement.md", PromptType: runfolder.TypeImplement, Status: "failed", FailureReport: &state.FailureReport{Category: "completion-contract", Summary: "missing or malformed STATUS field"}})
+	r.Finish(false)
+	if !strings.Contains(out.String(), "Failure type: completion-contract violation") || strings.Contains(out.String(), "Failure type: product/test failure") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
 func TestRunFolderRendererShowsParallelWorktreeLanes(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true})

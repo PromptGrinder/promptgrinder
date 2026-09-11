@@ -4,7 +4,7 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
-### v1.0.0-rc.6.4 candidate
+### v1.0.0-rc.6.5 candidate
 
 - Made foreground execution the default for `run-folder`, including ordered and
   parallel-worktree trains. Use the explicit `--detach` opt-in to start a local
@@ -13,6 +13,10 @@ All notable changes are recorded here. This project uses semantic versioning.
 - Surface Codex JSONL runtime errors in foreground and sequence output. Model
   capacity now reports its actual message and a safe retry/select-model action
   instead of an opaque headless shell exit status.
+- Accept required ordered completion fields when the complete field line is a
+  single Markdown inline-code span. Missing, malformed, or duplicate fields
+  are now reported as completion-contract violations rather than product/test
+  failures.
 
 ### v1.0.0-rc.6.1 candidate
 
