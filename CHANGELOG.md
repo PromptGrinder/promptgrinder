@@ -4,7 +4,7 @@ All notable changes are recorded here. This project uses semantic versioning.
 
 ## Unreleased
 
-### v1.0.0-rc.6.3 candidate
+### v1.0.0-rc.6.4 candidate
 
 - Made foreground execution the default for `run-folder`, including ordered and
   parallel-worktree trains. Use the explicit `--detach` opt-in to start a local
