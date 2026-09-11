@@ -824,6 +824,8 @@ func failureDetailLines(event runfolder.ProgressEvent) []string {
 
 func failureCategoryLabel(category string) string {
 	switch category {
+	case "completion-contract":
+		return "completion-contract violation"
 	case "model-capacity":
 		return "model capacity"
 	case "product-test":

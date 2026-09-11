@@ -1443,7 +1443,7 @@ Use STATUS: BLOCKED or STATUS: PARTIAL and NEXT_PROMPT_SAFE: no when the task is
 
 When reporting PARTIAL or BLOCKED, include the following concise optional headings when evidence is available. They are rendered in the terminal and sequence JSON; keep details bounded and put exhaustive output in the worker log or a handoff file.
 
-Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation
+Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation|completion-contract
 Failure summary: one-line reason
 Feature evidence:
 - completed check

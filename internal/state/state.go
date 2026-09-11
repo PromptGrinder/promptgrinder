@@ -120,7 +120,7 @@ func (r EngineResult) Empty() bool {
 // message. The headings are intentionally plain Markdown so workers can state
 // useful evidence without coupling to an execution engine:
 //
-//	Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation
+//	Failure category: product-test|environment-capability|path-policy|worker-crash|cancellation|completion-contract
 //	Failure summary: short explanation
 //	Feature evidence:
 //	- completed check
@@ -210,6 +210,8 @@ func FailureReportForFailure(result *EngineResult, reason string) *FailureReport
 		report.Category = "path-policy"
 	case strings.Contains(lower, "cancel"):
 		report.Category = "cancellation"
+	case completionContractFailure(lower):
+		report.Category = "completion-contract"
 	case strings.Contains(lower, "credential") || strings.Contains(lower, "token") || strings.Contains(lower, "capability") || strings.Contains(lower, "not configured") || strings.Contains(lower, "unavailable"):
 		report.Category = "environment-capability"
 	case strings.Contains(lower, "worker status") || strings.Contains(lower, "launch") || strings.Contains(lower, "no structured completion"):
@@ -218,6 +220,22 @@ func FailureReportForFailure(result *EngineResult, reason string) *FailureReport
 		report.Category = "product-test"
 	}
 	return report
+}
+
+func completionContractFailure(reason string) bool {
+	for _, marker := range []string{
+		"missing or malformed status field",
+		"missing or malformed next_prompt_safe field",
+		"malformed completion field",
+		"duplicate completion fields",
+		"empty final answer",
+		"ordered completion contract",
+	} {
+		if strings.Contains(reason, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseOrderedCompletionReport extracts the semantic completion fields from a
@@ -229,7 +247,7 @@ func ParseOrderedCompletionReport(summary string) (string, *bool, string) {
 	statusCount, safeCount := 0, 0
 	malformed := []string{}
 	for _, line := range strings.Split(summary, "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		key, value, ok := strings.Cut(normalizeOrderedCompletionLine(line), ":")
 		if !ok {
 			continue
 		}
@@ -263,6 +281,18 @@ func ParseOrderedCompletionReport(summary string) (string, *bool, string) {
 		return completionStatus, nextPromptSafe, "malformed completion field: " + strings.Join(malformed, ", ")
 	}
 	return completionStatus, nextPromptSafe, ""
+}
+
+// normalizeOrderedCompletionLine accepts the common Markdown presentation of a
+// completion field while keeping the protocol line-oriented and unambiguous.
+// Only a complete trimmed line enclosed by one inline-code pair is unwrapped;
+// code spans embedded in prose and other backtick forms remain ordinary prose.
+func normalizeOrderedCompletionLine(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) >= 2 && strings.Count(line, "`") == 2 && strings.HasPrefix(line, "`") && strings.HasSuffix(line, "`") {
+		return line[1 : len(line)-1]
+	}
+	return line
 }
 
 // OrderedCompletionError validates the completion contract used by ordered

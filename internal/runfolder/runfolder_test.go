@@ -169,6 +169,35 @@ func TestOrderedCompletionContractStopsUnsafeResults(t *testing.T) {
 	}
 }
 
+func TestOrderedCompletionContractAcceptsInlineCodeWrappedPassAndAdvances(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	writePromptFile(t, dir, "20-test-next.md", "next")
+	launcher := &fakeLauncher{resultOnce: &state.EngineResult{Summary: "`STATUS: PASS`\n`NEXT_PROMPT_SAFE: yes`"}}
+
+	summary, err := Run(dir, Options{HomeDir: home}, launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.calls) != 2 || summary.Sequence.Status != "completed" || summary.Sequence.Items[0].CompletionStatus != "PASS" || summary.Sequence.Items[0].NextPromptSafe == nil || !*summary.Sequence.Items[0].NextPromptSafe {
+		t.Fatalf("calls=%d sequence=%#v", len(launcher.calls), summary.Sequence)
+	}
+}
+
+func TestOrderedCompletionContractFailureUsesProtocolCategory(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	writePromptFile(t, dir, "10-implement-first.md", "first")
+	launcher := &fakeLauncher{result: &state.EngineResult{Summary: "`STATUS: DONE`\n`NEXT_PROMPT_SAFE: yes`"}}
+
+	summary, err := Run(dir, Options{HomeDir: home}, launcher)
+	if err == nil || !strings.Contains(err.Error(), "malformed completion field: STATUS") {
+		t.Fatalf("err = %v", err)
+	}
+	if report := summary.Sequence.Items[0].FailureReport; report == nil || report.Category != "completion-contract" {
+		t.Fatalf("failure report = %#v", report)
+	}
+}
+
 func TestRunFolderRecoversOnlyTheFailedSlice(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
 	writePromptFile(t, dir, "10-implement-first.md", "first")

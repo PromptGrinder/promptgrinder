@@ -359,6 +359,43 @@ func TestParseOrderedCompletionReportRejectsAmbiguousFields(t *testing.T) {
 	}
 }
 
+func TestParseOrderedCompletionReportAcceptsWholeLineInlineCodeFields(t *testing.T) {
+	for _, summary := range []string{
+		"STATUS: PASS\nNEXT_PROMPT_SAFE: yes",
+		"`STATUS: PASS`\n`NEXT_PROMPT_SAFE: yes`",
+		"  `STATUS: PASS`  \n\t`NEXT_PROMPT_SAFE: yes`\t",
+	} {
+		status, safe, reason := ParseOrderedCompletionReport(summary)
+		if status != "PASS" || safe == nil || !*safe || reason != "" {
+			t.Fatalf("ParseOrderedCompletionReport(%q) = (%q, %v, %q)", summary, status, safe, reason)
+		}
+	}
+}
+
+func TestParseOrderedCompletionReportPreservesInlineCodeAmbiguityRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		summary string
+		reason  string
+	}{
+		{name: "mixed duplicate", summary: "STATUS: PASS\n`STATUS: PASS`\n`NEXT_PROMPT_SAFE: yes`", reason: "duplicate completion fields"},
+		{name: "invalid wrapped status", summary: "`STATUS: DONE`\n`NEXT_PROMPT_SAFE: yes`", reason: "malformed completion field: STATUS"},
+		{name: "invalid wrapped safety", summary: "`STATUS: PASS`\n`NEXT_PROMPT_SAFE: perhaps`", reason: "malformed completion field: NEXT_PROMPT_SAFE"},
+		{name: "prose code span ignored", summary: "The result is `STATUS: PASS` for this task.\n`NEXT_PROMPT_SAFE: yes`", reason: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, safe, reason := ParseOrderedCompletionReport(test.summary)
+			if reason != test.reason {
+				t.Fatalf("reason = %q, want %q", reason, test.reason)
+			}
+			if test.name == "prose code span ignored" && status != "" {
+				t.Fatalf("embedded prose marker was accepted: status %q safe %v", status, safe)
+			}
+		})
+	}
+}
+
 func boolPointer(value bool) *bool { return &value }
 
 func equalOptionalBool(left, right *bool) bool {
@@ -434,6 +471,8 @@ func TestFailureReportForFailureClassifiesFallbacks(t *testing.T) {
 		{"local credential unavailable", "environment-capability"},
 		{"worker failed with worker status failed", "worker-crash"},
 		{"task was cancelled", "cancellation"},
+		{"missing or malformed STATUS field", "completion-contract"},
+		{"duplicate completion fields", "completion-contract"},
 		{"test assertion failed", "product-test"},
 	} {
 		if got := FailureReportForFailure(nil, test.reason).Category; got != test.want {

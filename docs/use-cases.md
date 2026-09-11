@@ -223,6 +223,12 @@ with Codex's concise message and a retry-or-select-an-approved-model action,
 rather than only a generic shell exit status. It remains a failed slice; no
 model is silently substituted.
 
+The required `STATUS` and `NEXT_PROMPT_SAFE` lines may be raw or each enclosed
+as one complete Markdown inline-code span. PromptGrinder does not search prose
+for markers, and raw/wrapped duplicates remain invalid. A missing, malformed,
+or duplicate completion field is rendered as a `completion-contract violation`,
+not a product/test failure.
+
 ### UC-17a: Select a model within cost and capability policy
 
 Declare repository-approved models in `.promptgrinder/models.yaml` with a
