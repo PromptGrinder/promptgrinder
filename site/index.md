@@ -46,7 +46,6 @@ probe; a missing required capability blocks the train before worker creation.
       --repo . \
       --checkpoint \
       --commit-each \
-      --require-clean-git \
-      --detach=false
+      --require-clean-git
 
 Read the [installation guide](https://github.com/PromptGrinder/promptgrinder#quick-start), explore the [source repository](https://github.com/PromptGrinder/promptgrinder), or start with the [full guide]({{ '/blog/how-to-use-promptgrinder/' | relative_url }}).

@@ -102,8 +102,7 @@ Parallel worktrees are for genuinely independent lanes. For example, an Android 
       --fresh \
       --checkpoint \
       --commit-each \
-      --require-clean-git \
-      --detach=false
+      --require-clean-git
 
 PromptGrinder uses isolated worktrees and integrates successful lanes into the feature branch in priority order. The foreground view shows multiple active lanes, waiting dependencies, worker metadata, integration commits, and a final Git subway map.
 
@@ -117,8 +116,7 @@ For most features, start with the checkpointable sequential command:
       --repo . \
       --checkpoint \
       --commit-each \
-      --require-clean-git \
-      --detach=false
+      --require-clean-git
 
 Before a costly run, validate the folder and the local environment:
 
@@ -175,7 +173,6 @@ After correcting the actual cause, resume the same compatible train:
       --checkpoint \
       --commit-each \
       --require-clean-git \
-      --detach=false \
       --resume
 
 The response depends on the failure category.

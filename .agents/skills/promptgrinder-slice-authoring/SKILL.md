@@ -43,7 +43,7 @@ Run the completed train only with:
 
 ```sh
 promptgrinder run-folder <folder> --repo . --parallel-worktrees --fresh \
-  --checkpoint --commit-each --require-clean-git --detach=false
+  --checkpoint --commit-each --require-clean-git
 ```
 
 PromptGrinder uses separate lane and coordinator worktrees and fast-forwards
@@ -112,8 +112,7 @@ Prefer a clean worktree and focused supervisor commits:
 promptgrinder run-folder tmp/<sequence>/ \
   --repo . \
   --commit-each \
-  --require-clean-git \
-  --detach=false
+  --require-clean-git
 ```
 
 Use `promptgrinder sequence <sequence-id>` to inspect status and the worker log for evidence. Resume only after correcting the actual failure. If a prompt itself requires a commit while the supervisor owns commits, correct the prompt instead of retrying indefinitely.

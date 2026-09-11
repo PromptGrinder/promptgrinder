@@ -486,6 +486,29 @@ func TestParseResultExtractsBlockingCompletionReport(t *testing.T) {
 	}
 }
 
+func TestParseResultCapturesCodexModelCapacityFailure(t *testing.T) {
+	log := []byte(`{"type":"error","message":"Selected model is at capacity. Please try a different model."}` + "\n" +
+		`{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}` + "\n")
+
+	result := Engine{}.ParseResult(execution.Context{}, log)
+	if result.FailureReport == nil {
+		t.Fatal("failure report = nil")
+	}
+	if result.FailureReport.Category != "model-capacity" || result.FailureReport.Summary != "Selected model is at capacity. Please try a different model." || result.FailureReport.NextAction != "Retry later, or select another repository-approved model." {
+		t.Fatalf("failure report = %#v", result.FailureReport)
+	}
+	if result.Empty() {
+		t.Fatal("runtime failure must be persisted as an engine result")
+	}
+}
+
+func TestParseResultCapturesGenericCodexTurnFailure(t *testing.T) {
+	result := Engine{}.ParseResult(execution.Context{}, []byte(`{"type":"turn.failed","error":{"message":"Codex service ended unexpectedly."}}`+"\n"))
+	if result.FailureReport == nil || result.FailureReport.Category != "worker-crash" || result.FailureReport.Summary != "Codex service ended unexpectedly." {
+		t.Fatalf("failure report = %#v", result.FailureReport)
+	}
+}
+
 func TestParseResultRejectsDuplicateCompletionFields(t *testing.T) {
 	log := []byte("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"STATUS: PASS\\nSTATUS: BLOCKED\\nNEXT_PROMPT_SAFE: yes\"}}\n")
 	result := Engine{}.ParseResult(execution.Context{}, log)

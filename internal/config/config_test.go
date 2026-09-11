@@ -126,8 +126,8 @@ func TestLoadConfigurationPrecedence(t *testing.T) {
 	if !cfg.TerminalCloseOnFinish || cfg.TerminalCloseOnFailure {
 		t.Fatalf("terminal close defaults = finish:%t failure:%t", cfg.TerminalCloseOnFinish, cfg.TerminalCloseOnFailure)
 	}
-	if !cfg.RunFolderDetach {
-		t.Fatal("RunFolderDetach = false, want true")
+	if cfg.RunFolderDetach {
+		t.Fatal("RunFolderDetach = true, want false")
 	}
 	if cfg.TerminalMode != "normal" {
 		t.Fatalf("TerminalMode = %q, want user normal mode", cfg.TerminalMode)
@@ -362,7 +362,7 @@ func TestEnsureDefaultTemplateCreatesExampleWhenAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "close_on_finish: true") || !strings.Contains(string(data), "recovery_attempts: 0") || !strings.Contains(string(data), "detach: true") || !strings.Contains(out.String(), "Created") {
+	if !strings.Contains(string(data), "close_on_finish: true") || !strings.Contains(string(data), "recovery_attempts: 0") || !strings.Contains(string(data), "detach: false") || !strings.Contains(out.String(), "Created") {
 		t.Fatalf("template/output missing expected content:\n%s\n%s", string(data), out.String())
 	}
 }

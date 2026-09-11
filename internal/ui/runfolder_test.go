@@ -198,6 +198,23 @@ func TestRunFolderRendererRendersStructuredBlockedReport(t *testing.T) {
 	}
 }
 
+func TestRunFolderRendererPrintsModelCapacityFailure(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRunFolderRenderer(&out, false, Options{Plain: true})
+	r.Update(runfolder.ProgressEvent{Type: "run.started", SequenceID: "seq_capacity", Folder: "tasks", Inventory: []runfolder.ProgressPrompt{{Name: "10-implement.pg", Type: runfolder.TypeImplement, Status: "pending"}}, Total: 1})
+	r.Update(runfolder.ProgressEvent{Type: "prompt.failed", PromptName: "10-implement.pg", PromptType: runfolder.TypeImplement, Status: "failed", LogPath: "/tmp/worker.log", FailureReport: &state.FailureReport{
+		Category:   "model-capacity",
+		Summary:    "Selected model is at capacity. Please try a different model.",
+		NextAction: "Retry later, or select another repository-approved model.",
+	}})
+	r.Finish(false)
+	for _, want := range []string{"Failure type: model capacity", "Failure summary: Selected model is at capacity. Please try a different model.", "Next action: Retry later, or select another repository-approved model.", "Result: failed — Selected model is at capacity. Please try a different model."} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestRunFolderRendererShowsAutomaticRecovery(t *testing.T) {
 	var out bytes.Buffer
 	r := NewRunFolderRenderer(&out, false, Options{Plain: true, Theme: ThemeMinimal})

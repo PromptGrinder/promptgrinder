@@ -178,7 +178,8 @@ Before sequence creation, PromptGrinder reports how many slice files are
 included, identifies ignored notes, validates all included prompts, and rejects
 numbered task-like filenames that would otherwise be silently omitted.
 The invoking process also resolves roles and dependencies and checks Git
-cleanliness before a detached supervisor is started. Preflight failures print
+cleanliness before a foreground run or an explicitly requested detached
+supervisor starts. Preflight failures print
 the actionable reason synchronously and create no sequence state.
 Slices use `context_mode: shared` by default, continuing the preceding runtime
 session when supported. Set `context_mode: fresh` on a slice to start it without
@@ -196,7 +197,7 @@ completion reports stop the sequence even when the runtime process exits zero.
 
 ### UC-17: Run a sequence in the foreground
 
-Use `--detach=false` to keep the sequence in the invoking terminal with prompt
+`run-folder` keeps the sequence in the invoking terminal by default, with prompt
 inventory, current activity, elapsed time, and immediate failure reasons.
 Finished rows compactly identify the enforced scope and effective runtime, for
 example `task.md|slice-policy|codex/gpt-5.6-sol|4m 39s`. An unrestricted task
@@ -215,6 +216,12 @@ detail. The same additive fields are retained in `promptgrinder sequence <id>
 scrape terminal output. An undeclared `STATUS: BLOCKED` is displayed as a
 blocked result with its diagnostic, while it remains an ordinary failed worker
 for sequencing purposes.
+
+Codex runtime failures are also structured when the CLI reports them in its
+JSONL output. For example, model saturation is rendered as `model capacity`
+with Codex's concise message and a retry-or-select-an-approved-model action,
+rather than only a generic shell exit status. It remains a failed slice; no
+model is silently substituted.
 
 ### UC-17a: Select a model within cost and capability policy
 
@@ -235,8 +242,8 @@ retained error.
 
 ### UC-18: Run a sequence in the background
 
-Use detached mode to return control to the shell while a local supervisor runs
-the sequence. Startup reports whether it is starting, running, already
+Use `--detach` to return control to the shell while a local supervisor runs the
+sequence. Startup reports whether it is starting, running, already
 completed, or failed preflight, then prints the sequence ID and a copyable status command;
 completion and failure are retained as local events.
 
@@ -708,7 +715,7 @@ PromptGrinder:
 export ANDROID_HOME="$HOME/Library/Android/sdk"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 promptgrinder run-folder <folder> --repo . --parallel-worktrees --fresh \
-  --checkpoint --commit-each --require-clean-git --detach=false
+  --checkpoint --commit-each --require-clean-git
 ```
 
 The Codex adapter forwards these two safe toolchain variables when they are

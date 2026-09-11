@@ -85,7 +85,9 @@ func LoadWithHome(repoRoot, homeOverride string) (Config, error) {
 	v.SetDefault("worker.heartbeat_interval", "30s")
 	v.SetDefault("scheduler.lease_ttl", "1m")
 	v.SetDefault("run_folder.template", "codex")
-	v.SetDefault("run_folder.detach", true)
+	// Ordered work should remain observable unless the caller explicitly opts
+	// into a local detached supervisor.
+	v.SetDefault("run_folder.detach", false)
 	if err := validateEnvironmentKeys(); err != nil {
 		return Config{}, err
 	}
@@ -270,7 +272,7 @@ run_folder:
   require_clean_git: false
   include_specification: false
   recovery_attempts: 0
-  detach: true
+  detach: false
 `) + "\n"
 }
 

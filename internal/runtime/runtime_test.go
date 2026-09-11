@@ -1017,6 +1017,45 @@ func TestFinishWorkerRejectsBlockedCodexCompletion(t *testing.T) {
 	}
 }
 
+func TestFinishWorkerPersistsCodexModelCapacityFailure(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	store := state.NewStore(home)
+	worker := state.Worker{
+		ID:             "wrk_capacity",
+		RecordPath:     store.RecordPath("wrk_capacity"),
+		RepositoryPath: "/repo",
+		TaskPath:       "/repo/task.md",
+		PromptPath:     filepath.Join(store.WorkerDir("wrk_capacity"), "prompt.md"),
+		Engine:         "codex",
+		Status:         state.StatusRunning,
+		LogPath:        filepath.Join(store.WorkerDir("wrk_capacity"), "worker.log"),
+		Metadata:       map[string]any{},
+	}
+	if err := store.Save(worker); err != nil {
+		t.Fatal(err)
+	}
+	output := []byte(`{"type":"error","message":"Selected model is at capacity. Please try a different model."}` + "\n" +
+		`{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}` + "\n")
+	if err := os.WriteFile(codex.CapturedOutputPath(worker.RecordPath), output, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := Service{Store: store, Registry: engine.NewRegistry(codex.Engine{})}
+	if err := service.FinishWorker(worker.RecordPath, 1); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(worker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != state.StatusFailed || loaded.EngineResult == nil || loaded.EngineResult.FailureReport == nil {
+		t.Fatalf("worker = %#v", loaded)
+	}
+	report := loaded.EngineResult.FailureReport
+	if report.Category != "model-capacity" || report.Summary != "Selected model is at capacity. Please try a different model." || report.NextAction != "Retry later, or select another repository-approved model." {
+		t.Fatalf("failure report = %#v", report)
+	}
+}
+
 func TestFinishWorkerRejectsSuccessfulExitWithoutFinalCodexMessage(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	store := state.NewStore(home)
